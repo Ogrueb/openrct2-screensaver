@@ -1,0 +1,19 @@
+# Bene Volantes (MoreParks survey). Ships bene-volantes, which swaps the backdrop around the ship.
+[match]
+name = "Bene Volantes"
+
+[extras]
+show = "travel"
+
+# The ship's backdrops change to each location in turn (about 7 s per change), ending where the
+# park was saved (Tremeredan), so the next visit starts the same. The view is on the backdrop
+# room the plugin rebuilds, height chosen like animation views; angle 2 and zoom 1, a level
+# closer than placement's fit (owner, 2026-10-30).
+[show.travel]
+companion = "bene-volantes"
+steps = [{press = "loc0"}, {until = "loc1"}, {wait = 10},
+         {press = "loc1"}, {until = "loc2"}, {wait = 10},
+         {press = "loc2"}, {until = "loc3"}, {wait = 10},
+         {press = "loc3"}, {until = "loc0"}]
+spot = {boxes = [[215, 156, 274, 215]], zoom = 1, rotation = 2}
+hold = 120.0

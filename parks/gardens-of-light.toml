@@ -1,0 +1,7 @@
+# Gardens of Light (Dambusters: hoobaroo, alex, a_n_d_r_e_w). Both parks in the download are saved
+# as "Dream", so the shown name comes from here.
+name = "Gardens of Light"
+
+[match]
+name = "Dream"
+map = [203, 203]

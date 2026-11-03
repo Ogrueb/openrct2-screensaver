@@ -1,0 +1,357 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: RCT Screensaver <noreply@example.invalid>
+Date: Mon, 26 Oct 2026 23:55:50 +0000
+Subject: [PATCH] Title screen: read the next park in the background
+
+While a title sequence plays, a LOAD of a .park file now reads and
+decompresses the file and reads the object files it needs on a separate
+thread; the current park keeps playing meanwhile. Registering the objects,
+importing the park and preparing playback still run on the main thread
+once the read is done. Seek() and the first load stay synchronous, and any
+failure falls back to the normal path (skip to the next load).
+
+ObjectManager gains PreloadObjects() (thread-safe read of objects that are
+not loaded yet) and a LoadObjects() overload that takes them.
+---
+ src/openrct2-ui/title/TitleSequencePlayer.cpp | 163 +++++++++++++++++-
+ src/openrct2/object/ObjectManager.cpp         |  71 ++++++++
+ src/openrct2/object/ObjectManager.h           |  12 ++
+ 3 files changed, 243 insertions(+), 3 deletions(-)
+
+diff --git a/src/openrct2-ui/title/TitleSequencePlayer.cpp b/src/openrct2-ui/title/TitleSequencePlayer.cpp
+index a20d578..83bc7a0 100644
+--- a/src/openrct2-ui/title/TitleSequencePlayer.cpp
++++ b/src/openrct2-ui/title/TitleSequencePlayer.cpp
+@@ -9,11 +9,16 @@
+ 
+ #include "TitleSequencePlayer.h"
+ 
++#include <atomic>
+ #include <memory>
++#include <optional>
++#include <thread>
+ #include <openrct2-ui/windows/Windows.h>
+ #include <openrct2/Context.h>
+ #include <openrct2/Diagnostic.h>
+ #include <openrct2/Game.h>
++#include <openrct2/core/Path.hpp>
++#include <openrct2/core/String.hpp>
+ #include <openrct2/GameState.h>
+ #include <openrct2/OpenRCT2.h>
+ #include <openrct2/ParkImporter.h>
+@@ -26,8 +31,10 @@
+ #include <openrct2/interface/WindowBase.h>
+ #include <openrct2/localisation/StringIds.h>
+ #include <openrct2/management/NewsItem.h>
++#include <openrct2/object/Object.h>
+ #include <openrct2/ride/RideAudio.h>
+ #include <openrct2/object/ObjectManager.h>
++#include <openrct2/object/ObjectRepository.h>
+ #include <openrct2/scenario/ScenarioRepository.h>
+ #include <openrct2/scenes/title/TitleScene.h>
+ #include <openrct2/scenes/title/TitleSequence.h>
+@@ -48,6 +55,25 @@ namespace OpenRCT2::Title
+         int32_t _waitCounter = 0;
+         bool _initialLoadCommand = true;
+ 
++        // A park being read on another thread while the current park keeps playing.
++        // The thread reads and decompresses the file and reads the object files it needs from disk;
++        // registering the objects and importing the park still happen on the main thread.
++        struct BackgroundLoad
++        {
++            size_t saveIndex{};
++            std::string hintPath;
++            std::thread thread;
++            std::atomic<bool> done{ false };
++            bool ok = false;
++            std::string error;
++            std::unique_ptr<IParkImporter> importer;
++            std::optional<ParkLoadResult> result;
++            std::vector<std::unique_ptr<Object>> objects;
++        };
++        std::unique_ptr<BackgroundLoad> _background;
++        std::vector<std::unique_ptr<BackgroundLoad>> _stale; // superseded loads, joined once done
++        bool _synchronous = false;                            // Seek() runs loads on the main thread
++
+         int32_t _previousWindowWidth = 0;
+         int32_t _previousWindowHeight = 0;
+         ScreenCoordsXY _previousViewPosition = {};
+@@ -69,6 +95,13 @@ namespace OpenRCT2::Title
+ 
+         void Eject() override
+         {
++            DiscardBackgroundLoad();
++            for (auto& load : _stale)
++            {
++                if (load->thread.joinable())
++                    load->thread.join();
++            }
++            _stale.clear();
+             _sequence = nullptr;
+         }
+ 
+@@ -129,11 +162,36 @@ namespace OpenRCT2::Title
+                     {
+                         bool loadSuccess = false;
+                         const auto saveIndex = std::get<LoadParkCommand>(currentCommand).SaveIndex;
+-                        auto parkHandle = TitleSequenceGetParkHandle(*_sequence, saveIndex);
+-                        if (parkHandle != nullptr)
++                        ReapStaleLoads();
++                        if (CanLoadInBackground(saveIndex))
+                         {
++                            if (_background == nullptr || _background->saveIndex != saveIndex)
++                            {
++                                DiscardBackgroundLoad();
++                                StartBackgroundLoad(saveIndex);
++                            }
++                            if (!_background->done)
++                            {
++                                // Keep playing the current park until the next one has been read.
++                                break;
++                            }
++                            auto load = std::move(_background);
++                            load->thread.join();
++                            if (!load->ok)
++                            {
++                                throw std::domain_error("Background read failed: " + load->error);
++                            }
+                             GameNotifyMapChange();
+-                            loadSuccess = LoadParkFromStream(parkHandle->Stream.get(), parkHandle->HintPath);
++                            loadSuccess = FinishBackgroundLoad(*load);
++                        }
++                        else
++                        {
++                            auto parkHandle = TitleSequenceGetParkHandle(*_sequence, saveIndex);
++                            if (parkHandle != nullptr)
++                            {
++                                GameNotifyMapChange();
++                                loadSuccess = LoadParkFromStream(parkHandle->Stream.get(), parkHandle->HintPath);
++                            }
+                         }
+                         if (!loadSuccess)
+                         {
+@@ -239,6 +297,7 @@ namespace OpenRCT2::Title
+ 
+             // Keep updating until we reach target position
+             gInUpdateCode = true;
++            _synchronous = true;
+ 
+             while (_position < targetPosition)
+             {
+@@ -252,6 +311,7 @@ namespace OpenRCT2::Title
+                 }
+             }
+ 
++            _synchronous = false;
+             gInUpdateCode = false;
+ 
+             _waitCounter = 0;
+@@ -404,6 +464,103 @@ namespace OpenRCT2::Title
+             return success;
+         }
+ 
++        bool CanLoadInBackground(size_t saveIndex) const
++        {
++            if (_initialLoadCommand || _synchronous || gPreviewingTitleSequenceInGame || gOpenRCT2Headless)
++                return false;
++            if (saveIndex >= _sequence->Saves.size())
++                return false;
++            return ParkImporter::ExtensionIsOpenRCT2ParkFile(Path::GetExtension(_sequence->Saves[saveIndex]));
++        }
++
++        void StartBackgroundLoad(size_t saveIndex)
++        {
++            auto load = std::make_unique<BackgroundLoad>();
++            load->saveIndex = saveIndex;
++            load->hintPath = _sequence->Saves[saveIndex];
++            LOG_VERBOSE("TitleSequencePlayer: reading %s in the background", load->hintPath.c_str());
++            const TitleSequence* sequence = _sequence.get(); // outlives the thread: Eject() joins first
++            load->thread = std::thread([sequence, l = load.get()]() { RunBackgroundLoad(*sequence, *l); });
++            _background = std::move(load);
++        }
++
++        static void RunBackgroundLoad(const TitleSequence& sequence, BackgroundLoad& load)
++        {
++            try
++            {
++                auto parkHandle = TitleSequenceGetParkHandle(sequence, load.saveIndex);
++                if (parkHandle == nullptr)
++                {
++                    throw std::runtime_error("park not found in the sequence");
++                }
++                load.importer = ParkImporter::Create(parkHandle->HintPath);
++                load.result.emplace(load.importer->LoadFromStream(parkHandle->Stream.get(), false));
++
++                load.objects = GetContext()->GetObjectManager().PreloadObjects(load.result->RequiredObjects);
++                load.ok = true;
++            }
++            catch (const std::exception& e)
++            {
++                load.error = e.what();
++            }
++            catch (...)
++            {
++                load.error = "unknown error";
++            }
++            load.done = true;
++        }
++
++        /** Main-thread half of a background load: objects, import and playback setup. */
++        bool FinishBackgroundLoad(BackgroundLoad& load)
++        {
++            LOG_VERBOSE("TitleSequencePlayer::FinishBackgroundLoad(%s)", load.hintPath.c_str());
++            bool success = false;
++            try
++            {
++                WindowSetFlagForAllViewports(ViewportFlag::renderingInhibited, true);
++
++                auto& objectManager = GetContext()->GetObjectManager();
++                objectManager.LoadObjects(load.result->RequiredObjects, std::move(load.objects), false);
++
++                auto& gameState = getGameState();
++                load.importer->Import(gameState);
++
++                MapAnimations::MarkAllTiles();
++                PrepareParkForPlayback();
++                success = true;
++            }
++            catch (const std::exception& e)
++            {
++                Console::Error::WriteLine("Unable to load park: %s (%s)", load.hintPath.c_str(), e.what());
++            }
++            WindowSetFlagForAllViewports(ViewportFlag::renderingInhibited, false);
++            return success;
++        }
++
++        void DiscardBackgroundLoad()
++        {
++            if (_background != nullptr)
++            {
++                _stale.push_back(std::move(_background));
++            }
++        }
++
++        void ReapStaleLoads()
++        {
++            for (auto it = _stale.begin(); it != _stale.end();)
++            {
++                if ((*it)->done)
++                {
++                    (*it)->thread.join();
++                    it = _stale.erase(it);
++                }
++                else
++                {
++                    ++it;
++                }
++            }
++        }
++
+         void CloseParkSpecificWindows()
+         {
+             auto* windowMgr = Ui::GetWindowManager();
+diff --git a/src/openrct2/object/ObjectManager.cpp b/src/openrct2/object/ObjectManager.cpp
+index 5285cfb..fa82804 100644
+--- a/src/openrct2/object/ObjectManager.cpp
++++ b/src/openrct2/object/ObjectManager.cpp
+@@ -218,6 +218,77 @@ namespace OpenRCT2
+             ResetTypeToRideEntryIndexMap();
+         }
+ 
++        std::vector<std::unique_ptr<Object>> PreloadObjects(const ObjectList& objectList) override
++        {
++            std::vector<const ObjectRepositoryItem*> objectsToLoad;
++            for (auto objectType : getAllObjectTypes())
++            {
++                auto& descriptors = objectList.GetList(objectType);
++                auto maxSize = static_cast<size_t>(getObjectEntryGroupCount(objectType));
++                auto listSize = std::min(descriptors.size(), maxSize);
++                for (size_t i = 0; i < listSize; i++)
++                {
++                    const auto& entry = descriptors[i];
++                    if (!entry.HasValue())
++                        continue;
++                    const auto* ori = _objectRepository.FindObject(entry);
++                    if (ori != nullptr && ori->LoadedObject == nullptr)
++                        objectsToLoad.push_back(ori);
++                }
++            }
++            std::sort(objectsToLoad.begin(), objectsToLoad.end());
++            objectsToLoad.erase(std::unique(objectsToLoad.begin(), objectsToLoad.end()), objectsToLoad.end());
++
++            std::vector<std::unique_ptr<Object>> result;
++            std::mutex resultMutex;
++            JobPool jobs{};
++            for (const auto* ori : objectsToLoad)
++            {
++                jobs.AddTask([ori, &result, &resultMutex, this]() {
++                    auto object = _objectRepository.LoadObject(ori);
++                    if (object != nullptr)
++                    {
++                        std::lock_guard<std::mutex> guard(resultMutex);
++                        result.push_back(std::move(object));
++                    }
++                });
++            }
++            jobs.Join();
++            return result;
++        }
++
++        void LoadObjects(
++            const ObjectList& objectList, std::vector<std::unique_ptr<Object>>&& preloaded, bool reportProgress) override
++        {
++            // Register and load the objects read earlier, as LoadObjects does for the ones it reads itself.
++            std::vector<Object*> registered;
++            for (auto& object : preloaded)
++            {
++                const auto* ori = _objectRepository.FindObject(object->GetDescriptor());
++                if (ori == nullptr || ori->LoadedObject != nullptr)
++                    continue;
++                auto* loadedObject = object.get();
++                _objectRepository.RegisterLoadedObject(ori, std::move(object));
++                loadedObject->Load();
++                registered.push_back(loadedObject);
++            }
++            preloaded.clear();
++
++            try
++            {
++                LoadObjects(objectList, reportProgress);
++            }
++            catch (...)
++            {
++                for (auto* object : registered)
++                {
++                    if (GetLoadedObjectEntryIndex(object) == kObjectEntryIndexNull)
++                        UnloadObject(object);
++                }
++                throw;
++            }
++        }
++
+         void UnloadObjects(const std::vector<ObjectEntryDescriptor>& entries) override
+         {
+             // TODO there are two performance issues here:
+diff --git a/src/openrct2/object/ObjectManager.h b/src/openrct2/object/ObjectManager.h
+index 74c372b..4466f68 100644
+--- a/src/openrct2/object/ObjectManager.h
++++ b/src/openrct2/object/ObjectManager.h
+@@ -52,6 +52,18 @@ namespace OpenRCT2
+         virtual Object* LoadObject(const ObjectEntryDescriptor& descriptor, ObjectEntryIndex slot) = 0;
+         virtual Object* LoadRepositoryItem(const ObjectRepositoryItem& ori) = 0;
+         virtual void LoadObjects(const ObjectList& entries, bool reportProgress = false) = 0;
++        /**
++         * Reads the objects in `entries` that are not loaded yet from disk, without
++         * registering or loading them, so this can run on another thread while the repository is
++         * not being changed. Missing or unreadable objects are skipped; LoadObjects reports them.
++         */
++        virtual std::vector<std::unique_ptr<Object>> PreloadObjects(const ObjectList& entries) = 0;
++        /**
++         * As LoadObjects(entries, reportProgress), with objects read earlier by
++         * PreloadObjects. Objects that were loaded in the meantime are dropped.
++         */
++        virtual void LoadObjects(
++            const ObjectList& entries, std::vector<std::unique_ptr<Object>>&& preloaded, bool reportProgress = false) = 0;
+         virtual void UnloadObjects(const std::vector<ObjectEntryDescriptor>& entries) = 0;
+         virtual void UnloadAllTransient() = 0;
+         virtual void UnloadAll() = 0;

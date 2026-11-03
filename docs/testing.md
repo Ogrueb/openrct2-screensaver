@@ -1,0 +1,163 @@
+# Local test checklist
+
+Run on the Windows PC with RCT2 installed. OpenRCT2's user directory there is
+`Documents\OpenRCT2\` (contains `config.ini`, `sequence\`, `plugin\`, `plugin.store.json`).
+Plugin `console.log` output goes to standard output: start OpenRCT2 from a terminal with
+the console build (`openrct2.com`, next to `openrct2.exe`) to see it.
+
+Each item records what was assumed from reading the source, so a failure points at the
+assumption to revisit.
+
+## 1. Generated title sequence (stock OpenRCT2, no plugin)
+Install with `python3 tools/mksequence.py playlists/example.toml --layout stock --install`
+(OpenRCT2 closed), then remove `Documents\OpenRCT2\plugin\rct-screensaver.js` for this part.
+
+- [ ] Sequence appears under Options → Miscellaneous → Title sequence and plays.
+- [ ] Every park loads (format versions 13–40, heavy hacks). Note any console errors.
+- [ ] Views land on the intended area. `LOCATION` centers at ground height; check
+      whether views in parks with high structures sit too low.
+- [ ] Rotation is right for each view (rotation is relative to the park's saved view).
+- [ ] A 10 s hold lasts 10 s, and does not change with game speed.
+- [ ] Load time per park, and what is shown while loading.
+
+## 2. Plugin
+Install with `python3 tools/mksequence.py playlists/example.toml --install` (OpenRCT2
+closed). Start OpenRCT2 via `openrct2.com`. On the stock engine the plugin plays on the title screen
+and the toolbox menu has "RCT Screensaver: toggle debug log"; on the patched engine enter the
+screensaver mode first (the checks below then apply inside it, with the `debug` plugin setting for
+the log).
+
+- [ ] Console shows `[RCT Screensaver] playing "RCT Screensaver Examples" (10 parks)`.
+- [ ] An `intransient` plugin starts on the title screen and keeps running across park
+      loads by the title player.
+- [ ] `ui.mainViewport.moveTo`, `.rotation` and `.zoom` work on the title screen and are
+      not undone by the sequence player during a `WAIT`.
+- [ ] Plugin shortcuts bound to arrow keys fire despite the built-in scroll bindings.
+- [ ] `context.executeAction("gamesetspeed", …)` changes speed on the title screen.
+- [ ] `TitleSequence.play()` and `seek()` to a `LOAD` work from the title screen.
+- [ ] Each control in the README key table does what it says; Space toggles.
+- [ ] Views advance after their hold time; a held view stays put until released.
+- [ ] Starting a game from the title menu stops the player; returning to the title screen
+      restarts it.
+
+### Follow-ups from 2026-10-26
+- [ ] Speed set with Up stays the same after the next park loads (Shift+Right), and after
+      restarting OpenRCT2.
+- [ ] Tin Train and other parks that fit on the screen show one centered view, not views of
+      the empty map edge. Try a smaller window and a larger one: more views appear as the
+      window shrinks.
+- [ ] Large parks: views no longer show the void past the map or park edge.
+
+- [ ] Park changes fade to black, stay black while loading (no frozen frame of the old
+      park), then fade in on the new park. No title bar or window border shows on the cover.
+- [ ] Shift+Right then quickly Shift+Left fades back without loading anything.
+- [ ] Starting a game during a fade leaves no black window behind.
+
+### View editor
+On the stock engine the editor is a window on the title screen; in the screensaver mode it is drawn
+on the overlay with the same controls (`docs/screensaver-ui.md`).
+- [ ] E opens the editor; playback pauses (no view or park change).
+- [ ] Arrows pan the camera, Shift+arrows pan faster; rotate and zoom buttons work.
+- [ ] Add view / Set to camera / Delete / Move up / Move down / hold spinner change the list,
+      and the new views play as set after closing the editor (E).
+- [ ] The park picker loads the chosen park (with the fade) and the list follows it.
+- [ ] Restart OpenRCT2: edits are still there. Close it and run `--install`: the edits move to
+      `playlists/example.views.json` and still play.
+- [ ] Check whether mouse dragging can scroll the camera on the title screen (not expected).
+
+### View panning (`docs/view-panning.md`)
+- [ ] Default (`pan` unset): views still and cut exactly as before.
+- [ ] A view with `pan` holds still, then pans to the next view and arrives exactly; angle/zoom
+      change only as the pan sets off ("start") or arrives ("end").
+- [ ] Inertia on starts and stops slowly, off keeps one speed; far pans at one zoom step out a level.
+- [ ] Opposite angles turn once at each end; the camera rests 1 s at the spot before a change on
+      arrival and stays still ≥ 2 s after each change.
+- [ ] Timings: install with `--camera-log`, play a loop, then `python3 tools/cameralog.py <log>`
+      prints each view's still, pan, speed, rest and post-change still and flags short ones.
+- [ ] A park's last view pans back to its first: a one-park playlist carries on there
+      without a reload; with several parks the camera holds there 2 s, then the next park follows.
+      To a wider first view (the overview) it steps one zoom out as it sets off and moves at once, steps further out
+      during the pan, and turns on arrival after a 1 s rest.
+- [ ] Space pauses a pan and resumes it; Left/Right cut; a park's last view cuts to the next park.
+- [ ] Sounds (patched engine) keep playing through pans and fade around cuts as before.
+- [ ] Editor: Pan/Turn/Speed change the selected view; selecting a view cuts; nothing moves while open
+      unless Play is on. With Play: the park's views pan and loop in the park; an edit replays from
+      the selected view 1 s later (repeated edits restart the wait); arrows/rotate/zoom stop Play.
+- [ ] Browser tool: "% pan", start/end and linear/inertia save to the views file and play after install.
+- [ ] Frame rate while panning on large parks (Europa-Park, Sonnental) vs. still views.
+
+## 3. Park behavior (observe during 1–2)
+- [ ] Sambhava's Rest and Constellations look acceptable without companion plugins.
+- [ ] Constellations ride 79 (AdvancedTrack feature) does not stall or break.
+- [ ] Frame rate on Sambhava's Rest and Troubadours et Baladins.
+- [ ] Decay over a long run (litter, breakdowns, guests leaving).
+
+## 4. Patched engine (background park loading)
+Install a build from the "Engine build" workflow (replace `openrct2.exe` and `openrct2.com` in the
+portable install; keep the stock pair in `stock-backup\`). The plugin detects the patch and skips
+the fade. Timings go to `Documents\OpenRCT2\rct-screensaver-engine.log`, one line per park load.
+
+- [ ] Park switches show the old park animating until the new one appears; no fade, no freeze.
+- [ ] Each line has `early`, `register`, `import`, `swap`, `finish` stages; `total` (main-thread
+      part) is about 15-30 ms; `[preloaded=...]` near 0.
+- [ ] The wrap from the last park to the first uses the background path too.
+- [ ] No wrong tiles, leftover sprites, odd colors or crashes over several cycles.
+- [ ] Shift+Right then quickly Shift+Left while a load is pending: the stale load is dropped
+      without a crash and the park shown is the one asked for.
+- [x] Palette (patch 0001): Gardens of Light (and
+      Dream) show their white world, ground and backdrop past the map edge included, while the
+      title menu, the plugin's windows and text outlines stay black. Other parks look unchanged
+      (owner, 2026-10-27). Still to look at: a night-time park, and a normal game (any scenario),
+      where nothing should look different.
+
+### Screensaver mode (patches 0011-0013)
+First checked with a throwaway test plugin (2026-10-31, since removed); the mode's own UI covers the
+same ground now (`docs/screensaver-ui.md`). Run each check with Options → Display → Drawing engine
+set to software (hardware display), then again with OpenGL, at scale 2.0. Passed on the owner's PC in
+both engines (2026-10-31; the fps cap not yet measured).
+
+- [x] The main menu has a fifth button (a monitor with a park, tooltip "Screensaver"); nothing else
+      in the menu changed.
+- [x] The button closes the title windows, goes borderless and shows the park with only the
+      overlay's elements (captions, the controls bar on a mouse move), sharp at the monitor's own
+      resolution (not blocky game pixels).
+- [x] The mouse reaches the plugin: the bar shows on a move, buttons react, the cursor hides with it.
+- [x] The game's other windows (the screensaver's editor, companion stand-ins) don't show, and
+      clicks don't reach them; the screensaver's keys still work.
+- [x] Esc leaves the mode: the title menu is back, the window style is as before, the overlay is
+      gone. `config.ini` is unchanged (light effects, weather gloom, uncapped FPS, window mode).
+- [x] `openrct2.exe --screensaver` starts in the mode (a stock-looking frame first is expected);
+      Esc quits the game.
+- [ ] With "uncap FPS" on in the game's own settings, the mode still runs at 40 fps (no extra
+      CPU over the stock title screen).
+
+### Plugin follows the mode (wrapper step 2)
+Passed on the owner's PC 2026-11-01 (run-19 engine, `playlists/example.toml`), except title music.
+- [x] On the patched engine the title screen plays the user's own title sequence, with no
+      "RCT Screensaver" toolbox entries; the playlist's keys do nothing there.
+- [x] The menu's Screensaver button (or `--screensaver`) starts the playlist; keys work.
+- [x] Esc (from the menu) stops it: the user's own title sequence comes back, a held view is
+      released, and the next entry starts the playlist again.
+- [x] E in the mode opens the overlay's view editor (`docs/screensaver-ui.md`); outside the mode it
+      does nothing on the patched engine.
+- [ ] With `title_music = "ride"` installed, ride music plays in the mode only; `config.ini` keeps
+      its own `title_theme`.
+
+## 5. Loose objects across imports (importparks.py)
+`object/rct-screensaver/installed.json` records which import (the downloads given, by path) uses
+each loose object file; importing a folder again replaces only that folder's objects.
+
+- [ ] Cloud/any machine: `python -m unittest discover -s tools/tests` (fake `.DAT` downloads in a
+      temporary user directory: a second folder keeps the first's objects, a re-import drops only
+      its own unused files, objects installed elsewhere are not copied, a folder from before the
+      record keeps its files under "(installed before the record)", which no import removes).
+- [ ] PC, in a throwaway user directory (`--user-dir build\objtest`, so the real one is untouched):
+      (`openrct2 convert` takes no options, so `.sv6` conversion still runs with the real user folder;
+      only the loose objects go to the throwaway one)
+      copy two EvenMoreParks downloads that ship loose objects into two folders (e.g. `...dreamport`
+      into `build\objA`, `...rowling_versus_tolkien` into `build\objB`), import each into its own
+      library (`importparks.py build\objA -o build\libA --user-dir build\objtest --openrct2 ...`, the
+      same for B), then check `build\objtest\object\rct-screensaver\`: both downloads' files are there
+      and `installed.json` lists each under its folder. Delete `build\objA`'s download, import A again:
+      only A's files go. Then scan both folders from the settings page, one after the other, and
+      check the same in the real user directory.

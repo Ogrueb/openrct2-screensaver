@@ -1,0 +1,99 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: RCT Screensaver <noreply@example.invalid>
+Date: Sat, 31 Oct 2026 23:05:42 +0000
+Subject: [PATCH] Title menu: a Screensaver button
+
+One more button beside the four, entering the screensaver mode. It has no
+sprite of its own, so it draws a play triangle. This is the only change to the main menu.
+---
+ src/openrct2-ui/windows/TitleMenu.cpp | 38 +++++++++++++++++++++++++++
+ 1 file changed, 38 insertions(+)
+
+diff --git a/src/openrct2-ui/windows/TitleMenu.cpp b/src/openrct2-ui/windows/TitleMenu.cpp
+index 0d11003..6bf187d 100644
+--- a/src/openrct2-ui/windows/TitleMenu.cpp
++++ b/src/openrct2-ui/windows/TitleMenu.cpp
+@@ -10,6 +10,7 @@
+ #include <openrct2-ui/interface/Dropdown.h>
+ #include <openrct2-ui/interface/Widget.h>
+ #include <openrct2-ui/interface/Window.h>
++#include <openrct2-ui/screensaver/Screensaver.h>
+ #include <openrct2-ui/scripting/CustomMenu.h>
+ #include <openrct2-ui/windows/Windows.h>
+ #include <openrct2/Game.h>
+@@ -19,6 +20,7 @@
+ #include <openrct2/SpriteIds.h>
+ #include <openrct2/actions/GameActionRunner.h>
+ #include <openrct2/actions/general/LoadOrQuitAction.h>
++#include <openrct2/drawing/ColourMap.h>
+ #include <openrct2/drawing/Rectangle.h>
+ #include <openrct2/interface/ColourWithFlags.h>
+ #include <openrct2/scenes/SceneManager.h>
+@@ -36,6 +38,7 @@ namespace OpenRCT2::Ui::Windows
+         WIDX_CONTINUE_SAVED_GAME,
+         WIDX_MULTIPLAYER,
+         WIDX_GAME_TOOLS,
++        WIDX_SCREENSAVER,
+         WIDX_NEW_VERSION,
+     };
+ 
+@@ -58,6 +61,7 @@ namespace OpenRCT2::Ui::Windows
+         makeWidget({0, kUpdateButtonDims.height}, kMenuButtonDims,   WidgetType::imgBtn, WindowColour::tertiary,  ImageId(SPR_MENU_LOAD_GAME),      STR_CONTINUE_SAVED_GAME_TIP),
+         makeWidget({0, kUpdateButtonDims.height}, kMenuButtonDims,   WidgetType::imgBtn, WindowColour::tertiary,  ImageId(SPR_G2_MENU_MULTIPLAYER), STR_SHOW_MULTIPLAYER_TIP),
+         makeWidget({0, kUpdateButtonDims.height}, kMenuButtonDims,   WidgetType::imgBtn, WindowColour::tertiary,  ImageId(SPR_MENU_TOOLBOX),        STR_GAME_TOOLS_TIP),
++        makeWidget({0, kUpdateButtonDims.height}, kMenuButtonDims,   WidgetType::imgBtn, WindowColour::tertiary,  ImageId(),                       STR_STRING),
+         makeWidget({0,                        0}, kUpdateButtonDims, WidgetType::button, WindowColour::secondary, STR_UPDATE_AVAILABLE)
+     );
+     // clang-format on
+@@ -157,6 +161,9 @@ namespace OpenRCT2::Ui::Windows
+                 case WIDX_NEW_VERSION:
+                     ContextOpenWindowView(WindowView::newVersionInfo);
+                     break;
++                case WIDX_SCREENSAVER:
++                    Screensaver::Enter();
++                    break;
+             }
+         }
+ 
+@@ -265,10 +272,41 @@ namespace OpenRCT2::Ui::Windows
+                 _filterRect.point1.y = windowPos.y;
+         }
+ 
++        StringWithArgs onTooltip(WidgetIndex widgetIndex, StringId fallback) override
++        {
++            if (widgetIndex == WIDX_SCREENSAVER)
++            {
++                auto ft = Formatter();
++                ft.Add<const char*>("Screensaver");
++                return { fallback, ft };
++            }
++            return { fallback, {} };
++        }
++
+         void onDraw(RenderTarget& rt) override
+         {
+             Rectangle::filter(rt, _filterRect, FilterPaletteID::palette51);
+             drawWidgets(rt);
++            DrawScreensaverIcon(rt);
++        }
++
++        // A play triangle, drawn as the button has no sprite of its own.
++        void DrawScreensaverIcon(RenderTarget& rt)
++        {
++            const auto& widget = widgets[WIDX_SCREENSAVER];
++            if (!widget.isVisible())
++                return;
++            const int32_t size = 40;
++            const int32_t left = windowPos.x + (widget.left + widget.right) / 2 - size / 3;
++            const int32_t middle = windowPos.y + (widget.top + widget.bottom) / 2;
++            const auto colour = getColourMap(Drawing::Colour::white).lighter;
++            for (int32_t dx = 0; dx < size * 3 / 4; dx++)
++            {
++                const int32_t half = size / 2 - dx * 2 / 3;
++                const int32_t x = left + dx;
++                const int32_t y = middle;
++                Rectangle::fill(rt, { { x, y - half }, { x, y + half } }, colour);
++            }
+         }
+     };
+ 

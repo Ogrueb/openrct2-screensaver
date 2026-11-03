@@ -1,0 +1,29 @@
+# Pan trial: four parks with generated views panning 60% of each hold at one speed (the inertia
+# comparison is settled: off by default).
+# Install it (close OpenRCT2 first; --ignore-edits plays the generated views) with:
+#   python3 tools/mksequence.py playlists/pan-compare.toml --install --ignore-edits
+# Paths are relative to this file. Installing it replaces the installed playlist; install
+# example.toml again to go back.
+
+name = "RCT Screensaver Pan Compare"
+order = "playlist"
+layout = "plugin"
+
+[views]
+pan = 0.6  # overviews keep their own 10%, changing angle and zoom on arrival
+
+[[park]]
+file = "../ExampleParks/220710-rct2-j_k-ghillie_dhu.zip"
+name = "Ghillie Dhu"
+
+[[park]]
+file = "../ExampleParks/231026-rct2-jens_j-san_avaiki.zip"
+name = "San Avaiki"
+
+[[park]]
+file = "../ExampleParks/240502-rct2tt-collabo-constellations.zip"
+name = "Constellations"
+
+[[park]]
+file = "../ExampleParks/240818-rct2-collabo-sonnental.zip"
+name = "Sonnental"

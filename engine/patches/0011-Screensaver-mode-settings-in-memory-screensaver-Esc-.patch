@@ -1,0 +1,1071 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: RCT Screensaver <noreply@example.invalid>
+Date: Sat, 31 Oct 2026 23:05:35 +0000
+Subject: [PATCH] Screensaver mode: settings in memory, --screensaver, Esc,
+ mouse to the plugin
+
+A screensaver mode on the title screen (src/openrct2-ui/screensaver/):
+entering closes the title windows and hides every other window but the park's own
+(transparent and invisible, so the park is drawn under them), and applies the mode's
+settings in memory: window style (borderless by default), title music, game speed,
+light effects and weather gloom off by default, and uncapped frames off, so the game
+draws once per tick (40 fps). Config::SetSaveHook keeps them out of config.ini; leaving
+restores the user's values and reopens the title menu.
+
+--screensaver starts in the mode; Esc then quits. Entered from the menu, Esc leaves the
+mode. While the mode is on, mouse moves, buttons and the wheel go to the plugin instead
+of the windows.
+
+Plugin API: the screensaver global (active, launchedByFlag, settings, cursorVisible,
+enter, exit, configure, onChange, onMouse).
+---
+ src/openrct2-ui/input/InputManager.cpp      |   3 +
+ src/openrct2-ui/input/MouseInput.cpp        |  10 +
+ src/openrct2-ui/interface/Window.cpp        |   3 +
+ src/openrct2-ui/libopenrct2ui.vcxproj       |   3 +
+ src/openrct2-ui/screensaver/Screensaver.cpp | 403 ++++++++++++++++++++
+ src/openrct2-ui/screensaver/Screensaver.h   |  94 +++++
+ src/openrct2-ui/scripting/ScScreensaver.hpp | 280 ++++++++++++++
+ src/openrct2-ui/scripting/UiExtensions.cpp  |   6 +
+ src/openrct2/OpenRCT2.cpp                   |   1 +
+ src/openrct2/OpenRCT2.h                     |   2 +
+ src/openrct2/command_line/RootCommands.cpp  |   3 +
+ src/openrct2/config/Config.cpp              |  14 +-
+ src/openrct2/config/Config.h                |   3 +
+ 13 files changed, 824 insertions(+), 1 deletion(-)
+ create mode 100644 src/openrct2-ui/screensaver/Screensaver.cpp
+ create mode 100644 src/openrct2-ui/screensaver/Screensaver.h
+ create mode 100644 src/openrct2-ui/scripting/ScScreensaver.hpp
+
+diff --git a/src/openrct2-ui/input/InputManager.cpp b/src/openrct2-ui/input/InputManager.cpp
+index b7d613e..7a6eeff 100644
+--- a/src/openrct2-ui/input/InputManager.cpp
++++ b/src/openrct2-ui/input/InputManager.cpp
+@@ -8,6 +8,7 @@
+  *****************************************************************************/
+ 
+ #include "InputManager.h"
++#include "../screensaver/Screensaver.h"
+ 
+ #include "ShortcutIds.h"
+ 
+@@ -328,6 +329,8 @@ void InputManager::processEvents()
+ void InputManager::process(const InputEvent& e)
+ {
+     auto& shortcutManager = GetShortcutManager();
++    if (Screensaver::HandleKey(e))
++        return;
+     if (e.deviceKind == InputDeviceKind::keyboard)
+     {
+         auto& console = GetInGameConsole();
+diff --git a/src/openrct2-ui/input/MouseInput.cpp b/src/openrct2-ui/input/MouseInput.cpp
+index 3cdb1d4..31e4709 100644
+--- a/src/openrct2-ui/input/MouseInput.cpp
++++ b/src/openrct2-ui/input/MouseInput.cpp
+@@ -8,6 +8,7 @@
+  *****************************************************************************/
+ 
+ #include "MouseInput.h"
++#include "../screensaver/Screensaver.h"
+ 
+ #include <algorithm>
+ #include <cassert>
+@@ -112,6 +113,15 @@ namespace OpenRCT2
+ 
+         MouseState state;
+         ScreenCoordsXY screenCoords;
++        Ui::Screensaver::Tick();
++        if (Ui::Screensaver::IsActive())
++        {
++            // The mode's interface is the plugin's: every mouse event goes to it.
++            while ((state = GameGetNextInput(screenCoords)) != MouseState::released)
++                Ui::Screensaver::HandleMouse(screenCoords, state);
++            Ui::Screensaver::HandleMouse(screenCoords, state);
++            return;
++        }
+         while ((state = GameGetNextInput(screenCoords)) != MouseState::released)
+         {
+             GameHandleInputMouse(screenCoords, state);
+diff --git a/src/openrct2-ui/interface/Window.cpp b/src/openrct2-ui/interface/Window.cpp
+index ca11b47..b52a36c 100644
+--- a/src/openrct2-ui/interface/Window.cpp
++++ b/src/openrct2-ui/interface/Window.cpp
+@@ -11,6 +11,7 @@
+ 
+ #include "../UiStringIds.h"
+ #include "Widget.h"
++#include "../screensaver/Screensaver.h"
+ 
+ #include <SDL_video.h>
+ #include <algorithm>
+@@ -263,6 +264,8 @@ namespace OpenRCT2::Ui
+         int32_t relative_wheel = absolute_wheel - _previousAbsoluteWheel;
+         int32_t pixel_scroll = relative_wheel * kWindowScrollPixels;
+         _previousAbsoluteWheel = absolute_wheel;
++        if (Screensaver::HandleWheel(relative_wheel))
++            return;
+ 
+         if (relative_wheel == 0)
+             return;
+diff --git a/src/openrct2-ui/libopenrct2ui.vcxproj b/src/openrct2-ui/libopenrct2ui.vcxproj
+index 54d0ec8..7ce5f80 100644
+--- a/src/openrct2-ui/libopenrct2ui.vcxproj
++++ b/src/openrct2-ui/libopenrct2ui.vcxproj
+@@ -91,6 +91,8 @@
+     <ClInclude Include="scripting\ScImageManager.hpp" />
+     <ClInclude Include="scripting\ScTileSelection.hpp" />
+     <ClInclude Include="scripting\ScTitleSequence.hpp" />
++    <ClInclude Include="scripting\ScScreensaver.hpp" />
++    <ClInclude Include="screensaver\Screensaver.h" />
+     <ClInclude Include="scripting\ScUi.hpp" />
+     <ClInclude Include="scripting\ScViewport.hpp" />
+     <ClInclude Include="scripting\ScWidget.hpp" />
+@@ -159,6 +161,7 @@
+     <ClCompile Include="scripting\CustomWindow.cpp" />
+     <ClCompile Include="scripting\ScWindow.cpp" />
+     <ClCompile Include="scripting\UiExtensions.cpp" />
++    <ClCompile Include="screensaver\Screensaver.cpp" />
+     <ClCompile Include="ProvisionalElements.cpp" />
+     <ClCompile Include="SDLException.cpp" />
+     <ClCompile Include="TextComposition.cpp" />
+diff --git a/src/openrct2-ui/screensaver/Screensaver.cpp b/src/openrct2-ui/screensaver/Screensaver.cpp
+new file mode 100644
+index 0000000..774cbca
+--- /dev/null
++++ b/src/openrct2-ui/screensaver/Screensaver.cpp
+@@ -0,0 +1,403 @@
++/*****************************************************************************
++ * Copyright (c) 2014-2026 OpenRCT2 developers
++ *
++ * For a complete list of all authors, please refer to contributors.md
++ * Interested in contributing? Visit https://github.com/OpenRCT2/OpenRCT2
++ *
++ * OpenRCT2 is licensed under the GNU General Public License version 3.
++ *****************************************************************************/
++
++#include "Screensaver.h"
++
++#include "../input/InputManager.h"
++
++#include <SDL.h>
++#include <openrct2/Context.h>
++#include <openrct2/Diagnostic.h>
++#include <openrct2/Game.h>
++#include <openrct2/Input.h>
++#include <openrct2/OpenRCT2.h>
++#include <openrct2/audio/Audio.h>
++#include <openrct2/config/Config.h>
++#include <openrct2/drawing/Drawing.Screen.h>
++#include <openrct2/interface/Window.h>
++#include <openrct2/interface/WindowBase.h>
++#include <openrct2/scenes/title/TitleScene.h>
++#include <openrct2/ui/UiContext.h>
++#include <openrct2/ui/WindowManager.h>
++
++#include <unordered_map>
++
++using namespace OpenRCT2;
++using namespace OpenRCT2::Ui;
++
++namespace OpenRCT2::Ui::Screensaver
++{
++    // The config values the mode overrides, as they were before entering.
++    struct ConfigValues
++    {
++        int32_t fullscreenMode{};
++        bool uncapFPS{};
++        bool enableLightFx{};
++        bool enableLightFxForVehicles{};
++        bool renderWeatherGloom{};
++        TitleMusicKind titleMusic{};
++    };
++
++    struct HiddenWindow
++    {
++        bool transparent;
++        bool visible;
++    };
++
++    static bool _active = false;
++    static bool _flagEntered = false;
++    static bool _cursorVisible = true;
++    static Settings _settings;
++    static ConfigValues _saved;
++    static ConfigValues _live;
++    static uint8_t _savedGameSpeed = 1;
++    static std::unordered_map<WindowBase*, HiddenWindow> _hidden;
++    static ChangeListener _changeListener;
++    static MouseListener _mouseListener;
++    static ScreenCoordsXY _lastMouse{ -1, -1 };
++
++    static ConfigValues ReadConfig()
++    {
++        auto& config = Config::Get();
++        ConfigValues values;
++        values.fullscreenMode = config.general.fullscreenMode;
++        values.uncapFPS = config.general.uncapFPS;
++        values.enableLightFx = config.general.enableLightFx;
++        values.enableLightFxForVehicles = config.general.enableLightFxForVehicles;
++        values.renderWeatherGloom = config.general.renderWeatherGloom;
++        values.titleMusic = config.sound.titleMusic;
++        return values;
++    }
++
++    static void WriteConfig(const ConfigValues& values)
++    {
++        auto& config = Config::Get();
++        config.general.fullscreenMode = values.fullscreenMode;
++        config.general.uncapFPS = values.uncapFPS;
++        config.general.enableLightFx = values.enableLightFx;
++        config.general.enableLightFxForVehicles = values.enableLightFxForVehicles;
++        config.general.renderWeatherGloom = values.renderWeatherGloom;
++        config.sound.titleMusic = values.titleMusic;
++    }
++
++    // Config::Save while the mode is on writes the user's own values, never the mode's.
++    static void OnConfigSave(bool writing)
++    {
++        if (writing)
++        {
++            _live = ReadConfig();
++            WriteConfig(_saved);
++        }
++        else
++        {
++            WriteConfig(_live);
++        }
++    }
++
++    static int32_t FullscreenModeFor(WindowStyle style, int32_t current)
++    {
++        switch (style)
++        {
++            case WindowStyle::windowed:
++                return EnumValue(FullscreenMode::windowed);
++            case WindowStyle::borderless:
++                return EnumValue(FullscreenMode::fullscreenDesktop);
++            case WindowStyle::fullscreen:
++                return EnumValue(FullscreenMode::fullscreen);
++            default:
++                return current;
++        }
++    }
++
++    static void SetWindowMode(int32_t mode)
++    {
++        auto& uiContext = GetContext()->GetUiContext();
++        uiContext.SetFullscreenMode(static_cast<FullscreenMode>(mode));
++    }
++
++    static void RestartTitleMusic()
++    {
++        Audio::StopTitleMusic();
++        Audio::PlayTitleMusic();
++    }
++
++    // Applies the settings over the user's values (_saved), in memory only.
++    static void ApplySettings()
++    {
++        auto& config = Config::Get();
++        auto previous = ReadConfig();
++
++        config.general.fullscreenMode = FullscreenModeFor(_settings.windowStyle, _saved.fullscreenMode);
++        // 40 fps: one frame per game tick, as the camera moves once per tick.
++        config.general.uncapFPS = false;
++        config.general.enableLightFx = _settings.lightEffects;
++        config.general.enableLightFxForVehicles = _settings.lightEffects && _saved.enableLightFxForVehicles;
++        config.general.renderWeatherGloom = _settings.weatherGloom;
++        config.sound.titleMusic = _settings.titleMusic ? static_cast<TitleMusicKind>(*_settings.titleMusic)
++                                                       : _saved.titleMusic;
++        if (_settings.gameSpeed && *_settings.gameSpeed >= 1 && *_settings.gameSpeed <= 4)
++        {
++            gGameSpeed = static_cast<uint8_t>(*_settings.gameSpeed);
++        }
++
++        if (config.general.fullscreenMode != previous.fullscreenMode)
++        {
++            SetWindowMode(config.general.fullscreenMode);
++        }
++        if (config.sound.titleMusic != previous.titleMusic)
++        {
++            RestartTitleMusic();
++        }
++        Drawing::GfxInvalidateScreen();
++    }
++
++    static void RestoreConfig()
++    {
++        auto current = ReadConfig();
++        WriteConfig(_saved);
++        Config::SetSaveHook(nullptr);
++        gGameSpeed = _savedGameSpeed;
++        if (current.fullscreenMode != _saved.fullscreenMode)
++        {
++            SetWindowMode(_saved.fullscreenMode);
++        }
++        if (current.titleMusic != _saved.titleMusic)
++        {
++            RestartTitleMusic();
++        }
++    }
++
++    // Every window but the park's own stays open and hidden while the mode is on: transparent
++    // and invisible, so the window code draws the park under it and nothing of it.
++    static void HideWindows()
++    {
++        WindowVisitEach([](WindowBase* w) {
++            if (w->classification == WindowClass::mainWindow || w->flags.has(WindowFlag::dead))
++                return;
++            auto it = _hidden.find(w);
++            if (it != _hidden.end() && !w->isVisible)
++                return;
++            w->invalidate();
++            _hidden[w] = { w->flags.has(WindowFlag::transparent), w->isVisible };
++            w->flags.set(WindowFlag::transparent);
++            w->isVisible = false;
++        });
++    }
++
++    static void ShowWindows()
++    {
++        WindowVisitEach([](WindowBase* w) {
++            auto it = _hidden.find(w);
++            if (it == _hidden.end() || w->flags.has(WindowFlag::dead))
++                return;
++            if (!it->second.transparent)
++                w->flags.unset(WindowFlag::transparent);
++            w->isVisible = it->second.visible;
++            w->invalidate();
++        });
++        _hidden.clear();
++    }
++
++    static void CloseTitleWindows()
++    {
++        auto* windowMgr = GetWindowManager();
++        windowMgr->CloseByClass(WindowClass::titleMenu);
++        windowMgr->CloseByClass(WindowClass::titleExit);
++        windowMgr->CloseByClass(WindowClass::titleOptions);
++        windowMgr->CloseByClass(WindowClass::titleLogo);
++        windowMgr->CloseByClass(WindowClass::titleVersion);
++        windowMgr->CloseByClass(WindowClass::changelog);
++    }
++
++    static void Notify(bool active)
++    {
++        if (_changeListener)
++        {
++            _changeListener(active);
++        }
++    }
++
++    static void Deactivate(bool reopenMenu)
++    {
++        if (!_active)
++            return;
++        _active = false;
++        ShowWindows();
++        RestoreConfig();
++        SDL_ShowCursor(SDL_ENABLE);
++        _cursorVisible = true;
++        if (reopenMenu && gLegacyScene == LegacyScene::titleSequence)
++        {
++            TitleCreateWindows();
++        }
++        Drawing::GfxInvalidateScreen();
++        LOG_INFO("Screensaver mode off");
++        Notify(false);
++    }
++
++    bool IsActive()
++    {
++        return _active;
++    }
++
++    bool LaunchedByFlag()
++    {
++        return gOpenRCT2ScreensaverLaunch;
++    }
++
++    bool Enter()
++    {
++        if (_active)
++            return true;
++        if (gLegacyScene != LegacyScene::titleSequence || gOpenRCT2Headless)
++            return false;
++
++        CloseTitleWindows();
++        _active = true;
++        _saved = ReadConfig();
++        _savedGameSpeed = gGameSpeed;
++        Config::SetSaveHook(OnConfigSave);
++        ApplySettings();
++        HideWindows();
++        _lastMouse = { -1, -1 };
++        LOG_INFO("Screensaver mode on");
++        Notify(true);
++        return true;
++    }
++
++    void Exit()
++    {
++        if (!_active)
++            return;
++        if (LaunchedByFlag())
++        {
++            Deactivate(false);
++            ContextQuit();
++            return;
++        }
++        Deactivate(true);
++    }
++
++    const Settings& GetSettings()
++    {
++        return _settings;
++    }
++
++    void Configure(const Settings& settings)
++    {
++        _settings = settings;
++        if (_active)
++        {
++            ApplySettings();
++        }
++    }
++
++    void SetCursorVisible(bool visible)
++    {
++        _cursorVisible = visible;
++        if (_active)
++        {
++            SDL_ShowCursor(visible ? SDL_ENABLE : SDL_DISABLE);
++        }
++    }
++
++    bool IsCursorVisible()
++    {
++        return _cursorVisible;
++    }
++
++    void SetChangeListener(ChangeListener listener)
++    {
++        _changeListener = std::move(listener);
++    }
++
++    void SetMouseListener(MouseListener listener)
++    {
++        _mouseListener = std::move(listener);
++    }
++
++    void Tick()
++    {
++        if (_active && gLegacyScene != LegacyScene::titleSequence)
++        {
++            // A park was opened or the scene changed under the mode.
++            Deactivate(false);
++        }
++        if (!_active && !_flagEntered && LaunchedByFlag() && gLegacyScene == LegacyScene::titleSequence)
++        {
++            _flagEntered = true;
++            Enter();
++        }
++        if (_active)
++        {
++            HideWindows();
++        }
++    }
++
++    static void SendMouse(MouseEventKind kind, const ScreenCoordsXY& coords, int32_t button, int32_t delta)
++    {
++        if (_mouseListener)
++        {
++            _mouseListener(MouseEvent{ kind, coords.x, coords.y, button, delta });
++        }
++    }
++
++    bool HandleMouse(const ScreenCoordsXY& coords, MouseState state)
++    {
++        if (!_active)
++            return false;
++        switch (state)
++        {
++            case MouseState::leftPress:
++                SendMouse(MouseEventKind::down, coords, 0, 0);
++                break;
++            case MouseState::leftRelease:
++                SendMouse(MouseEventKind::up, coords, 0, 0);
++                break;
++            case MouseState::rightPress:
++                SendMouse(MouseEventKind::down, coords, 1, 0);
++                break;
++            case MouseState::rightRelease:
++                SendMouse(MouseEventKind::up, coords, 1, 0);
++                break;
++            case MouseState::released:
++                if (coords != _lastMouse)
++                {
++                    _lastMouse = coords;
++                    SendMouse(MouseEventKind::move, coords, 0, 0);
++                }
++                break;
++        }
++        return true;
++    }
++
++    bool HandleWheel(int32_t relativeWheel)
++    {
++        if (!_active)
++            return false;
++        if (relativeWheel != 0)
++        {
++            // SDL wheel steps are stored as -1 per step away from the user (UiContext).
++            SendMouse(MouseEventKind::wheel, ContextGetCursorState()->position, 0, -relativeWheel);
++        }
++        return true;
++    }
++
++    bool HandleKey(const InputEvent& e)
++    {
++        if (!_active || e.deviceKind != InputDeviceKind::keyboard)
++            return false;
++        if (e.button == SDLK_ESCAPE && e.state == InputEventState::down)
++        {
++            Exit();
++            return true;
++        }
++        return false;
++    }
++} // namespace OpenRCT2::Ui::Screensaver
+diff --git a/src/openrct2-ui/screensaver/Screensaver.h b/src/openrct2-ui/screensaver/Screensaver.h
+new file mode 100644
+index 0000000..f19a441
+--- /dev/null
++++ b/src/openrct2-ui/screensaver/Screensaver.h
+@@ -0,0 +1,94 @@
++/*****************************************************************************
++ * Copyright (c) 2014-2026 OpenRCT2 developers
++ *
++ * For a complete list of all authors, please refer to contributors.md
++ * Interested in contributing? Visit https://github.com/OpenRCT2/OpenRCT2
++ *
++ * OpenRCT2 is licensed under the GNU General Public License version 3.
++ *****************************************************************************/
++
++// A screensaver mode on the title screen. The park plays in one window with no
++// stock windows on top; a plugin draws its own interface in the overlay (Overlay.h) and gets the
++// mouse. The mode's settings are applied in memory on entry and restored on exit: config.ini never
++// sees them (Config::SetSaveFilter).
++
++#pragma once
++
++#include <cstdint>
++#include <functional>
++#include <optional>
++#include <string>
++
++#include "../input/MouseInput.h"
++
++struct ScreenCoordsXY;
++
++namespace OpenRCT2::Ui
++{
++    struct InputEvent;
++}
++
++namespace OpenRCT2::Ui::Screensaver
++{
++    enum class WindowStyle : uint8_t
++    {
++        keep,
++        windowed,
++        borderless,
++        fullscreen,
++    };
++
++    // What the mode applies on entry. Unset values leave the game's own setting alone.
++    struct Settings
++    {
++        WindowStyle windowStyle = WindowStyle::borderless;
++        std::optional<int32_t> titleMusic; // TitleMusicKind
++        std::optional<int32_t> gameSpeed;  // 1-4
++        bool lightEffects = false;
++        bool weatherGloom = false;
++    };
++
++    enum class MouseEventKind : uint8_t
++    {
++        move,
++        down,
++        up,
++        wheel,
++    };
++
++    struct MouseEvent
++    {
++        MouseEventKind kind;
++        int32_t x;      // game pixels
++        int32_t y;
++        int32_t button; // 0 left, 1 right (down/up)
++        int32_t delta;  // wheel steps, positive away from the user
++    };
++
++    bool IsActive();
++    bool LaunchedByFlag();
++
++    // Enters the mode on the title screen. Returns false anywhere else.
++    bool Enter();
++    // Leaves the mode. In a --screensaver launch, leaving quits the game.
++    void Exit();
++
++    const Settings& GetSettings();
++    // Stores the settings for the next entry, and applies them at once while the mode is on.
++    void Configure(const Settings& settings);
++
++    using ChangeListener = std::function<void(bool active)>;
++    using MouseListener = std::function<void(const MouseEvent&)>;
++    // The mouse cursor while the mode is on (a controls bar hides it with itself).
++    void SetCursorVisible(bool visible);
++    bool IsCursorVisible();
++
++    void SetChangeListener(ChangeListener listener);
++    void SetMouseListener(MouseListener listener);
++
++    // Hooks called from upstream code.
++    void Tick();                                                                // GameHandleInput, every tick
++    bool HandleMouse(const ScreenCoordsXY& coords, OpenRCT2::MouseState state); // true: consumed
++    bool HandleWheel(int32_t relativeWheel);                                    // true: consumed
++    bool HandleKey(const InputEvent& e);                                        // true: consumed
++} // namespace OpenRCT2::Ui::Screensaver
+diff --git a/src/openrct2-ui/scripting/ScScreensaver.hpp b/src/openrct2-ui/scripting/ScScreensaver.hpp
+new file mode 100644
+index 0000000..cf829ec
+--- /dev/null
++++ b/src/openrct2-ui/scripting/ScScreensaver.hpp
+@@ -0,0 +1,280 @@
++/*****************************************************************************
++ * Copyright (c) 2014-2026 OpenRCT2 developers
++ *
++ * For a complete list of all authors, please refer to contributors.md
++ * Interested in contributing? Visit https://github.com/OpenRCT2/OpenRCT2
++ *
++ * OpenRCT2 is licensed under the GNU General Public License version 3.
++ *****************************************************************************/
++
++// The `screensaver` global (mode, settings, mouse).
++
++#pragma once
++
++#ifdef ENABLE_SCRIPTING
++
++    #include "../screensaver/Screensaver.h"
++
++    #include <openrct2/Context.h>
++    #include <openrct2/scripting/ScriptEngine.h>
++    #include <vector>
++
++namespace OpenRCT2::Scripting
++{
++    class ScScreensaver;
++    extern ScScreensaver gScScreensaver;
++
++    namespace ScreensaverJS
++    {
++        inline std::optional<double> GetNumber(JSContext* ctx, JSValue obj, const char* name)
++        {
++            JSValue val = JS_GetPropertyStr(ctx, obj, name);
++            std::optional<double> result;
++            if (JS_IsNumber(val))
++            {
++                double d = 0;
++                if (JS_ToFloat64(ctx, &d, val) == 0)
++                    result = d;
++            }
++            JS_FreeValue(ctx, val);
++            return result;
++        }
++
++        inline float GetFloat(JSContext* ctx, JSValue obj, const char* name, float def)
++        {
++            auto v = GetNumber(ctx, obj, name);
++            return v ? static_cast<float>(*v) : def;
++        }
++
++        inline std::optional<bool> GetBool(JSContext* ctx, JSValue obj, const char* name)
++        {
++            JSValue val = JS_GetPropertyStr(ctx, obj, name);
++            std::optional<bool> result;
++            if (JS_IsBool(val))
++                result = JS_ToBool(ctx, val) != 0;
++            JS_FreeValue(ctx, val);
++            return result;
++        }
++
++        inline std::optional<std::string> GetString(JSContext* ctx, JSValue obj, const char* name)
++        {
++            JSValue val = JS_GetPropertyStr(ctx, obj, name);
++            std::optional<std::string> result;
++            if (JS_IsString(val))
++                result = JSToStdString(ctx, val);
++            JS_FreeValue(ctx, val);
++            return result;
++        }
++
++        inline OpenRCT2::Ui::Screensaver::Settings GetSettings(JSContext* ctx, JSValue obj)
++        {
++            using namespace OpenRCT2::Ui::Screensaver;
++            Settings settings = OpenRCT2::Ui::Screensaver::GetSettings();
++            if (!JS_IsObject(obj))
++                return settings;
++            if (auto v = GetString(ctx, obj, "window"))
++            {
++                if (*v == "keep")
++                    settings.windowStyle = WindowStyle::keep;
++                else if (*v == "windowed")
++                    settings.windowStyle = WindowStyle::windowed;
++                else if (*v == "fullscreen")
++                    settings.windowStyle = WindowStyle::fullscreen;
++                else
++                    settings.windowStyle = WindowStyle::borderless;
++            }
++            JSValue music = JS_GetPropertyStr(ctx, obj, "titleMusic");
++            if (JS_IsNull(music))
++                settings.titleMusic.reset();
++            else if (auto v = GetNumber(ctx, obj, "titleMusic"))
++                settings.titleMusic = static_cast<int32_t>(*v);
++            JS_FreeValue(ctx, music);
++            JSValue speed = JS_GetPropertyStr(ctx, obj, "gameSpeed");
++            if (JS_IsNull(speed))
++                settings.gameSpeed.reset();
++            else if (auto v = GetNumber(ctx, obj, "gameSpeed"))
++                settings.gameSpeed = static_cast<int32_t>(*v);
++            JS_FreeValue(ctx, speed);
++            if (auto v = GetBool(ctx, obj, "lightEffects"))
++                settings.lightEffects = *v;
++            if (auto v = GetBool(ctx, obj, "weatherGloom"))
++                settings.weatherGloom = *v;
++            return settings;
++        }
++
++        inline JSValue SettingsToJS(JSContext* ctx, const OpenRCT2::Ui::Screensaver::Settings& settings)
++        {
++            using namespace OpenRCT2::Ui::Screensaver;
++            static constexpr const char* kStyles[] = { "keep", "windowed", "borderless", "fullscreen" };
++            JSValue obj = JS_NewObject(ctx);
++            JS_SetPropertyStr(ctx, obj, "window", JS_NewString(ctx, kStyles[static_cast<size_t>(settings.windowStyle)]));
++            JS_SetPropertyStr(
++                ctx, obj, "titleMusic", settings.titleMusic ? JS_NewInt32(ctx, *settings.titleMusic) : JS_NULL);
++            JS_SetPropertyStr(ctx, obj, "gameSpeed", settings.gameSpeed ? JS_NewInt32(ctx, *settings.gameSpeed) : JS_NULL);
++            JS_SetPropertyStr(ctx, obj, "lightEffects", JS_NewBool(ctx, settings.lightEffects));
++            JS_SetPropertyStr(ctx, obj, "weatherGloom", JS_NewBool(ctx, settings.weatherGloom));
++            return obj;
++        }
++
++        struct Listener
++        {
++            std::shared_ptr<Plugin> owner;
++            JSCallback callback;
++        };
++
++        inline std::vector<Listener>& ChangeListeners()
++        {
++            static std::vector<Listener> listeners;
++            return listeners;
++        }
++
++        inline std::vector<Listener>& MouseListeners()
++        {
++            static std::vector<Listener> listeners;
++            return listeners;
++        }
++
++        inline void Dispatch(std::vector<Listener>& listeners, const std::function<JSValue(JSContext*)>& makeArg)
++        {
++            auto& scriptEngine = GetContext()->GetScriptEngine();
++            // A callback may add or remove listeners.
++            auto copy = listeners;
++            for (auto& listener : copy)
++            {
++                if (listener.owner == nullptr)
++                    continue;
++                JSContext* ctx = listener.owner->GetContext();
++                scriptEngine.ExecutePluginCall(listener.owner, listener.callback.callback, { makeArg(ctx) }, false);
++            }
++        }
++
++        inline void InstallListeners()
++        {
++            using namespace OpenRCT2::Ui::Screensaver;
++            SetChangeListener([](bool active) {
++                Dispatch(ChangeListeners(), [active](JSContext* ctx) { return JS_NewBool(ctx, active); });
++            });
++            SetMouseListener([](const MouseEvent& e) {
++                static constexpr const char* kKinds[] = { "move", "down", "up", "wheel" };
++                Dispatch(MouseListeners(), [&e](JSContext* ctx) {
++                    JSValue obj = JS_NewObject(ctx);
++                    JS_SetPropertyStr(ctx, obj, "type", JS_NewString(ctx, kKinds[static_cast<size_t>(e.kind)]));
++                    JS_SetPropertyStr(ctx, obj, "x", JS_NewInt32(ctx, e.x));
++                    JS_SetPropertyStr(ctx, obj, "y", JS_NewInt32(ctx, e.y));
++                    JS_SetPropertyStr(ctx, obj, "button", JS_NewInt32(ctx, e.button));
++                    JS_SetPropertyStr(ctx, obj, "delta", JS_NewInt32(ctx, e.delta));
++                    return obj;
++                });
++            });
++        }
++
++        inline void AddListener(std::vector<Listener>& listeners, JSContext* ctx, JSValue func)
++        {
++            auto& scriptEngine = GetContext()->GetScriptEngine();
++            auto plugin = scriptEngine.GetExecInfo().GetCurrentPlugin();
++            if (plugin == nullptr || !JS_IsFunction(ctx, func))
++                return;
++            listeners.push_back({ plugin, JSCallback(ctx, func) });
++        }
++
++        inline void RemovePlugin(const std::shared_ptr<Plugin>& plugin)
++        {
++            for (auto* listeners : { &ChangeListeners(), &MouseListeners() })
++            {
++                std::erase_if(*listeners, [&plugin](const Listener& l) { return l.owner == plugin; });
++            }
++        }
++    } // namespace ScreensaverJS
++
++    class ScScreensaver final : public ScBase
++    {
++    public:
++        void Register(JSContext* ctx)
++        {
++            static constexpr JSCFunctionListEntry funcs[] = {
++                JS_CGETSET_DEF("active", ScScreensaver::active_get, nullptr),
++                JS_CGETSET_DEF("launchedByFlag", ScScreensaver::launchedByFlag_get, nullptr),
++                JS_CGETSET_DEF("settings", ScScreensaver::settings_get, nullptr),
++                JS_CGETSET_DEF("cursorVisible", ScScreensaver::cursorVisible_get, ScScreensaver::cursorVisible_set),
++                JS_CFUNC_DEF("enter", 1, ScScreensaver::enter),
++                JS_CFUNC_DEF("exit", 0, ScScreensaver::exit),
++                JS_CFUNC_DEF("configure", 1, ScScreensaver::configure),
++                JS_CFUNC_DEF("onChange", 1, ScScreensaver::onChange),
++                JS_CFUNC_DEF("onMouse", 1, ScScreensaver::onMouse),
++            };
++            RegisterBase(ctx, "Screensaver", nullptr, funcs);
++            ScreensaverJS::InstallListeners();
++        }
++
++        JSValue New(JSContext* ctx)
++        {
++            return MakeWithOpaque(ctx, nullptr);
++        }
++
++        static void RemovePlugin(const std::shared_ptr<Plugin>& plugin)
++        {
++            ScreensaverJS::RemovePlugin(plugin);
++        }
++
++    private:
++        static JSValue active_get(JSContext* ctx, JSValue)
++        {
++            return JS_NewBool(ctx, Ui::Screensaver::IsActive());
++        }
++
++        static JSValue launchedByFlag_get(JSContext* ctx, JSValue)
++        {
++            return JS_NewBool(ctx, Ui::Screensaver::LaunchedByFlag());
++        }
++
++        static JSValue settings_get(JSContext* ctx, JSValue)
++        {
++            return ScreensaverJS::SettingsToJS(ctx, Ui::Screensaver::GetSettings());
++        }
++
++        static JSValue cursorVisible_get(JSContext* ctx, JSValue)
++        {
++            return JS_NewBool(ctx, Ui::Screensaver::IsCursorVisible());
++        }
++
++        static JSValue cursorVisible_set(JSContext* ctx, JSValue, JSValue value)
++        {
++            Ui::Screensaver::SetCursorVisible(JS_ToBool(ctx, value) != 0);
++            return JS_UNDEFINED;
++        }
++
++        static JSValue enter(JSContext* ctx, JSValue, int argc, JSValue* argv)
++        {
++            if (argc > 0 && JS_IsObject(argv[0]))
++                Ui::Screensaver::Configure(ScreensaverJS::GetSettings(ctx, argv[0]));
++            return JS_NewBool(ctx, Ui::Screensaver::Enter());
++        }
++
++        static JSValue exit(JSContext*, JSValue, int, JSValue*)
++        {
++            Ui::Screensaver::Exit();
++            return JS_UNDEFINED;
++        }
++
++        static JSValue configure(JSContext* ctx, JSValue, int argc, JSValue* argv)
++        {
++            Ui::Screensaver::Configure(ScreensaverJS::GetSettings(ctx, argv[0]));
++            return JS_UNDEFINED;
++        }
++
++        static JSValue onChange(JSContext* ctx, JSValue, int argc, JSValue* argv)
++        {
++            ScreensaverJS::AddListener(ScreensaverJS::ChangeListeners(), ctx, argv[0]);
++            return JS_UNDEFINED;
++        }
++
++        static JSValue onMouse(JSContext* ctx, JSValue, int argc, JSValue* argv)
++        {
++            ScreensaverJS::AddListener(ScreensaverJS::MouseListeners(), ctx, argv[0]);
++            return JS_UNDEFINED;
++        }
++    };
++
++} // namespace OpenRCT2::Scripting
++
++#endif
+diff --git a/src/openrct2-ui/scripting/UiExtensions.cpp b/src/openrct2-ui/scripting/UiExtensions.cpp
+index 0f6272e..6fbdf61 100644
+--- a/src/openrct2-ui/scripting/UiExtensions.cpp
++++ b/src/openrct2-ui/scripting/UiExtensions.cpp
+@@ -15,6 +15,7 @@
+     #include "CustomMenu.h"
+     #include "ScGraphicsContext.hpp"
+     #include "ScImageManager.hpp"
++    #include "ScScreensaver.hpp"
+     #include "ScTileSelection.hpp"
+     #include "ScTitleSequence.hpp"
+     #include "ScUi.hpp"
+@@ -27,6 +28,7 @@ using namespace OpenRCT2::Scripting;
+ 
+ ScGraphicsContext OpenRCT2::Scripting::gScGraphicsContext;
+ ScImageManager OpenRCT2::Scripting::gScImageManager;
++ScScreensaver OpenRCT2::Scripting::gScScreensaver;
+ ScTileSelection OpenRCT2::Scripting::gScTileSelection;
+ ScTool OpenRCT2::Scripting::gScTool;
+ ScUi OpenRCT2::Scripting::gScUi;
+@@ -54,6 +56,7 @@ static void InitialiseContext(JSContext* ctx)
+     JSValue glb = JS_GetGlobalObject(ctx);
+     JS_SetPropertyStr(ctx, glb, "titleSequenceManager", gScTitleSequenceManager.New(ctx));
+     JS_SetPropertyStr(ctx, glb, "ui", gScUi.New(ctx, &OpenRCT2::GetContext()->GetScriptEngine()));
++    JS_SetPropertyStr(ctx, glb, "screensaver", gScScreensaver.New(ctx));
+     JS_FreeValue(ctx, glb);
+ }
+ 
+@@ -63,6 +66,7 @@ void UiScriptExtensions::Extend(ScriptEngine& scriptEngine)
+ 
+     gScGraphicsContext.Register(ctx);
+     gScImageManager.Register(ctx);
++    gScScreensaver.Register(ctx);
+     gScTileSelection.Register(ctx);
+     gScTool.Register(ctx);
+     gScUi.Register(ctx);
+@@ -90,6 +94,7 @@ void UiScriptExtensions::Extend(ScriptEngine& scriptEngine)
+     scriptEngine.SubscribeToPluginStoppedEvent([](std::shared_ptr<Plugin> plugin) -> void {
+         ScUi::hidePluginGridlines(plugin);
+         Ui::Windows::CloseWindowsOwnedByPlugin(plugin);
++        ScScreensaver::RemovePlugin(plugin);
+     });
+ 
+     scriptEngine.RegisterExtension(InitialiseContext, Unregister);
+@@ -99,6 +104,7 @@ void UiScriptExtensions::Unregister()
+ {
+     gScGraphicsContext.Unregister();
+     gScImageManager.Unregister();
++    gScScreensaver.Unregister();
+     gScTileSelection.Unregister();
+     gScTool.Unregister();
+     gScUi.Unregister();
+diff --git a/src/openrct2/OpenRCT2.cpp b/src/openrct2/OpenRCT2.cpp
+index 8db70f8..d657257 100644
+--- a/src/openrct2/OpenRCT2.cpp
++++ b/src/openrct2/OpenRCT2.cpp
+@@ -21,6 +21,7 @@ u8string gCustomPassword = {};
+ u8string gSilentRecordingName = {};
+ 
+ bool gOpenRCT2Headless = false;
++bool gOpenRCT2ScreensaverLaunch = false;
+ bool gOpenRCT2NoGraphics = false;
+ 
+ bool gOpenRCT2ShowChangelog;
+diff --git a/src/openrct2/OpenRCT2.h b/src/openrct2/OpenRCT2.h
+index 2804d83..784bb62 100644
+--- a/src/openrct2/OpenRCT2.h
++++ b/src/openrct2/OpenRCT2.h
+@@ -43,6 +43,8 @@ extern u8string gCustomRCT1DataPath;
+ extern u8string gCustomRCT2DataPath;
+ extern u8string gCustomPassword;
+ extern bool gOpenRCT2Headless;
++// Launched with --screensaver (the title screen in screensaver mode).
++extern bool gOpenRCT2ScreensaverLaunch;
+ extern bool gOpenRCT2NoGraphics;
+ extern bool gOpenRCT2ShowChangelog;
+ extern bool gOpenRCT2SilentBreakpad;
+diff --git a/src/openrct2/command_line/RootCommands.cpp b/src/openrct2/command_line/RootCommands.cpp
+index aa2477c..bc80e0c 100644
+--- a/src/openrct2/command_line/RootCommands.cpp
++++ b/src/openrct2/command_line/RootCommands.cpp
+@@ -62,6 +62,7 @@ namespace OpenRCT2
+     static u8string _rct1DataPath = {};
+     static u8string _rct2DataPath = {};
+     static bool _silentBreakpad = false;
++    static bool _screensaver = false;
+ 
+     // clang-format off
+     static constexpr CommandLineOptionDefinition kStandardOptions[]
+@@ -74,6 +75,7 @@ namespace OpenRCT2
+         { CMDLINE_TYPE_SWITCH,  &_verbose,          kNAC, "verbose",            "log verbose messages"                                       },
+         { CMDLINE_TYPE_SWITCH,  &_headless,         kNAC, "headless",           "run " OPENRCT2_NAME " headless" IMPLIES_SILENT_BREAKPAD     },
+         { CMDLINE_TYPE_SWITCH,  &_silentReplays,    kNAC, "silent-replays",     "use unobtrusive replays"                                    },
++        { CMDLINE_TYPE_SWITCH,  &_screensaver,      kNAC, "screensaver",        "start the title screen in screensaver mode; Esc quits"      },
+     #ifndef DISABLE_NETWORK
+         { CMDLINE_TYPE_INTEGER, &_port,             kNAC, "port",               "port to use for hosting or joining a server"                },
+         { CMDLINE_TYPE_STRING,  &_address,          kNAC, "address",            "address to listen on when hosting a server"                 },
+@@ -200,6 +202,7 @@ namespace OpenRCT2
+         gOpenRCT2Headless = _headless;
+         gOpenRCT2NoGraphics = _headless;
+         gOpenRCT2SilentBreakpad = _silentBreakpad || _headless;
++        gOpenRCT2ScreensaverLaunch = _screensaver && !_headless;
+ 
+         if (!_userDataPath.empty())
+         {
+diff --git a/src/openrct2/config/Config.cpp b/src/openrct2/config/Config.cpp
+index 8590b14..800a54b 100644
+--- a/src/openrct2/config/Config.cpp
++++ b/src/openrct2/config/Config.cpp
+@@ -894,10 +894,22 @@ namespace OpenRCT2::Config
+         return WriteFile(path);
+     }
+ 
++    static void (*_saveHook)(bool writing) = nullptr;
++
++    void SetSaveHook(void (*hook)(bool writing))
++    {
++        _saveHook = hook;
++    }
++
+     bool Save()
+     {
+         auto path = GetDefaultPath();
+-        return SaveToPath(path);
++        if (_saveHook != nullptr)
++            _saveHook(true);
++        auto result = SaveToPath(path);
++        if (_saveHook != nullptr)
++            _saveHook(false);
++        return result;
+     }
+ 
+     bool FindOrBrowseInstallDirectory()
+diff --git a/src/openrct2/config/Config.h b/src/openrct2/config/Config.h
+index 68acf54..a785453 100644
+--- a/src/openrct2/config/Config.h
++++ b/src/openrct2/config/Config.h
+@@ -259,5 +259,8 @@ namespace OpenRCT2::Config
+     u8string GetDefaultPath();
+     bool SetDefaults();
+     bool Save();
++    // Called with true before Save writes the file and false after, so a mode
++    // that changes settings in memory can put the user's own values in for the write.
++    void SetSaveHook(void (*hook)(bool writing));
+     bool FindOrBrowseInstallDirectory();
+ } // namespace OpenRCT2::Config

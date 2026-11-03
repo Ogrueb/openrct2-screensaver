@@ -1,0 +1,45 @@
+# Memory over a long run. First an evening pass with short parks (20 s each) so growth per park
+# switch shows within the hour; then one overnight run per suspect with --only and --seconds:
+#   python tools/perfrun.py run perf/soak.toml --exe <path to openrct2.exe> --only short-parks
+#   python tools/perfrun.py run perf/soak.toml --exe <path> --only full --seconds 32400   (9 h)
+#   python tools/perfrun.py run perf/soak.toml --exe <path> --only no-background-loading --seconds 32400
+# The report's memory line gives MB per hour and per switch, the image list's largest free run,
+# the QuickJS heap and parks that grow on every revisit. A crash keeps its dump in the cell's
+# user/crash folder.
+name = "soak"
+playlist = "../playlists/example.toml"
+seconds = 3600
+repeats = 1
+warmup = 60
+cooldown = 10
+
+[base.settings]
+speed = 1
+titleMusic = "ride"
+
+[[cell]]
+name = "short-parks"
+build = { set = { park_time = 20.0, park_cap = 20.0, park_min = 20.0 } }
+
+[[cell]]
+name = "full"
+
+[[cell]]
+name = "two-parks"                      # needs perf/local/two-parks.toml: perfrun.py sample <folder> --count 2
+playlist = "local/two-parks.toml"
+build = { set = { park_time = 20.0, park_cap = 20.0, park_min = 20.0 } }
+
+[[cell]]
+name = "no-background-loading"
+build = { set = { park_time = 20.0, park_cap = 20.0, park_min = 20.0 } }
+flags = ["--no-background-loading"]
+
+[[cell]]
+name = "no-companions"
+build = { set = { park_time = 20.0, park_cap = 20.0, park_min = 20.0 } }
+companions = false
+
+[[cell]]
+name = "opengl"
+build = { set = { park_time = 20.0, park_cap = 20.0, park_min = 20.0 } }
+config = { general = { drawing_engine = "OPENGL" } }

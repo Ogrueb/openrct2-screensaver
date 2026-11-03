@@ -1,0 +1,25 @@
+# Test playlist for the per-park profiles (parks/*.toml): The Koi Pond (every view from the saved
+# angle), Sambhava's Rest (mist faster at rest, Animator paused during pans) and Constellations
+# (animation views, then the eclipse with its camera gliding along the shadow).
+# Build and install it (close OpenRCT2 first) with:
+#   python3 tools/mksequence.py playlists/enhancements.toml --install --ignore-edits --camera-log
+name = "RCT Screensaver Enhancements"
+order = "playlist"
+layout = "plugin"
+park_plugins = true     # each park's extras from its profile: animation views, the eclipse
+
+[views]
+pan = 0.6               # as playlists/example.toml
+
+[[park]]
+file = "../ExampleParks/230118-rct2-xtreme97-the_koi_pond.zip"
+author = "Xtreme97"
+name = "The Koi Pond"
+
+[[park]]
+file = "../ExampleParks/240512-rct2-jens_j-fkcoastermind-hex-sambhavas_rest.zip"
+author = "Jens_J, FKCoastermind, Hex (The Lonely Hearts Club)"
+
+[[park]]
+file = "../ExampleParks/240502-rct2tt-collabo-constellations.zip"
+author = "The Lonely Hearts Club (team)"

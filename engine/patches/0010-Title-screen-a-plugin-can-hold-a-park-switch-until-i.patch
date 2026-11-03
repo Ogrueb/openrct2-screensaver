@@ -1,0 +1,145 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: RCT Screensaver <noreply@example.invalid>
+Date: Mon, 2 Nov 2026 19:08:25 +0000
+Subject: [PATCH] Title screen: a plugin can hold a park switch until it has
+ covered the screen
+
+TitleSequence.nextParkReady tells a plugin that the park read in the
+background is imported and its objects registered, and holdSwitch (set
+before seek()) keeps the current park playing until the plugin clears it,
+so a plugin can fade to black, let the switch happen and fade back in.
+A hold lasts at most 10 s once the park is ready, and a failed read is
+never held.
+---
+ src/openrct2-ui/scripting/ScTitleSequence.hpp | 30 +++++++++++++++++++
+ src/openrct2-ui/title/TitleSequencePlayer.cpp | 29 ++++++++++++++++++
+ .../scenes/title/TitleSequencePlayer.h        | 14 +++++++++
+ 3 files changed, 73 insertions(+)
+
+diff --git a/src/openrct2-ui/scripting/ScTitleSequence.hpp b/src/openrct2-ui/scripting/ScTitleSequence.hpp
+index 45fb330..b67e2c8 100644
+--- a/src/openrct2-ui/scripting/ScTitleSequence.hpp
++++ b/src/openrct2-ui/scripting/ScTitleSequence.hpp
+@@ -572,6 +572,34 @@ namespace OpenRCT2::Scripting
+             return JS_TRUE;
+         }
+ 
++        /** True once the park being loaded in the background is ready to switch to. */
++        static JSValue nextParkReady_get(JSContext* ctx, JSValue thisVal)
++        {
++            auto* player = IsPlaying(ctx, thisVal) ? static_cast<ITitleSequencePlayer*>(TitleGetSequencePlayer()) : nullptr;
++            return JS_NewBool(ctx, player != nullptr && player->IsNextParkReady());
++        }
++
++        /**
++         * While true, a park loaded in the background waits, ready, and the current
++         * park keeps playing; set it before seek() and clear it once the screen is covered. The
++         * player lets go by itself 10 s after the park is ready, and after any switch.
++         */
++        static JSValue holdSwitch_get(JSContext* ctx, JSValue thisVal)
++        {
++            auto* player = IsPlaying(ctx, thisVal) ? static_cast<ITitleSequencePlayer*>(TitleGetSequencePlayer()) : nullptr;
++            return JS_NewBool(ctx, player != nullptr && player->GetHoldSwitch());
++        }
++
++        static JSValue holdSwitch_set(JSContext* ctx, JSValue thisVal, JSValue value)
++        {
++            auto* player = IsPlaying(ctx, thisVal) ? static_cast<ITitleSequencePlayer*>(TitleGetSequencePlayer()) : nullptr;
++            if (player != nullptr)
++            {
++                player->SetHoldSwitch(JS_ToBool(ctx, value) > 0);
++            }
++            return JS_UNDEFINED;
++        }
++
+         /**
+          * fadeSounds(level, ms) ramps the title screen's sound effects and
+          * positional ride music to level (0 to 1) over ms of real time.
+@@ -652,6 +680,8 @@ namespace OpenRCT2::Scripting
+                 JS_CGETSET_DEF("isPlaying", ScTitleSequence::isPlaying_get, nullptr),
+                 JS_CGETSET_DEF("position", ScTitleSequence::position_get, nullptr),
+                 JS_CGETSET_DEF("backgroundLoading", ScTitleSequence::backgroundLoading_get, nullptr),
++                JS_CGETSET_DEF("nextParkReady", ScTitleSequence::nextParkReady_get, nullptr),
++                JS_CGETSET_DEF("holdSwitch", ScTitleSequence::holdSwitch_get, ScTitleSequence::holdSwitch_set),
+ 
+                 JS_CFUNC_DEF("addPark", 2, ScTitleSequence::addPark),
+                 JS_CFUNC_DEF("clone", 1, ScTitleSequence::clone),
+diff --git a/src/openrct2-ui/title/TitleSequencePlayer.cpp b/src/openrct2-ui/title/TitleSequencePlayer.cpp
+index 0143b18..19560b2 100644
+--- a/src/openrct2-ui/title/TitleSequencePlayer.cpp
++++ b/src/openrct2-ui/title/TitleSequencePlayer.cpp
+@@ -81,6 +81,12 @@ namespace OpenRCT2::Title
+         std::unique_ptr<BackgroundLoad> _background;
+         std::vector<std::unique_ptr<BackgroundLoad>> _stale; // superseded loads, joined once done
+         bool _synchronous = false;                            // Seek() runs loads on the main thread
++        // A plugin holds the switch to a park read in the background until it has
++        // covered the screen (TitleSequence.holdSwitch). A hold lasts at most kMaxHoldTicks once the
++        // park is ready, so a plugin that never lets go cannot stop the sequence.
++        static constexpr int32_t kMaxHoldTicks = 10 * 40;
++        bool _holdSwitch = false;
++        int32_t _heldTicks = 0;
+ 
+         int32_t _previousWindowWidth = 0;
+         int32_t _previousWindowHeight = 0;
+@@ -101,8 +107,25 @@ namespace OpenRCT2::Title
+             return _position;
+         }
+ 
++        bool IsNextParkReady() const override
++        {
++            return _background != nullptr && _background->done && _background->objects.empty();
++        }
++
++        bool GetHoldSwitch() const override
++        {
++            return _holdSwitch;
++        }
++
++        void SetHoldSwitch(bool hold) override
++        {
++            _holdSwitch = hold;
++            _heldTicks = 0;
++        }
++
+         void Eject() override
+         {
++            _holdSwitch = false;
+             DiscardBackgroundLoad();
+             for (auto& load : _stale)
+             {
+@@ -185,6 +208,12 @@ namespace OpenRCT2::Title
+                                 RegisterEarly(*_background);
+                                 break;
+                             }
++                            if (_holdSwitch && _background->ok && _heldTicks++ < kMaxHoldTicks)
++                            {
++                                // Ready, but the plugin is still covering the screen.
++                                break;
++                            }
++                            _holdSwitch = false;
+                             auto load = std::move(_background);
+                             load->thread.join();
+                             if (!load->ok)
+diff --git a/src/openrct2/scenes/title/TitleSequencePlayer.h b/src/openrct2/scenes/title/TitleSequencePlayer.h
+index a0d9d1d..509e4c8 100644
+--- a/src/openrct2/scenes/title/TitleSequencePlayer.h
++++ b/src/openrct2/scenes/title/TitleSequencePlayer.h
+@@ -23,4 +23,18 @@ struct ITitleSequencePlayer
+     virtual bool Update() = 0;
+     virtual void Seek(int32_t position) = 0;
+     virtual void Eject() = 0;
++
++    // A plugin can hold a park switch until it has covered the screen. While held,
++    // a park read in the background waits, ready, and the current park keeps playing.
++    virtual bool IsNextParkReady() const
++    {
++        return false;
++    }
++    virtual bool GetHoldSwitch() const
++    {
++        return false;
++    }
++    virtual void SetHoldSwitch(bool)
++    {
++    }
+ };

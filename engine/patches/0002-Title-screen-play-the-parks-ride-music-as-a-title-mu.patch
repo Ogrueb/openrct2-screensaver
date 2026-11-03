@@ -1,0 +1,383 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: RCT Screensaver <noreply@example.invalid>
+Date: Wed, 28 Oct 2026 00:32:25 +0000
+Subject: [PATCH] Title screen: play the parks' ride music as a title music
+ choice
+
+Adds "Ride music" to Options > Sound > Title screen music (config value title_theme = 5). With it chosen, no title theme plays and ride music on the title screen follows the view the same way it does in game, at the ride music volume.
+
+A title park switch cross-fades the music: the previous park's channels fade out over 1.5 s of real time while the new park's fade in (channels are keyed by ride id, which the next park reuses, so the old ones move to a fading list). A park whose rides play exactly one custom (non-stock) music object treats it as the park's soundtrack on the title screen: one ride plays it centered at the loudest in-view volume whatever the view, and other rides using that object stay silent, so view jumps neither cut nor pan it. Stock ride music stays positional.
+---
+ src/openrct2-ui/title/TitleSequencePlayer.cpp |   4 +
+ src/openrct2-ui/windows/Options.cpp           |   1 +
+ src/openrct2/config/ConfigTypes.h             |   1 +
+ src/openrct2/ride/RideAudio.cpp               | 206 +++++++++++++++++-
+ src/openrct2/ride/RideAudio.h                 |   1 +
+ 5 files changed, 206 insertions(+), 7 deletions(-)
+
+diff --git a/src/openrct2-ui/title/TitleSequencePlayer.cpp b/src/openrct2-ui/title/TitleSequencePlayer.cpp
+index 3e0e3cc..a20d578 100644
+--- a/src/openrct2-ui/title/TitleSequencePlayer.cpp
++++ b/src/openrct2-ui/title/TitleSequencePlayer.cpp
+@@ -26,6 +26,7 @@
+ #include <openrct2/interface/WindowBase.h>
+ #include <openrct2/localisation/StringIds.h>
+ #include <openrct2/management/NewsItem.h>
++#include <openrct2/ride/RideAudio.h>
+ #include <openrct2/object/ObjectManager.h>
+ #include <openrct2/scenario/ScenarioRepository.h>
+ #include <openrct2/scenes/title/TitleScene.h>
+@@ -443,6 +444,9 @@ namespace OpenRCT2::Title
+             Ui::Windows::WindowScenerySetDefaultPlacementConfiguration();
+             News::InitQueue(gameState.park);
+             Drawing::LoadPalette();
++            // Ride music channels are keyed by ride id, which the next park reuses for other rides;
++            // the previous park's music fades out while the new park's fades in
++            RideAudio::FadeOutAllChannels();
+             gScreenAge = 0;
+             gGamePaused = false;
+             gGameSpeed = 1;
+diff --git a/src/openrct2-ui/windows/Options.cpp b/src/openrct2-ui/windows/Options.cpp
+index 6d9f9e0..6adb9aa 100644
+--- a/src/openrct2-ui/windows/Options.cpp
++++ b/src/openrct2-ui/windows/Options.cpp
+@@ -2351,6 +2351,7 @@ namespace OpenRCT2::Ui::Windows
+             { TitleMusicKind::RCT1, STR_ROLLERCOASTER_TYCOON_1_DROPDOWN },
+             { TitleMusicKind::RCT2, STR_ROLLERCOASTER_TYCOON_2_DROPDOWN },
+             { TitleMusicKind::random, STR_OPTIONS_MUSIC_VALUE_RANDOM },
++            { TitleMusicKind::parkMusic, STR_RIDE_MUSIC },
+         };
+ 
+         static constexpr StringId FullscreenModeNames[] = {
+diff --git a/src/openrct2/config/ConfigTypes.h b/src/openrct2/config/ConfigTypes.h
+index d83620c..dc89748 100644
+--- a/src/openrct2/config/ConfigTypes.h
++++ b/src/openrct2/config/ConfigTypes.h
+@@ -64,5 +64,6 @@ namespace OpenRCT2
+         OpenRCT2,
+         RCT1,
+         RCT2,
++        parkMusic, // Title screen: the parks' own ride music, from wherever the view is
+     };
+ } // namespace OpenRCT2
+diff --git a/src/openrct2/ride/RideAudio.cpp b/src/openrct2/ride/RideAudio.cpp
+index 13c9233..300c384 100644
+--- a/src/openrct2/ride/RideAudio.cpp
++++ b/src/openrct2/ride/RideAudio.cpp
+@@ -10,6 +10,7 @@
+ #include "RideAudio.h"
+ 
+ #include "../Context.h"
++#include "../GameState.h"
+ #include "../OpenRCT2.h"
+ #include "../audio/Audio.h"
+ #include "../audio/AudioChannel.h"
+@@ -21,8 +22,10 @@
+ #include "../object/ObjectManager.h"
+ #include "Ride.h"
+ #include "RideData.h"
++#include "RideManager.hpp"
+ 
+ #include <algorithm>
++#include <chrono>
+ #include <vector>
+ 
+ using namespace OpenRCT2;
+@@ -44,12 +47,14 @@ namespace OpenRCT2::RideAudio
+         int16_t Volume{};
+         int16_t Pan{};
+         uint16_t Frequency{};
++        float Gain = 1.0f; // Title screen fades
+ 
+         std::shared_ptr<IAudioChannel> Channel{};
+         IAudioSource* Source{};
+ 
+         RideMusicChannel(
+-            const ViewportRideMusicInstance& instance, std::shared_ptr<IAudioChannel> channel, IAudioSource* source)
++            const ViewportRideMusicInstance& instance, std::shared_ptr<IAudioChannel> channel, IAudioSource* source,
++            float gain)
+         {
+             RideId = instance.RideId;
+             TrackIndex = instance.TrackIndex;
+@@ -58,9 +63,10 @@ namespace OpenRCT2::RideAudio
+             Volume = instance.Volume;
+             Pan = instance.Pan;
+             Frequency = instance.Frequency;
++            Gain = gain;
+ 
+             channel->SetOffset(Offset);
+-            channel->SetVolume(DStoMixerVolume(Volume));
++            channel->SetVolume(MixerVolume());
+             channel->SetPan(DStoMixerPan(Pan));
+             channel->SetRate(DStoMixerRate(Frequency));
+             Channel = std::move(channel);
+@@ -86,6 +92,7 @@ namespace OpenRCT2::RideAudio
+             Volume = src.Volume;
+             Pan = src.Pan;
+             Frequency = src.Frequency;
++            Gain = src.Gain;
+ 
+             swap(Channel, src.Channel);
+             swap(Source, src.Source);
+@@ -114,6 +121,23 @@ namespace OpenRCT2::RideAudio
+             return false;
+         }
+ 
++        int32_t MixerVolume() const
++        {
++            return static_cast<int32_t>(DStoMixerVolume(Volume) * Gain);
++        }
++
++        void SetGain(float gain)
++        {
++            if (Gain != gain)
++            {
++                Gain = gain;
++                if (Channel != nullptr)
++                {
++                    Channel->SetVolume(MixerVolume());
++                }
++            }
++        }
++
+         size_t GetOffset() const
+         {
+             if (Channel != nullptr)
+@@ -130,7 +154,7 @@ namespace OpenRCT2::RideAudio
+                 Volume = instance.Volume;
+                 if (Channel != nullptr)
+                 {
+-                    Channel->SetVolume(DStoMixerVolume(Volume));
++                    Channel->SetVolume(MixerVolume());
+                 }
+             }
+             if (Pan != instance.Pan)
+@@ -155,9 +179,142 @@ namespace OpenRCT2::RideAudio
+     static std::vector<ViewportRideMusicInstance> _musicInstances;
+     static std::vector<RideMusicChannel> _musicChannels;
+ 
++    // Title screen park switches cross-fade: the previous park's channels fade out while the new
++    // park's fade in, over kTitleFadeTime of real time.
++    using FadeClock = std::chrono::steady_clock;
++    constexpr auto kTitleFadeTime = std::chrono::milliseconds(1500);
++    static std::vector<RideMusicChannel> _fadingChannels;
++    static FadeClock::time_point _titleFadeStart{};
++
++    // Title screen with park music: a park whose rides play exactly one custom (non-stock) music
++    // object treats it as the park's soundtrack, played from one ride at an even volume, centered.
++    constexpr int16_t kSoundtrackVolume = -700; // The loudest a ride gets in a viewport
++    struct TitleSoundtrack
++    {
++        ObjectEntryIndex Music = kObjectEntryIndexNull;
++        ::RideId Ride = ::RideId::GetNull();
++    };
++    static TitleSoundtrack _parkSoundtrack;   // Chosen when the park appears
++    static TitleSoundtrack _soundtrack;       // Playing this tick
++    static uint32_t _soundtrackTick = UINT32_MAX;
++    static bool _soundtrackActive = false;
++
++    static void ForgetTitleSoundtrack()
++    {
++        _parkSoundtrack = {};
++        _soundtrack = {};
++        _soundtrackTick = UINT32_MAX;
++        _soundtrackActive = false;
++    }
++
++    static float TitleFadeProgress()
++    {
++        auto elapsed = FadeClock::now() - _titleFadeStart;
++        if (elapsed >= kTitleFadeTime)
++            return 1.0f;
++        return std::chrono::duration<float>(elapsed) / std::chrono::duration<float>(kTitleFadeTime);
++    }
++
++    static float ChannelStartGain()
++    {
++        return gLegacyScene == LegacyScene::titleSequence ? TitleFadeProgress() : 1.0f;
++    }
++
+     void StopAllChannels()
+     {
+         _musicChannels.clear();
++        _fadingChannels.clear();
++        ForgetTitleSoundtrack();
++    }
++
++    static void ChooseTitleSoundtrack();
++
++    void FadeOutAllChannels()
++    {
++        for (auto& channel : _musicChannels)
++        {
++            // Circus music plays an audio object's shared sample, which the park switch unloads
++            if (channel.Source != nullptr)
++            {
++                _fadingChannels.push_back(std::move(channel));
++            }
++        }
++        _musicChannels.clear();
++        ChooseTitleSoundtrack();
++        _titleFadeStart = FadeClock::now();
++    }
++
++    static bool IsStockMusic(const MusicObject& musicObject)
++    {
++        auto id = musicObject.GetIdentifier();
++        for (std::string_view prefix : { "rct1.", "rct2.", "rct2tt.", "rct2ww.", "openrct2." })
++        {
++            if (id.starts_with(prefix))
++                return true;
++        }
++        return false;
++    }
++
++    static bool PlaysMusic(const Ride& ride, ObjectEntryIndex music)
++    {
++        return ride.status == RideStatus::open && ride.flags.has(RideFlag::music) && ride.music == music;
++    }
++
++    // The single custom music object the open rides play, and the first ride playing it; none when
++    // there are none or several
++    static TitleSoundtrack FindTitleSoundtrack()
++    {
++        TitleSoundtrack found;
++        auto& objManager = GetContext()->GetObjectManager();
++        for (auto& ride : RideManager(getGameState()))
++        {
++            if (ride.status != RideStatus::open || !ride.flags.has(RideFlag::music))
++                continue;
++            auto* musicObject = objManager.GetLoadedObject<MusicObject>(ride.music);
++            if (musicObject == nullptr || IsStockMusic(*musicObject))
++                continue;
++            if (found.Music == kObjectEntryIndexNull)
++                found = { ride.music, ride.id };
++            else if (found.Music != ride.music)
++                return {};
++        }
++        return found;
++    }
++
++    // Chosen when a title park is put on screen, from the rides as saved: companions open hidden
++    // rides with their own custom music for sound effects later, which must not count
++    static void ChooseTitleSoundtrack()
++    {
++        ForgetTitleSoundtrack();
++        _parkSoundtrack = FindTitleSoundtrack();
++    }
++
++    // Which soundtrack plays this tick, on the title screen with Ride music chosen: the park's own
++    // while its ride is open and plays it; otherwise (a companion swapped the music rides, as
++    // Constellations' eclipse does) the single custom music the open rides play, if there is one
++    static void UpdateTitleSoundtrack()
++    {
++        auto tick = getGameState().currentTicks;
++        if (tick == _soundtrackTick)
++            return;
++        _soundtrackTick = tick;
++
++        _soundtrackActive = false;
++        if (gLegacyScene != LegacyScene::titleSequence || Config::Get().sound.titleMusic != TitleMusicKind::parkMusic
++            || _parkSoundtrack.Music == kObjectEntryIndexNull)
++            return;
++        const auto* ride = GetRide(_parkSoundtrack.Ride);
++        if (ride != nullptr && PlaysMusic(*ride, _parkSoundtrack.Music))
++        {
++            _soundtrack = _parkSoundtrack;
++        }
++        else
++        {
++            ride = GetRide(_soundtrack.Ride);
++            if (ride == nullptr || !PlaysMusic(*ride, _soundtrack.Music))
++                _soundtrack = FindTitleSoundtrack();
++        }
++        _soundtrackActive = _soundtrack.Music != kObjectEntryIndexNull;
+     }
+ 
+     void ClearAllViewportInstances()
+@@ -179,7 +336,7 @@ namespace OpenRCT2::RideAudio
+                 auto channel = CreateAudioChannel(source, MixerGroup::rideMusic, shouldLoop, 0);
+                 if (channel != nullptr)
+                 {
+-                    _musicChannels.emplace_back(instance, channel, source);
++                    _musicChannels.emplace_back(instance, channel, source, ChannelStartGain());
+                 }
+             }
+         }
+@@ -197,7 +354,7 @@ namespace OpenRCT2::RideAudio
+                 auto channel = CreateAudioChannel(source, MixerGroup::sound, false, 0);
+                 if (channel != nullptr)
+                 {
+-                    _musicChannels.emplace_back(instance, channel, nullptr);
++                    _musicChannels.emplace_back(instance, channel, nullptr, ChannelStartGain());
+                 }
+             }
+         }
+@@ -253,11 +410,36 @@ namespace OpenRCT2::RideAudio
+      */
+     void UpdateMusicChannels()
+     {
+-        if (gLegacyScene == LegacyScene::scenarioEditor || gLegacyScene == LegacyScene::titleSequence)
++        if (gLegacyScene == LegacyScene::scenarioEditor)
+             return;
+ 
++        if (gLegacyScene == LegacyScene::titleSequence)
++        {
++            // The title screen plays ride music only when it is the chosen title music; the choice
++            // stands in for the in-game "Ride music" checkbox there.
++            if (gGameSoundsOff || Config::Get().sound.titleMusic != TitleMusicKind::parkMusic)
++            {
++                StopAllChannels();
++                return;
++            }
++
++            UpdateTitleSoundtrack();
++            const auto progress = TitleFadeProgress();
++            if (progress >= 1.0f)
++            {
++                _fadingChannels.clear();
++            }
++            for (auto& channel : _fadingChannels)
++            {
++                channel.SetGain(1.0f - progress);
++            }
++            for (auto& channel : _musicChannels)
++            {
++                channel.SetGain(progress);
++            }
++        }
+         // TODO Allow circus music (CSS24) to play if ride music is disabled (that should be sound)
+-        if (gGameSoundsOff || !Config::Get().sound.rideMusicEnabled)
++        else if (gGameSoundsOff || !Config::Get().sound.rideMusicEnabled)
+             return;
+ 
+         StopInactiveRideMusicChannels();
+@@ -380,6 +562,16 @@ namespace OpenRCT2::RideAudio
+      */
+     void UpdateMusicInstance(Ride& ride, const CoordsXYZ& rideCoords, uint16_t sampleRate)
+     {
++        UpdateTitleSoundtrack();
++        if (_soundtrackActive && ride.music == _soundtrack.Music)
++        {
++            if (ride.id == _soundtrack.Ride && !gGameSoundsOff && gMusicTrackingViewport != nullptr)
++                RideUpdateMusicPosition(ride, kSoundtrackVolume, 0, sampleRate);
++            else
++                RideUpdateMusicPosition(ride);
++            return;
++        }
++
+         if (gLegacyScene != LegacyScene::scenarioEditor && !gGameSoundsOff && gMusicTrackingViewport != nullptr)
+         {
+             auto rotatedCoords = Translate3DTo2DWithZ(GetCurrentRotation(), rideCoords);
+diff --git a/src/openrct2/ride/RideAudio.h b/src/openrct2/ride/RideAudio.h
+index 4a7e15e..7f9a55e 100644
+--- a/src/openrct2/ride/RideAudio.h
++++ b/src/openrct2/ride/RideAudio.h
+@@ -40,6 +40,7 @@ namespace OpenRCT2::RideAudio
+ 
+     void ClearAllViewportInstances();
+     void StopAllChannels();
++    void FadeOutAllChannels();
+     void UpdateMusicChannels();
+     void UpdateMusicInstance(Ride& ride, const CoordsXYZ& rideCoords, uint16_t sampleRate);
+ 

@@ -1,0 +1,18 @@
+# Quick check after an engine or plugin change: the Examples in your usual setup, compared with
+# the last accepted run (perf/baselines/quick.json; keep a good run with `perfrun.py baseline`).
+#   python tools/perfrun.py run perf/quick.toml --exe <path to openrct2.exe>
+name = "quick"
+playlist = "../playlists/example.toml"
+seconds = 600        # one pass through the ten Examples parks
+repeats = 1
+warmup = 30
+cooldown = 10
+
+# Every cell starts from your config.ini; [base.config] and a cell's own config set keys in it
+# (sections as in config.ini). Settings go to the plugin (plugin.store.json).
+[base.settings]
+speed = 1
+titleMusic = "ride"
+
+[[cell]]
+name = "base"

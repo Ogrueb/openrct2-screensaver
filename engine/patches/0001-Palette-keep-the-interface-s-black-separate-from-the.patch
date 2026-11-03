@@ -1,0 +1,158 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: RCT Screensaver <noreply@example.invalid>
+Date: Tue, 27 Oct 2026 03:40:57 +0000
+Subject: [PATCH] Palette: keep the interface's black separate from the scene's
+
+A water object's palette starts at index 10, which the game uses both in the scene (void, black pixels in sprites) and for the interface's black, including the dark pixels of interface sprites and translucent fills. A park whose water object makes index 10 light (a white world) washed out the interface. The park's color now lives at the unused index 9, substituted for index 10 in everything the viewport painter draws (software renderer), while index 10 keeps the stock black for the interface.
+---
+ src/openrct2/drawing/Palette.cpp    | 32 ++++++++++++++++++++++++-----
+ src/openrct2/drawing/PaletteIndex.h |  1 +
+ src/openrct2/interface/Viewport.cpp | 24 ++++++++++++++++++++++
+ 3 files changed, 52 insertions(+), 5 deletions(-)
+
+diff --git a/src/openrct2/drawing/Palette.cpp b/src/openrct2/drawing/Palette.cpp
+index 9744e29..76f36f2 100644
+--- a/src/openrct2/drawing/Palette.cpp
++++ b/src/openrct2/drawing/Palette.cpp
+@@ -25,8 +25,8 @@
+ 
+ namespace OpenRCT2::Drawing
+ {
+-    static constexpr auto kPaletteOffsetDynamic = PaletteIndex::pi10;
+-    static constexpr uint8_t kPaletteLengthDynamic = 236;
++    static constexpr auto kPaletteOffsetDynamic = PaletteIndex::sceneBlack;
++    static constexpr uint8_t kPaletteLengthDynamic = 237;
+ 
+     static constexpr uint8_t kPaletteLengthWaterWaves = 5;
+     static constexpr uint8_t kPaletteLengthWaterSparkles = 5;
+@@ -38,6 +38,24 @@ namespace OpenRCT2::Drawing
+     static GamePalette _gamePalette;
+     uint32_t gPaletteEffectFrame;
+ 
++    /**
++     * A water object's palette starts at index 10, which the game uses both in the scene (the void
++     * outside the map, black pixels in sprites) and for the interface's black (text outlines, shadows,
++     * the darkest shade of black, dark pixels in interface sprites). A park whose water object makes
++     * that index light (a white world) therefore washes out the interface. Keep the park's color at
++     * the otherwise unused index 9, which the viewport painter substitutes for index 10 in everything
++     * it draws (ViewportPaintColumn), and the stock black at index 10 for the interface.
++     */
++    static void SplitSceneBlack()
++    {
++        auto& sceneBlack = _gamePalette[EnumValue(PaletteIndex::sceneBlack)];
++        auto& black = _gamePalette[EnumValue(PaletteIndex::pi10)];
++        sceneBlack = black;
++        black.red = 23;
++        black.green = 35;
++        black.blue = 35;
++    }
++
+     void UpdatePalette(std::span<const BGRAColour> palette, PaletteIndex startIndex, int32_t numColours)
+     {
+         for (int32_t i = EnumValue(startIndex); i < numColours + EnumValue(startIndex); i++)
+@@ -76,7 +94,7 @@ namespace OpenRCT2::Drawing
+ 
+     void updateStandardPalette()
+     {
+-        UpdatePalette(_gamePalette, PaletteIndex::pi10, 236);
++        UpdatePalette(_gamePalette, kPaletteOffsetDynamic, kPaletteLengthDynamic);
+     }
+ 
+     /**
+@@ -104,6 +122,7 @@ namespace OpenRCT2::Drawing
+                     paletteOffset.green = -((0xFF - g1PaletteEntry.green) / 2) - 1;
+                     paletteOffset.red = -((0xFF - g1PaletteEntry.red) / 2) - 1;
+                 }
++                SplitSceneBlack();
+ 
+                 UpdatePalette(_gamePalette, kPaletteOffsetDynamic, kPaletteLengthDynamic);
+             }
+@@ -128,6 +147,7 @@ namespace OpenRCT2::Drawing
+                         paletteOffset.green = g1PaletteEntry.green;
+                         paletteOffset.red = g1PaletteEntry.red;
+                     }
++                    SplitSceneBlack();
+                 }
+             }
+ 
+@@ -245,7 +265,8 @@ namespace OpenRCT2::Drawing
+ 
+             index++;
+         }
+-        UpdatePalette(_gamePalette, PaletteIndex::pi10, 236);
++        SplitSceneBlack();
++        UpdatePalette(_gamePalette, kPaletteOffsetDynamic, kPaletteLengthDynamic);
+     }
+ 
+     /**
+@@ -278,6 +299,7 @@ namespace OpenRCT2::Drawing
+                 index++;
+             }
+         }
++        SplitSceneBlack();
+ 
+         // Fix #1749 and #6535: rainbow path, donut shop and pause button contain black spots that should be white.
+         gPalette[255].blue = 255;
+@@ -285,7 +307,7 @@ namespace OpenRCT2::Drawing
+         gPalette[255].red = 255;
+         gPalette[255].alpha = 0;
+ 
+-        UpdatePalette(_gamePalette, PaletteIndex::pi10, 236);
++        UpdatePalette(_gamePalette, kPaletteOffsetDynamic, kPaletteLengthDynamic);
+         GfxInvalidateScreen();
+     }
+ } // namespace OpenRCT2::Drawing
+diff --git a/src/openrct2/drawing/PaletteIndex.h b/src/openrct2/drawing/PaletteIndex.h
+index 3c09e44..06695c7 100644
+--- a/src/openrct2/drawing/PaletteIndex.h
++++ b/src/openrct2/drawing/PaletteIndex.h
+@@ -17,6 +17,7 @@ namespace OpenRCT2::Drawing
+     {
+         transparent = 0,
+         fontFill = 1,
++        sceneBlack = 9, // The water object's color for index 10, used by the scene only (see Palette.cpp)
+ 
+         pi10 = 10, // Black (0-dark), Dark grey (0)
+         pi11 = 11, // Black (middark)
+diff --git a/src/openrct2/interface/Viewport.cpp b/src/openrct2/interface/Viewport.cpp
+index 310c28f..386e1f0 100644
+--- a/src/openrct2/interface/Viewport.cpp
++++ b/src/openrct2/interface/Viewport.cpp
+@@ -843,6 +843,28 @@ namespace OpenRCT2
+         PaintSessionArrange(session);
+     }
+ 
++    /**
++     * The scene's black pixels (palette index 10) become PaletteIndex::sceneBlack, which holds the
++     * park's color for that index, while index 10 itself keeps the stock black for the interface
++     * drawn on top (see Palette.cpp). Only the software renderer exposes the pixels.
++     */
++    static void ViewportSubstituteSceneBlack(RenderTarget& rt)
++    {
++        if (rt.bits == nullptr)
++            return;
++
++        const auto stride = rt.LineStride();
++        auto* row = rt.bits;
++        for (int32_t y = 0; y < rt.height; y++, row += stride)
++        {
++            for (int32_t x = 0; x < rt.width; x++)
++            {
++                if (row[x] == PaletteIndex::pi10)
++                    row[x] = PaletteIndex::sceneBlack;
++            }
++        }
++    }
++
+     static void ViewportPaintColumn(PaintSession& session)
+     {
+         PROFILED_FUNCTION();
+@@ -871,6 +893,8 @@ namespace OpenRCT2
+         {
+             PaintDrawMoneyStructs(session.rt, session.PSStringHead);
+         }
++
++        ViewportSubstituteSceneBlack(session.rt);
+     }
+ 
+     /**

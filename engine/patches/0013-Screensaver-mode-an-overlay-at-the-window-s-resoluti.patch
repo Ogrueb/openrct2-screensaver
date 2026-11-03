@@ -1,0 +1,1607 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: RCT Screensaver <noreply@example.invalid>
+Date: Sat, 31 Oct 2026 23:05:42 +0000
+Subject: [PATCH] Screensaver mode: an overlay at the window's resolution
+
+A retained scene of rectangles, text and images that the plugin describes
+(screensaver.overlay: set, remove, clear, fade, measureText, setDefaultFonts, scale), in game
+pixels. It is rasterized on the CPU at the output size into a premultiplied buffer, only
+where it changed, with text from FreeType (the TTF port), and composited with real alpha
+just before present: an SDL texture in the software engine, a textured quad in OpenGL.
+Fades run in the engine. The overlay shows only in the mode and is cleared on leaving.
+---
+ .../engines/HardwareDisplayDrawingEngine.cpp  |   4 +
+ .../engines/opengl/OpenGLDrawingEngine.cpp    |   3 +
+ src/openrct2-ui/libopenrct2ui.vcxproj         |   4 +
+ src/openrct2-ui/screensaver/Overlay.cpp       | 742 ++++++++++++++++++
+ src/openrct2-ui/screensaver/Overlay.h         | 112 +++
+ .../screensaver/OverlayCompositor.cpp         | 276 +++++++
+ .../screensaver/OverlayCompositor.h           |  29 +
+ src/openrct2-ui/screensaver/Screensaver.cpp   |   2 +
+ src/openrct2-ui/scripting/ScScreensaver.hpp   | 199 ++++-
+ src/openrct2-ui/scripting/UiExtensions.cpp    |   3 +
+ 10 files changed, 1373 insertions(+), 1 deletion(-)
+ create mode 100644 src/openrct2-ui/screensaver/Overlay.cpp
+ create mode 100644 src/openrct2-ui/screensaver/Overlay.h
+ create mode 100644 src/openrct2-ui/screensaver/OverlayCompositor.cpp
+ create mode 100644 src/openrct2-ui/screensaver/OverlayCompositor.h
+
+diff --git a/src/openrct2-ui/drawing/engines/HardwareDisplayDrawingEngine.cpp b/src/openrct2-ui/drawing/engines/HardwareDisplayDrawingEngine.cpp
+index 9037b47..8ea0e84 100644
+--- a/src/openrct2-ui/drawing/engines/HardwareDisplayDrawingEngine.cpp
++++ b/src/openrct2-ui/drawing/engines/HardwareDisplayDrawingEngine.cpp
+@@ -8,6 +8,7 @@
+  *****************************************************************************/
+ 
+ #include "DrawingEngineFactory.hpp"
++#include "../../screensaver/OverlayCompositor.h"
+ 
+ #include <SDL_hints.h>
+ #include <SDL_render.h>
+@@ -70,6 +71,7 @@ public:
+             SDL_DestroyTexture(_scaledScreenTexture);
+         }
+         SDL_FreeFormat(_screenTextureFormat);
++        Screensaver::ReleaseOverlay(_sdlRenderer);
+         SDL_DestroyRenderer(_sdlRenderer);
+     }
+ 
+@@ -86,6 +88,7 @@ public:
+ #if SDL_VERSION_ATLEAST(2, 0, 18)
+             SDL_RenderSetVSync(_sdlRenderer, vsync ? 1 : 0);
+ #else
++            Screensaver::ReleaseOverlay(_sdlRenderer);
+             SDL_DestroyRenderer(_sdlRenderer);
+             _screenTexture = nullptr;
+             _scaledScreenTexture = nullptr;
+@@ -271,6 +274,7 @@ private:
+             RenderDirtyVisuals();
+         }
+ 
++        Screensaver::CompositeOverlay(_sdlRenderer);
+         SDL_RenderPresent(_sdlRenderer);
+     }
+ 
+diff --git a/src/openrct2-ui/drawing/engines/opengl/OpenGLDrawingEngine.cpp b/src/openrct2-ui/drawing/engines/opengl/OpenGLDrawingEngine.cpp
+index e3a2a4c..7c8f848 100644
+--- a/src/openrct2-ui/drawing/engines/opengl/OpenGLDrawingEngine.cpp
++++ b/src/openrct2-ui/drawing/engines/opengl/OpenGLDrawingEngine.cpp
+@@ -10,6 +10,7 @@
+ #ifndef DISABLE_OPENGL
+ 
+     #include "../DrawingEngineFactory.hpp"
++    #include "../../../screensaver/OverlayCompositor.h"
+     #include "ApplyPaletteShader.h"
+     #include "ApplyTransparencyShader.h"
+     #include "CopyRectShader.h"
+@@ -240,6 +241,7 @@ public:
+ 
+     ~OpenGLDrawingEngine() override
+     {
++        Screensaver::ReleaseOverlayGL();
+         SDL_GL_DeleteContext(_context);
+     }
+ 
+@@ -367,6 +369,7 @@ public:
+ 
+         _drawingContext->FinishDraw();
+ 
++        Screensaver::CompositeOverlayGL(_window);
+         Display();
+     }
+ 
+diff --git a/src/openrct2-ui/libopenrct2ui.vcxproj b/src/openrct2-ui/libopenrct2ui.vcxproj
+index 7ce5f80..8902cc3 100644
+--- a/src/openrct2-ui/libopenrct2ui.vcxproj
++++ b/src/openrct2-ui/libopenrct2ui.vcxproj
+@@ -92,6 +92,8 @@
+     <ClInclude Include="scripting\ScTileSelection.hpp" />
+     <ClInclude Include="scripting\ScTitleSequence.hpp" />
+     <ClInclude Include="scripting\ScScreensaver.hpp" />
++    <ClInclude Include="screensaver\Overlay.h" />
++    <ClInclude Include="screensaver\OverlayCompositor.h" />
+     <ClInclude Include="screensaver\Screensaver.h" />
+     <ClInclude Include="scripting\ScUi.hpp" />
+     <ClInclude Include="scripting\ScViewport.hpp" />
+@@ -161,6 +163,8 @@
+     <ClCompile Include="scripting\CustomWindow.cpp" />
+     <ClCompile Include="scripting\ScWindow.cpp" />
+     <ClCompile Include="scripting\UiExtensions.cpp" />
++    <ClCompile Include="screensaver\Overlay.cpp" />
++    <ClCompile Include="screensaver\OverlayCompositor.cpp" />
+     <ClCompile Include="screensaver\Screensaver.cpp" />
+     <ClCompile Include="ProvisionalElements.cpp" />
+     <ClCompile Include="SDLException.cpp" />
+diff --git a/src/openrct2-ui/screensaver/Overlay.cpp b/src/openrct2-ui/screensaver/Overlay.cpp
+new file mode 100644
+index 0000000..b0db237
+--- /dev/null
++++ b/src/openrct2-ui/screensaver/Overlay.cpp
+@@ -0,0 +1,742 @@
++/*****************************************************************************
++ * Copyright (c) 2014-2026 OpenRCT2 developers
++ *
++ * For a complete list of all authors, please refer to contributors.md
++ * Interested in contributing? Visit https://github.com/OpenRCT2/OpenRCT2
++ *
++ * OpenRCT2 is licensed under the GNU General Public License version 3.
++ *****************************************************************************/
++
++#include "Overlay.h"
++
++#include <algorithm>
++#include <chrono>
++#include <cmath>
++#include <cstdlib>
++#include <cstring>
++#include <map>
++#include <memory>
++#include <openrct2/Context.h>
++#include <openrct2/Diagnostic.h>
++#include <openrct2/PlatformEnvironment.h>
++#include <openrct2/core/File.h>
++#include <openrct2/core/Imaging.h>
++#include <openrct2/core/Path.hpp>
++#include <openrct2/drawing/TTF.h>
++#include <unordered_map>
++#include <vector>
++
++using namespace OpenRCT2;
++
++namespace OpenRCT2::Ui::Screensaver::Overlay
++{
++    struct Rect
++    {
++        int32_t left{};
++        int32_t top{};
++        int32_t right{}; // exclusive
++        int32_t bottom{};
++
++        bool empty() const
++        {
++            return right <= left || bottom <= top;
++        }
++
++        void unite(const Rect& other)
++        {
++            if (other.empty())
++                return;
++            if (empty())
++            {
++                *this = other;
++                return;
++            }
++            left = std::min(left, other.left);
++            top = std::min(top, other.top);
++            right = std::max(right, other.right);
++            bottom = std::max(bottom, other.bottom);
++        }
++
++        Rect intersect(const Rect& other) const
++        {
++            Rect r{ std::max(left, other.left), std::max(top, other.top), std::min(right, other.right),
++                    std::min(bottom, other.bottom) };
++            return r.empty() ? Rect{} : r;
++        }
++    };
++
++    struct TextLine
++    {
++        std::vector<uint8_t> coverage;
++        int32_t width{};
++        int32_t height{};
++        int32_t x{}; // within the box
++        int32_t y{};
++    };
++
++    struct TextLayout
++    {
++        std::string key;
++        std::vector<TextLine> lines;
++        int32_t width{};
++        int32_t height{};
++        int32_t boxWidth{};
++    };
++
++    struct Node
++    {
++        Element element;
++        uint64_t seq{};
++        TextLayout layout;
++        Rect bounds; // output pixels, at _scale
++        bool fading{};
++        float fadeFrom{};
++        float fadeTo{};
++        int32_t fadeMs{};
++        std::chrono::steady_clock::time_point fadeStart;
++    };
++
++    struct Picture
++    {
++        bool loaded{};
++        int32_t width{};
++        int32_t height{};
++        std::vector<uint32_t> pixels; // premultiplied ARGB
++    };
++
++    static std::unordered_map<std::string, Node> _nodes;
++    static uint64_t _nextSeq = 1;
++    static float _scale = 0.0f;
++    static int32_t _width = 0;
++    static int32_t _height = 0;
++    static std::vector<uint32_t> _buffer;
++    static Rect _dirty;
++    static bool _bufferEmpty = true;
++    static bool _uploadAll = true;
++    static std::string _defaultRegular;
++    static std::string _defaultBold;
++    static std::map<std::string, std::shared_ptr<Picture>> _pictures;
++
++#pragma region Paths and fonts
++
++    static std::string ResolvePath(const std::string& path)
++    {
++        if (path.empty() || Path::IsAbsolute(path))
++            return path;
++        auto& env = GetContext()->GetPlatformEnvironment();
++        return Path::Combine(env.GetDirectoryPath(DirBase::user, DirId::plugins), path);
++    }
++
++    static std::vector<std::string> DefaultFontCandidates(bool bold)
++    {
++        std::vector<std::string> result;
++        auto& configured = bold ? _defaultBold : _defaultRegular;
++        if (!configured.empty())
++            result.push_back(ResolvePath(configured));
++#ifdef _WIN32
++        const char* windir = std::getenv("WINDIR");
++        std::string fonts = std::string(windir != nullptr ? windir : "C:\\Windows") + "\\Fonts\\";
++        if (bold)
++        {
++            result.push_back(fonts + "segoeuib.ttf");
++            result.push_back(fonts + "arialbd.ttf");
++        }
++        result.push_back(fonts + "segoeui.ttf");
++        result.push_back(fonts + "arial.ttf");
++#elif defined(__APPLE__)
++        if (bold)
++            result.push_back("/System/Library/Fonts/Supplemental/Arial Bold.ttf");
++        result.push_back("/System/Library/Fonts/Supplemental/Arial.ttf");
++        result.push_back("/Library/Fonts/Arial.ttf");
++#else
++        if (bold)
++        {
++            result.push_back("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf");
++            result.push_back("/usr/share/fonts/TTF/DejaVuSans-Bold.ttf");
++            result.push_back("/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf");
++        }
++        result.push_back("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf");
++        result.push_back("/usr/share/fonts/TTF/DejaVuSans.ttf");
++        result.push_back("/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf");
++#endif
++        return result;
++    }
++
++#ifndef DISABLE_TTF
++    static std::map<std::string, TTF_Font*> _fonts;
++    static bool _ttfReady = false;
++    static bool _ttfFailed = false;
++
++    static TTF_Font* OpenFontFile(const std::string& path, int32_t pixelSize)
++    {
++        auto key = path + "|" + std::to_string(pixelSize);
++        auto it = _fonts.find(key);
++        if (it != _fonts.end())
++            return it->second;
++        TTF_Font* font = nullptr;
++        if (File::Exists(path))
++        {
++            font = TTF_OpenFont(path.c_str(), pixelSize);
++        }
++        _fonts[key] = font;
++        return font;
++    }
++
++    static TTF_Font* GetFont(const TextStyle& style, float scale)
++    {
++        if (!_ttfReady)
++        {
++            if (_ttfFailed)
++                return nullptr;
++            if (TTF_Init() != 0)
++            {
++                LOG_ERROR("Screensaver overlay: FreeType did not start");
++                _ttfFailed = true;
++                return nullptr;
++            }
++            _ttfReady = true;
++        }
++        int32_t pixelSize = std::max(1, static_cast<int32_t>(std::lround(style.size * scale)));
++        if (!style.font.empty())
++        {
++            auto font = OpenFontFile(ResolvePath(style.font), pixelSize);
++            if (font != nullptr)
++                return font;
++        }
++        for (const auto& path : DefaultFontCandidates(style.bold))
++        {
++            auto font = OpenFontFile(path, pixelSize);
++            if (font != nullptr)
++                return font;
++        }
++        return nullptr;
++    }
++
++    static int32_t TextWidth(TTF_Font* font, const std::string& text)
++    {
++        int w = 0;
++        int h = 0;
++        if (text.empty() || TTF_SizeUTF8(font, text.c_str(), &w, &h) != 0)
++            return 0;
++        return w;
++    }
++
++    // Splits text into lines: at line breaks, and between words where a line would pass wrapWidth.
++    static std::vector<std::string> WrapText(TTF_Font* font, const std::string& text, int32_t wrapWidth)
++    {
++        std::vector<std::string> lines;
++        size_t start = 0;
++        while (start <= text.size())
++        {
++            auto end = text.find('\n', start);
++            if (end == std::string::npos)
++                end = text.size();
++            std::string paragraph = text.substr(start, end - start);
++            if (!paragraph.empty() && paragraph.back() == '\r')
++                paragraph.pop_back();
++
++            if (wrapWidth <= 0 || TextWidth(font, paragraph) <= wrapWidth)
++            {
++                lines.push_back(paragraph);
++            }
++            else
++            {
++                std::string line;
++                size_t pos = 0;
++                while (pos < paragraph.size())
++                {
++                    auto space = paragraph.find(' ', pos);
++                    if (space == std::string::npos)
++                        space = paragraph.size();
++                    std::string word = paragraph.substr(pos, space - pos);
++                    std::string candidate = line.empty() ? word : line + " " + word;
++                    if (!line.empty() && TextWidth(font, candidate) > wrapWidth)
++                    {
++                        lines.push_back(line);
++                        line = word;
++                    }
++                    else
++                    {
++                        line = candidate;
++                    }
++                    pos = space + 1;
++                }
++                lines.push_back(line);
++            }
++            start = end + 1;
++        }
++        return lines;
++    }
++#endif
++
++#pragma endregion
++
++#pragma region Layout
++
++    static std::string LayoutKey(const std::string& text, const TextStyle& style, float scale)
++    {
++        return text + '\x1f' + style.font + '\x1f' + std::to_string(style.size) + '\x1f' + (style.bold ? "b" : "r") + '\x1f'
++            + std::to_string(static_cast<int>(style.align)) + '\x1f' + std::to_string(style.wrap) + '\x1f'
++            + std::to_string(style.lineHeight) + '\x1f' + std::to_string(scale);
++    }
++
++    static TextLayout LayoutText(const std::string& text, const TextStyle& style, float scale)
++    {
++        TextLayout layout;
++        layout.key = LayoutKey(text, style, scale);
++#ifndef DISABLE_TTF
++        auto font = GetFont(style, scale);
++        if (font == nullptr)
++            return layout;
++        int32_t wrapWidth = static_cast<int32_t>(std::lround(style.wrap * scale));
++        int32_t advance = std::max(1, static_cast<int32_t>(std::lround(style.size * style.lineHeight * scale)));
++        auto lines = WrapText(font, text, wrapWidth);
++        int32_t y = 0;
++        for (const auto& lineText : lines)
++        {
++            TextLine line;
++            line.y = y;
++            if (!lineText.empty())
++            {
++                TTFSurface* surface = TTF_RenderUTF8(font, lineText.c_str(), true);
++                if (surface != nullptr)
++                {
++                    line.width = surface->w;
++                    line.height = surface->h;
++                    auto src = static_cast<const uint8_t*>(surface->pixels);
++                    line.coverage.assign(src, src + static_cast<size_t>(surface->w) * surface->h);
++                    TTFFreeSurface(surface);
++                }
++            }
++            layout.width = std::max(layout.width, line.width);
++            layout.height = std::max(layout.height, y + std::max(line.height, advance));
++            layout.lines.push_back(std::move(line));
++            y += advance;
++        }
++        layout.boxWidth = wrapWidth > 0 ? wrapWidth : layout.width;
++        for (auto& line : layout.lines)
++        {
++            switch (style.align)
++            {
++                case Align::left:
++                    line.x = 0;
++                    break;
++                case Align::centre:
++                    line.x = (layout.boxWidth - line.width) / 2;
++                    break;
++                case Align::right:
++                    line.x = layout.boxWidth - line.width;
++                    break;
++            }
++        }
++#endif
++        return layout;
++    }
++
++    static std::shared_ptr<Picture> GetPicture(const std::string& src)
++    {
++        auto path = ResolvePath(src);
++        auto it = _pictures.find(path);
++        if (it != _pictures.end())
++            return it->second;
++        auto picture = std::make_shared<Picture>();
++        try
++        {
++            auto image = Imaging::ReadFromFile(path, ImageFormat::png32);
++            picture->width = static_cast<int32_t>(image.Width);
++            picture->height = static_cast<int32_t>(image.Height);
++            picture->pixels.resize(static_cast<size_t>(picture->width) * picture->height);
++            for (size_t i = 0; i < picture->pixels.size(); i++)
++            {
++                const uint8_t* p = &image.Pixels[i * 4];
++                uint32_t a = p[3];
++                uint32_t r = (p[0] * a + 127) / 255;
++                uint32_t g = (p[1] * a + 127) / 255;
++                uint32_t b = (p[2] * a + 127) / 255;
++                picture->pixels[i] = (a << 24) | (r << 16) | (g << 8) | b;
++            }
++            picture->loaded = true;
++        }
++        catch (const std::exception& e)
++        {
++            LOG_ERROR("Screensaver overlay: cannot read image %s: %s", path.c_str(), e.what());
++        }
++        _pictures[path] = picture;
++        return picture;
++    }
++
++    static int32_t Px(float v, float scale)
++    {
++        return static_cast<int32_t>(std::lround(v * scale));
++    }
++
++    static Rect ComputeBounds(Node& node, float scale)
++    {
++        if (scale <= 0.0f)
++            return {};
++        const auto& e = node.element;
++        switch (e.kind)
++        {
++            case Kind::rect:
++                return { Px(e.x, scale), Px(e.y, scale), Px(e.x + e.width, scale), Px(e.y + e.height, scale) };
++            case Kind::text:
++            {
++                auto key = LayoutKey(e.text, e.style, scale);
++                if (node.layout.key != key)
++                    node.layout = LayoutText(e.text, e.style, scale);
++                int32_t left = Px(e.x, scale);
++                if (e.style.wrap <= 0.0f)
++                {
++                    if (e.style.align == Align::centre)
++                        left -= node.layout.boxWidth / 2;
++                    else if (e.style.align == Align::right)
++                        left -= node.layout.boxWidth;
++                }
++                int32_t top = Px(e.y, scale);
++                int32_t shadow = e.style.shadow.a != 0 ? std::max(1, Px(1.0f, scale)) : 0;
++                return { left, top, left + node.layout.boxWidth + shadow, top + node.layout.height + shadow };
++            }
++            case Kind::image:
++            {
++                int32_t left = Px(e.x, scale);
++                int32_t top = Px(e.y, scale);
++                int32_t w = Px(e.width, scale);
++                int32_t h = Px(e.height, scale);
++                if (w <= 0 || h <= 0)
++                {
++                    auto picture = GetPicture(e.src);
++                    w = picture->width;
++                    h = picture->height;
++                }
++                return { left, top, left + w, top + h };
++            }
++        }
++        return {};
++    }
++
++#pragma endregion
++
++#pragma region Rasterizing
++
++    static inline void Blend(uint32_t& dst, uint32_t a, uint32_t r, uint32_t g, uint32_t b)
++    {
++        // premultiplied "over"
++        if (a == 0 && r == 0 && g == 0 && b == 0)
++            return;
++        uint32_t inv = 255 - a;
++        uint32_t da = (dst >> 24) & 0xFF;
++        uint32_t dr = (dst >> 16) & 0xFF;
++        uint32_t dg = (dst >> 8) & 0xFF;
++        uint32_t db = dst & 0xFF;
++        da = a + (da * inv + 127) / 255;
++        dr = r + (dr * inv + 127) / 255;
++        dg = g + (dg * inv + 127) / 255;
++        db = b + (db * inv + 127) / 255;
++        dst = (std::min(da, 255u) << 24) | (std::min(dr, 255u) << 16) | (std::min(dg, 255u) << 8) | std::min(db, 255u);
++    }
++
++    static void FillRect(const Rect& area, const Rect& clip, Colour colour, float opacity)
++    {
++        auto r = area.intersect(clip);
++        if (r.empty())
++            return;
++        uint32_t a = static_cast<uint32_t>(std::lround(colour.a * std::clamp(opacity, 0.0f, 1.0f)));
++        if (a == 0)
++            return;
++        uint32_t pr = (colour.r * a + 127) / 255;
++        uint32_t pg = (colour.g * a + 127) / 255;
++        uint32_t pb = (colour.b * a + 127) / 255;
++        for (int32_t y = r.top; y < r.bottom; y++)
++        {
++            uint32_t* row = &_buffer[static_cast<size_t>(y) * _width];
++            for (int32_t x = r.left; x < r.right; x++)
++                Blend(row[x], a, pr, pg, pb);
++        }
++    }
++
++    static void DrawCoverage(
++        const std::vector<uint8_t>& coverage, int32_t w, int32_t h, int32_t left, int32_t top, const Rect& clip, Colour colour,
++        float opacity)
++    {
++        Rect r = Rect{ left, top, left + w, top + h }.intersect(clip);
++        if (r.empty())
++            return;
++        uint32_t alpha = static_cast<uint32_t>(std::lround(colour.a * std::clamp(opacity, 0.0f, 1.0f)));
++        if (alpha == 0)
++            return;
++        for (int32_t y = r.top; y < r.bottom; y++)
++        {
++            const uint8_t* src = &coverage[static_cast<size_t>(y - top) * w];
++            uint32_t* row = &_buffer[static_cast<size_t>(y) * _width];
++            for (int32_t x = r.left; x < r.right; x++)
++            {
++                uint32_t c = src[x - left];
++                if (c == 0)
++                    continue;
++                uint32_t a = (alpha * c + 127) / 255;
++                Blend(row[x], a, (colour.r * a + 127) / 255, (colour.g * a + 127) / 255, (colour.b * a + 127) / 255);
++            }
++        }
++    }
++
++    static void DrawText(Node& node, const Rect& clip)
++    {
++        const auto& style = node.element.style;
++        int32_t shadow = style.shadow.a != 0 ? std::max(1, Px(1.0f, _scale)) : 0;
++        int32_t left = node.bounds.left;
++        int32_t top = node.bounds.top;
++        for (const auto& line : node.layout.lines)
++        {
++            if (line.coverage.empty())
++                continue;
++            if (shadow > 0)
++            {
++                DrawCoverage(
++                    line.coverage, line.width, line.height, left + line.x + shadow, top + line.y + shadow, clip, style.shadow,
++                    node.element.opacity);
++            }
++            DrawCoverage(
++                line.coverage, line.width, line.height, left + line.x, top + line.y, clip, style.colour, node.element.opacity);
++        }
++    }
++
++    static void DrawImage(Node& node, const Rect& clip)
++    {
++        auto picture = GetPicture(node.element.src);
++        if (!picture->loaded || picture->width == 0 || picture->height == 0)
++            return;
++        const auto& b = node.bounds;
++        auto r = b.intersect(clip);
++        if (r.empty())
++            return;
++        uint32_t opacity = static_cast<uint32_t>(std::lround(255.0f * std::clamp(node.element.opacity, 0.0f, 1.0f)));
++        if (opacity == 0)
++            return;
++        float sx = static_cast<float>(picture->width) / (b.right - b.left);
++        float sy = static_cast<float>(picture->height) / (b.bottom - b.top);
++        for (int32_t y = r.top; y < r.bottom; y++)
++        {
++            int32_t py = std::min(picture->height - 1, static_cast<int32_t>((y - b.top + 0.5f) * sy));
++            uint32_t* row = &_buffer[static_cast<size_t>(y) * _width];
++            const uint32_t* src = &picture->pixels[static_cast<size_t>(py) * picture->width];
++            for (int32_t x = r.left; x < r.right; x++)
++            {
++                int32_t px = std::min(picture->width - 1, static_cast<int32_t>((x - b.left + 0.5f) * sx));
++                uint32_t p = src[px];
++                uint32_t a = ((p >> 24) * opacity + 127) / 255;
++                uint32_t pr = (((p >> 16) & 0xFF) * opacity + 127) / 255;
++                uint32_t pg = (((p >> 8) & 0xFF) * opacity + 127) / 255;
++                uint32_t pb = ((p & 0xFF) * opacity + 127) / 255;
++                Blend(row[x], a, pr, pg, pb);
++            }
++        }
++    }
++
++    static void DrawNode(Node& node, const Rect& clip)
++    {
++        const auto& e = node.element;
++        if (e.opacity <= 0.0f || node.bounds.intersect(clip).empty())
++            return;
++        switch (e.kind)
++        {
++            case Kind::rect:
++            {
++                const auto& b = node.bounds;
++                int32_t bw = e.borderWidth > 0.0f && e.border.a != 0 ? std::max(1, Px(e.borderWidth, _scale)) : 0;
++                Rect inner{ b.left + bw, b.top + bw, b.right - bw, b.bottom - bw };
++                FillRect(inner, clip, e.fill, e.opacity);
++                if (bw > 0)
++                {
++                    FillRect({ b.left, b.top, b.right, b.top + bw }, clip, e.border, e.opacity);
++                    FillRect({ b.left, b.bottom - bw, b.right, b.bottom }, clip, e.border, e.opacity);
++                    FillRect({ b.left, b.top + bw, b.left + bw, b.bottom - bw }, clip, e.border, e.opacity);
++                    FillRect({ b.right - bw, b.top + bw, b.right, b.bottom - bw }, clip, e.border, e.opacity);
++                }
++                break;
++            }
++            case Kind::text:
++                DrawText(node, clip);
++                break;
++            case Kind::image:
++                DrawImage(node, clip);
++                break;
++        }
++    }
++
++    static void Rasterise(const Rect& area)
++    {
++        Rect clip = area.intersect({ 0, 0, _width, _height });
++        if (clip.empty())
++            return;
++        for (int32_t y = clip.top; y < clip.bottom; y++)
++        {
++            std::fill_n(&_buffer[static_cast<size_t>(y) * _width + clip.left], clip.right - clip.left, 0u);
++        }
++        std::vector<Node*> order;
++        order.reserve(_nodes.size());
++        for (auto& [id, node] : _nodes)
++            order.push_back(&node);
++        std::sort(order.begin(), order.end(), [](const Node* a, const Node* b) {
++            if (a->element.z != b->element.z)
++                return a->element.z < b->element.z;
++            return a->seq < b->seq;
++        });
++        for (auto* node : order)
++            DrawNode(*node, clip);
++    }
++
++#pragma endregion
++
++    void Set(const std::string& id, const Element& element)
++    {
++        auto it = _nodes.find(id);
++        if (it != _nodes.end())
++        {
++            _dirty.unite(it->second.bounds);
++            it->second.element = element;
++            it->second.fading = false;
++        }
++        else
++        {
++            Node node;
++            node.element = element;
++            node.seq = _nextSeq++;
++            it = _nodes.emplace(id, std::move(node)).first;
++        }
++        it->second.bounds = ComputeBounds(it->second, _scale);
++        _dirty.unite(it->second.bounds);
++    }
++
++    bool Remove(const std::string& id)
++    {
++        auto it = _nodes.find(id);
++        if (it == _nodes.end())
++            return false;
++        _dirty.unite(it->second.bounds);
++        _nodes.erase(it);
++        return true;
++    }
++
++    void Clear()
++    {
++        for (auto& [id, node] : _nodes)
++            _dirty.unite(node.bounds);
++        _nodes.clear();
++        _pictures.clear();
++    }
++
++    bool Fade(const std::string& id, float opacity, int32_t ms)
++    {
++        auto it = _nodes.find(id);
++        if (it == _nodes.end())
++            return false;
++        auto& node = it->second;
++        opacity = std::clamp(opacity, 0.0f, 1.0f);
++        if (ms <= 0)
++        {
++            node.fading = false;
++            node.element.opacity = opacity;
++            _dirty.unite(node.bounds);
++            return true;
++        }
++        node.fading = true;
++        node.fadeFrom = node.element.opacity;
++        node.fadeTo = opacity;
++        node.fadeMs = ms;
++        node.fadeStart = std::chrono::steady_clock::now();
++        return true;
++    }
++
++    Size MeasureText(const std::string& text, const TextStyle& style)
++    {
++        float scale = _scale > 0.0f ? _scale : 1.0f;
++        auto layout = LayoutText(text, style, scale);
++        return { layout.width / scale, layout.height / scale };
++    }
++
++    void SetDefaultFonts(const std::string& regular, const std::string& bold)
++    {
++        _defaultRegular = regular;
++        _defaultBold = bold;
++        // Re-layout text in the new fonts.
++        for (auto& [id, node] : _nodes)
++        {
++            node.layout.key.clear();
++            _dirty.unite(node.bounds);
++            node.bounds = ComputeBounds(node, _scale);
++            _dirty.unite(node.bounds);
++        }
++    }
++
++    void RequestFullUpload()
++    {
++        _uploadAll = true;
++    }
++
++    float GetScale()
++    {
++        return _scale > 0.0f ? _scale : 1.0f;
++    }
++
++    bool Prepare(int32_t width, int32_t height, int32_t gameWidth, Frame& frame)
++    {
++        if (width <= 0 || height <= 0)
++            return false;
++        if (_nodes.empty() && _bufferEmpty)
++        {
++            // Nothing drawn and nothing to draw; the engines' copy may be stale from here on.
++            _dirty = {};
++            _uploadAll = true;
++            return false;
++        }
++
++        float scale = static_cast<float>(width) / std::max(1, gameWidth);
++        if (width != _width || height != _height || std::abs(scale - _scale) > 0.0001f)
++        {
++            _width = width;
++            _height = height;
++            _scale = scale;
++            _buffer.assign(static_cast<size_t>(width) * height, 0u);
++            for (auto& [id, node] : _nodes)
++                node.bounds = ComputeBounds(node, _scale);
++            _dirty = { 0, 0, width, height };
++        }
++
++        auto now = std::chrono::steady_clock::now();
++        for (auto& [id, node] : _nodes)
++        {
++            if (!node.fading)
++                continue;
++            float t = std::chrono::duration<float, std::milli>(now - node.fadeStart).count() / node.fadeMs;
++            if (t >= 1.0f)
++            {
++                t = 1.0f;
++                node.fading = false;
++            }
++            node.element.opacity = node.fadeFrom + (node.fadeTo - node.fadeFrom) * t;
++            _dirty.unite(node.bounds);
++        }
++
++        if (_uploadAll)
++        {
++            _dirty = { 0, 0, _width, _height };
++            _uploadAll = false;
++        }
++        Rect dirty = _dirty.intersect({ 0, 0, _width, _height });
++        _dirty = {};
++        if (!dirty.empty())
++        {
++            Rasterise(dirty);
++        }
++        _bufferEmpty = _nodes.empty();
++
++        frame.pixels = _buffer.data();
++        frame.width = _width;
++        frame.height = _height;
++        frame.dirtyX = dirty.left;
++        frame.dirtyY = dirty.top;
++        frame.dirtyWidth = dirty.empty() ? 0 : dirty.right - dirty.left;
++        frame.dirtyHeight = dirty.empty() ? 0 : dirty.bottom - dirty.top;
++        return true;
++    }
++} // namespace OpenRCT2::Ui::Screensaver::Overlay
+diff --git a/src/openrct2-ui/screensaver/Overlay.h b/src/openrct2-ui/screensaver/Overlay.h
+new file mode 100644
+index 0000000..cb74ffd
+--- /dev/null
++++ b/src/openrct2-ui/screensaver/Overlay.h
+@@ -0,0 +1,112 @@
++/*****************************************************************************
++ * Copyright (c) 2014-2026 OpenRCT2 developers
++ *
++ * For a complete list of all authors, please refer to contributors.md
++ * Interested in contributing? Visit https://github.com/OpenRCT2/OpenRCT2
++ *
++ * OpenRCT2 is licensed under the GNU General Public License version 3.
++ *****************************************************************************/
++
++// A retained scene of rectangles, text and images that a plugin describes and the
++// drawing engines composite over the frame at the window's full resolution, with real alpha.
++// Positions and sizes are in game pixels; the scene is rasterized on the CPU into a premultiplied
++// ARGB buffer at the output size, and only where it changed.
++
++#pragma once
++
++#include <cstdint>
++#include <optional>
++#include <string>
++
++namespace OpenRCT2::Ui::Screensaver::Overlay
++{
++    struct Colour
++    {
++        uint8_t r{};
++        uint8_t g{};
++        uint8_t b{};
++        uint8_t a{};
++    };
++
++    enum class Kind : uint8_t
++    {
++        rect,
++        text,
++        image,
++    };
++
++    enum class Align : uint8_t
++    {
++        left,
++        centre,
++        right,
++    };
++
++    struct TextStyle
++    {
++        std::string font; // a .ttf/.otf path, absolute or under the user plugin folder; empty: default
++        float size = 16.0f; // game pixels
++        bool bold = false;
++        Colour colour{ 255, 255, 255, 255 };
++        Align align = Align::left;
++        float wrap = 0.0f;        // wrap width in game pixels; 0: no wrapping
++        float lineHeight = 1.25f; // times size
++        Colour shadow{};          // a drop shadow one game pixel down and right; alpha 0: none
++    };
++
++    struct Element
++    {
++        Kind kind = Kind::rect;
++        float x{};
++        float y{};
++        float width{};  // rect, image (0: the image's own size in output pixels)
++        float height{}; // rect, image
++        float opacity = 1.0f;
++        int32_t z{};
++        // rect
++        Colour fill{};
++        Colour border{};
++        float borderWidth{};
++        // text
++        std::string text;
++        TextStyle style;
++        // image: a PNG path, absolute or under the user plugin folder
++        std::string src;
++    };
++
++    struct Size
++    {
++        float width{};
++        float height{};
++    };
++
++    void Set(const std::string& id, const Element& element);
++    bool Remove(const std::string& id);
++    void Clear();
++    // Runs the element's opacity to the target over ms of real time, without plugin work per frame.
++    bool Fade(const std::string& id, float opacity, int32_t ms);
++    Size MeasureText(const std::string& text, const TextStyle& style);
++    void SetDefaultFonts(const std::string& regular, const std::string& bold);
++    // The output size over the game size (OpenRCT2's scale factor), as of the last frame.
++    float GetScale();
++
++    struct Frame
++    {
++        const uint32_t* pixels{}; // premultiplied 0xAARRGGBB, width * height
++        int32_t width{};
++        int32_t height{};
++        // The part that changed since the last frame (width 0: nothing).
++        int32_t dirtyX{};
++        int32_t dirtyY{};
++        int32_t dirtyWidth{};
++        int32_t dirtyHeight{};
++    };
++
++    // The engine's copy of the overlay was lost (a new texture): the next frame reports everything.
++    void RequestFullUpload();
++
++    // Called by the drawing engines once per presented frame with the output size in pixels.
++    // Returns false when there is nothing to draw.
++    // gameWidth is the game's own width in game pixels (the output is that times the scale factor).
++    bool Prepare(int32_t width, int32_t height, int32_t gameWidth, Frame& frame);
++} // namespace OpenRCT2::Ui::Screensaver::Overlay
+diff --git a/src/openrct2-ui/screensaver/OverlayCompositor.cpp b/src/openrct2-ui/screensaver/OverlayCompositor.cpp
+new file mode 100644
+index 0000000..aa445cd
+--- /dev/null
++++ b/src/openrct2-ui/screensaver/OverlayCompositor.cpp
+@@ -0,0 +1,276 @@
++/*****************************************************************************
++ * Copyright (c) 2014-2026 OpenRCT2 developers
++ *
++ * For a complete list of all authors, please refer to contributors.md
++ * Interested in contributing? Visit https://github.com/OpenRCT2/OpenRCT2
++ *
++ * OpenRCT2 is licensed under the GNU General Public License version 3.
++ *****************************************************************************/
++
++#include "OverlayCompositor.h"
++
++#include "Overlay.h"
++#include "Screensaver.h"
++
++#include <SDL.h>
++#include <openrct2/Context.h>
++#include <openrct2/Diagnostic.h>
++
++#ifndef DISABLE_OPENGL
++    #include "../drawing/engines/opengl/OpenGLAPI.h"
++#endif
++
++namespace OpenRCT2::Ui::Screensaver
++{
++#pragma region Software engine (SDL renderer)
++
++    static SDL_Renderer* _sdlOwner = nullptr;
++    static SDL_Texture* _sdlTexture = nullptr;
++    static int32_t _sdlWidth = 0;
++    static int32_t _sdlHeight = 0;
++
++    void ReleaseOverlay(SDL_Renderer* renderer)
++    {
++        if (_sdlTexture != nullptr && _sdlOwner == renderer)
++        {
++            SDL_DestroyTexture(_sdlTexture);
++        }
++        _sdlTexture = nullptr;
++        _sdlOwner = nullptr;
++    }
++
++    void CompositeOverlay(SDL_Renderer* renderer)
++    {
++        if (!IsActive() || renderer == nullptr)
++            return;
++        int w = 0;
++        int h = 0;
++        if (SDL_GetRendererOutputSize(renderer, &w, &h) != 0 || w <= 0 || h <= 0)
++            return;
++
++        if (_sdlTexture == nullptr || _sdlOwner != renderer || w != _sdlWidth || h != _sdlHeight)
++        {
++            ReleaseOverlay(_sdlOwner);
++            _sdlTexture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, w, h);
++            if (_sdlTexture == nullptr)
++            {
++                LOG_ERROR("Screensaver overlay: cannot create a %dx%d texture: %s", w, h, SDL_GetError());
++                return;
++            }
++            // The overlay is premultiplied.
++            auto premultiplied = SDL_ComposeCustomBlendMode(
++                SDL_BLENDFACTOR_ONE, SDL_BLENDFACTOR_ONE_MINUS_SRC_ALPHA, SDL_BLENDOPERATION_ADD, SDL_BLENDFACTOR_ONE,
++                SDL_BLENDFACTOR_ONE_MINUS_SRC_ALPHA, SDL_BLENDOPERATION_ADD);
++            if (SDL_SetTextureBlendMode(_sdlTexture, premultiplied) != 0)
++            {
++                LOG_WARNING("Screensaver overlay: no premultiplied blending in this renderer, edges will be darker");
++                SDL_SetTextureBlendMode(_sdlTexture, SDL_BLENDMODE_BLEND);
++            }
++            _sdlOwner = renderer;
++            _sdlWidth = w;
++            _sdlHeight = h;
++            Overlay::RequestFullUpload();
++        }
++
++        Overlay::Frame frame;
++        if (!Overlay::Prepare(w, h, ContextGetWidth(), frame))
++            return;
++        if (frame.dirtyWidth > 0 && frame.dirtyHeight > 0)
++        {
++            SDL_Rect rect{ frame.dirtyX, frame.dirtyY, frame.dirtyWidth, frame.dirtyHeight };
++            const uint32_t* src = frame.pixels + static_cast<size_t>(frame.dirtyY) * frame.width + frame.dirtyX;
++            SDL_UpdateTexture(_sdlTexture, &rect, src, frame.width * 4);
++        }
++        SDL_RenderCopy(renderer, _sdlTexture, nullptr, nullptr);
++    }
++
++#pragma endregion
++
++#pragma region OpenGL engine
++
++#ifndef DISABLE_OPENGL
++    static constexpr const char* kVertexShader = R"(#version 330 core
++in vec2 vPosition;
++out vec2 fTextureCoordinate;
++void main()
++{
++    fTextureCoordinate = vec2((vPosition.x + 1.0) * 0.5, (1.0 - vPosition.y) * 0.5);
++    gl_Position = vec4(vPosition, 0.0, 1.0);
++}
++)";
++
++    static constexpr const char* kFragmentShader = R"(#version 330 core
++in vec2 fTextureCoordinate;
++out vec4 fragColor;
++uniform sampler2D uTexture;
++void main()
++{
++    fragColor = texture(uTexture, fTextureCoordinate);
++}
++)";
++
++    static SDL_GLContext _glOwner = nullptr;
++    static bool _glFailed = false;
++    static GLuint _glProgram = 0;
++    static GLuint _glVao = 0;
++    static GLuint _glVbo = 0;
++    static GLuint _glTexture = 0;
++    static int32_t _glWidth = 0;
++    static int32_t _glHeight = 0;
++
++    static GLuint CompileShader(GLenum type, const char* source)
++    {
++        GLuint shader = glCreateShader(type);
++        glShaderSource(shader, 1, &source, nullptr);
++        glCompileShader(shader);
++        GLint status = GL_FALSE;
++        glGetShaderiv(shader, GL_COMPILE_STATUS, &status);
++        if (status != GL_TRUE)
++        {
++            char log[1024]{};
++            glGetShaderInfoLog(shader, sizeof(log), nullptr, log);
++            LOG_ERROR("Screensaver overlay: shader did not compile: %s", log);
++            glDeleteShader(shader);
++            return 0;
++        }
++        return shader;
++    }
++
++    static bool CreateGLObjects()
++    {
++        GLuint vs = CompileShader(GL_VERTEX_SHADER, kVertexShader);
++        GLuint fs = CompileShader(GL_FRAGMENT_SHADER, kFragmentShader);
++        if (vs == 0 || fs == 0)
++            return false;
++        _glProgram = glCreateProgram();
++        glAttachShader(_glProgram, vs);
++        glAttachShader(_glProgram, fs);
++        glBindFragDataLocation(_glProgram, 0, "fragColor");
++        glLinkProgram(_glProgram);
++        glDetachShader(_glProgram, vs);
++        glDetachShader(_glProgram, fs);
++        glDeleteShader(vs);
++        glDeleteShader(fs);
++        GLint status = GL_FALSE;
++        glGetProgramiv(_glProgram, GL_LINK_STATUS, &status);
++        if (status != GL_TRUE)
++        {
++            char log[1024]{};
++            glGetProgramInfoLog(_glProgram, sizeof(log), nullptr, log);
++            LOG_ERROR("Screensaver overlay: shader program did not link: %s", log);
++            return false;
++        }
++
++        static constexpr GLfloat kQuad[] = { -1.0f, -1.0f, 1.0f, -1.0f, -1.0f, 1.0f, 1.0f, 1.0f };
++        glGenVertexArrays(1, &_glVao);
++        glGenBuffers(1, &_glVbo);
++        glBindVertexArray(_glVao);
++        glBindBuffer(GL_ARRAY_BUFFER, _glVbo);
++        glBufferData(GL_ARRAY_BUFFER, sizeof(kQuad), kQuad, GL_STATIC_DRAW);
++        GLint position = glGetAttribLocation(_glProgram, "vPosition");
++        glVertexAttribPointer(position, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(GLfloat), nullptr);
++        glEnableVertexAttribArray(position);
++
++        glUseProgram(_glProgram);
++        OpenGLState::CurrentProgram = _glProgram;
++        glUniform1i(glGetUniformLocation(_glProgram, "uTexture"), 0);
++
++        glGenTextures(1, &_glTexture);
++        return true;
++    }
++
++    void ReleaseOverlayGL()
++    {
++        if (_glOwner != nullptr && _glOwner == SDL_GL_GetCurrentContext())
++        {
++            if (_glTexture != 0)
++                glDeleteTextures(1, &_glTexture);
++            if (_glVbo != 0)
++                glDeleteBuffers(1, &_glVbo);
++            if (_glVao != 0)
++                glDeleteVertexArrays(1, &_glVao);
++            if (_glProgram != 0)
++            {
++                if (OpenGLState::CurrentProgram == _glProgram)
++                    OpenGLState::CurrentProgram = 0;
++                glDeleteProgram(_glProgram);
++            }
++        }
++        _glOwner = nullptr;
++        _glProgram = _glVao = _glVbo = _glTexture = 0;
++        _glWidth = _glHeight = 0;
++        _glFailed = false;
++    }
++
++    void CompositeOverlayGL(SDL_Window* window)
++    {
++        if (!IsActive() || window == nullptr)
++            return;
++        auto context = SDL_GL_GetCurrentContext();
++        if (context != _glOwner)
++        {
++            ReleaseOverlayGL();
++            _glOwner = context;
++            if (!CreateGLObjects())
++            {
++                _glFailed = true;
++            }
++        }
++        if (_glFailed)
++            return;
++
++        int w = 0;
++        int h = 0;
++        SDL_GL_GetDrawableSize(window, &w, &h);
++        if (w <= 0 || h <= 0)
++            return;
++
++        OpenGLAPI::SetTexture(0, GL_TEXTURE_2D, _glTexture);
++        if (w != _glWidth || h != _glHeight)
++        {
++            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_BGRA, GL_UNSIGNED_BYTE, nullptr);
++            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
++            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
++            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
++            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
++            _glWidth = w;
++            _glHeight = h;
++            Overlay::RequestFullUpload();
++        }
++
++        Overlay::Frame frame;
++        if (!Overlay::Prepare(w, h, ContextGetWidth(), frame))
++            return;
++        if (frame.dirtyWidth > 0 && frame.dirtyHeight > 0)
++        {
++            glPixelStorei(GL_UNPACK_ROW_LENGTH, frame.width);
++            const uint32_t* src = frame.pixels + static_cast<size_t>(frame.dirtyY) * frame.width + frame.dirtyX;
++            glTexSubImage2D(
++                GL_TEXTURE_2D, 0, frame.dirtyX, frame.dirtyY, frame.dirtyWidth, frame.dirtyHeight, GL_BGRA, GL_UNSIGNED_BYTE,
++                src);
++            glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
++        }
++
++        glBindFramebuffer(GL_FRAMEBUFFER, 0);
++        glViewport(0, 0, w, h);
++        glDisable(GL_DEPTH_TEST);
++        glEnable(GL_BLEND);
++        glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
++        glUseProgram(_glProgram);
++        OpenGLState::CurrentProgram = _glProgram;
++        glBindVertexArray(_glVao);
++        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
++        glDisable(GL_BLEND);
++    }
++#else
++    void CompositeOverlayGL(SDL_Window*)
++    {
++    }
++
++    void ReleaseOverlayGL()
++    {
++    }
++#endif
++
++#pragma endregion
++} // namespace OpenRCT2::Ui::Screensaver
+diff --git a/src/openrct2-ui/screensaver/OverlayCompositor.h b/src/openrct2-ui/screensaver/OverlayCompositor.h
+new file mode 100644
+index 0000000..f13f215
+--- /dev/null
++++ b/src/openrct2-ui/screensaver/OverlayCompositor.h
+@@ -0,0 +1,29 @@
++/*****************************************************************************
++ * Copyright (c) 2014-2026 OpenRCT2 developers
++ *
++ * For a complete list of all authors, please refer to contributors.md
++ * Interested in contributing? Visit https://github.com/OpenRCT2/OpenRCT2
++ *
++ * OpenRCT2 is licensed under the GNU General Public License version 3.
++ *****************************************************************************/
++
++// The drawing engines' one-line hooks. Each composites the overlay over the
++// finished frame, at the window's resolution, just before it is presented.
++
++#pragma once
++
++struct SDL_Renderer;
++struct SDL_Window;
++
++namespace OpenRCT2::Ui::Screensaver
++{
++    // Software engine (HardwareDisplayDrawingEngine): before SDL_RenderPresent.
++    void CompositeOverlay(SDL_Renderer* renderer);
++    // Before the renderer is destroyed.
++    void ReleaseOverlay(SDL_Renderer* renderer);
++
++    // OpenGL engine: before SDL_GL_SwapWindow, with the engine's context current.
++    void CompositeOverlayGL(SDL_Window* window);
++    // Before the GL context is deleted.
++    void ReleaseOverlayGL();
++} // namespace OpenRCT2::Ui::Screensaver
+diff --git a/src/openrct2-ui/screensaver/Screensaver.cpp b/src/openrct2-ui/screensaver/Screensaver.cpp
+index 774cbca..70e5ddb 100644
+--- a/src/openrct2-ui/screensaver/Screensaver.cpp
++++ b/src/openrct2-ui/screensaver/Screensaver.cpp
+@@ -10,6 +10,7 @@
+ #include "Screensaver.h"
+ 
+ #include "../input/InputManager.h"
++#include "Overlay.h"
+ 
+ #include <SDL.h>
+ #include <openrct2/Context.h>
+@@ -230,6 +231,7 @@ namespace OpenRCT2::Ui::Screensaver
+         _active = false;
+         ShowWindows();
+         RestoreConfig();
++        Overlay::Clear();
+         SDL_ShowCursor(SDL_ENABLE);
+         _cursorVisible = true;
+         if (reopenMenu && gLegacyScene == LegacyScene::titleSequence)
+diff --git a/src/openrct2-ui/scripting/ScScreensaver.hpp b/src/openrct2-ui/scripting/ScScreensaver.hpp
+index cf829ec..fa2cb52 100644
+--- a/src/openrct2-ui/scripting/ScScreensaver.hpp
++++ b/src/openrct2-ui/scripting/ScScreensaver.hpp
+@@ -7,12 +7,13 @@
+  * OpenRCT2 is licensed under the GNU General Public License version 3.
+  *****************************************************************************/
+ 
+-// The `screensaver` global (mode, settings, mouse).
++// The `screensaver` global (mode, settings, mouse, overlay).
+ 
+ #pragma once
+ 
+ #ifdef ENABLE_SCRIPTING
+ 
++    #include "../screensaver/Overlay.h"
+     #include "../screensaver/Screensaver.h"
+ 
+     #include <openrct2/Context.h>
+@@ -21,11 +22,15 @@
+ 
+ namespace OpenRCT2::Scripting
+ {
++    class ScScreensaverOverlay;
++    extern ScScreensaverOverlay gScScreensaverOverlay;
+     class ScScreensaver;
+     extern ScScreensaver gScScreensaver;
+ 
+     namespace ScreensaverJS
+     {
++        namespace Overlay = OpenRCT2::Ui::Screensaver::Overlay;
++
+         inline std::optional<double> GetNumber(JSContext* ctx, JSValue obj, const char* name)
+         {
+             JSValue val = JS_GetPropertyStr(ctx, obj, name);
+@@ -66,6 +71,113 @@ namespace OpenRCT2::Scripting
+             return result;
+         }
+ 
++        inline int HexDigit(char c)
++        {
++            if (c >= '0' && c <= '9')
++                return c - '0';
++            if (c >= 'a' && c <= 'f')
++                return c - 'a' + 10;
++            if (c >= 'A' && c <= 'F')
++                return c - 'A' + 10;
++            return -1;
++        }
++
++        // "#rgb", "#rrggbb", "#rrggbbaa", or a number 0xRRGGBB (opaque).
++        inline std::optional<Overlay::Colour> GetColour(JSContext* ctx, JSValue obj, const char* name)
++        {
++            JSValue val = JS_GetPropertyStr(ctx, obj, name);
++            std::optional<Overlay::Colour> result;
++            if (JS_IsNumber(val))
++            {
++                double d = 0;
++                JS_ToFloat64(ctx, &d, val);
++                auto v = static_cast<uint32_t>(d);
++                result = Overlay::Colour{ static_cast<uint8_t>(v >> 16), static_cast<uint8_t>(v >> 8), static_cast<uint8_t>(v),
++                                          255 };
++            }
++            else if (JS_IsString(val))
++            {
++                auto s = JSToStdString(ctx, val);
++                if (!s.empty() && s[0] == '#')
++                    s = s.substr(1);
++                std::vector<int> d;
++                bool ok = true;
++                for (char c : s)
++                {
++                    int h = HexDigit(c);
++                    ok = ok && h >= 0;
++                    d.push_back(h);
++                }
++                if (ok && d.size() == 3)
++                {
++                    result = Overlay::Colour{ static_cast<uint8_t>(d[0] * 17), static_cast<uint8_t>(d[1] * 17),
++                                              static_cast<uint8_t>(d[2] * 17), 255 };
++                }
++                else if (ok && (d.size() == 6 || d.size() == 8))
++                {
++                    auto byte = [&](size_t i) { return static_cast<uint8_t>(d[i] * 16 + d[i + 1]); };
++                    result = Overlay::Colour{ byte(0), byte(2), byte(4), d.size() == 8 ? byte(6) : uint8_t{ 255 } };
++                }
++            }
++            JS_FreeValue(ctx, val);
++            return result;
++        }
++
++        inline Overlay::TextStyle GetTextStyle(JSContext* ctx, JSValue obj)
++        {
++            Overlay::TextStyle style;
++            if (!JS_IsObject(obj))
++                return style;
++            if (auto v = GetString(ctx, obj, "font"))
++                style.font = *v;
++            style.size = GetFloat(ctx, obj, "size", style.size);
++            if (auto v = GetBool(ctx, obj, "bold"))
++                style.bold = *v;
++            if (auto v = GetColour(ctx, obj, "colour"))
++                style.colour = *v;
++            else if (auto v2 = GetColour(ctx, obj, "color"))
++                style.colour = *v2;
++            if (auto v = GetString(ctx, obj, "align"))
++            {
++                if (*v == "centre" || *v == "center")
++                    style.align = Overlay::Align::centre;
++                else if (*v == "right")
++                    style.align = Overlay::Align::right;
++            }
++            style.wrap = GetFloat(ctx, obj, "wrap", style.wrap);
++            style.lineHeight = GetFloat(ctx, obj, "lineHeight", style.lineHeight);
++            if (auto v = GetColour(ctx, obj, "shadow"))
++                style.shadow = *v;
++            return style;
++        }
++
++        inline Overlay::Element GetElement(JSContext* ctx, JSValue obj)
++        {
++            Overlay::Element e;
++            auto type = GetString(ctx, obj, "type").value_or("rect");
++            if (type == "text")
++                e.kind = Overlay::Kind::text;
++            else if (type == "image")
++                e.kind = Overlay::Kind::image;
++            e.x = GetFloat(ctx, obj, "x", 0);
++            e.y = GetFloat(ctx, obj, "y", 0);
++            e.width = GetFloat(ctx, obj, "width", 0);
++            e.height = GetFloat(ctx, obj, "height", 0);
++            e.opacity = GetFloat(ctx, obj, "opacity", 1);
++            e.z = static_cast<int32_t>(GetFloat(ctx, obj, "z", 0));
++            if (auto v = GetColour(ctx, obj, "fill"))
++                e.fill = *v;
++            if (auto v = GetColour(ctx, obj, "border"))
++                e.border = *v;
++            e.borderWidth = GetFloat(ctx, obj, "borderWidth", 0);
++            if (auto v = GetString(ctx, obj, "text"))
++                e.text = *v;
++            e.style = GetTextStyle(ctx, obj);
++            if (auto v = GetString(ctx, obj, "src"))
++                e.src = *v;
++            return e;
++        }
++
+         inline OpenRCT2::Ui::Screensaver::Settings GetSettings(JSContext* ctx, JSValue obj)
+         {
+             using namespace OpenRCT2::Ui::Screensaver;
+@@ -186,6 +298,84 @@ namespace OpenRCT2::Scripting
+         }
+     } // namespace ScreensaverJS
+ 
++    class ScScreensaverOverlay final : public ScBase
++    {
++    public:
++        void Register(JSContext* ctx)
++        {
++            static constexpr JSCFunctionListEntry funcs[] = {
++                JS_CGETSET_DEF("scale", ScScreensaverOverlay::scale_get, nullptr),
++                JS_CFUNC_DEF("set", 2, ScScreensaverOverlay::set),
++                JS_CFUNC_DEF("remove", 1, ScScreensaverOverlay::remove),
++                JS_CFUNC_DEF("clear", 0, ScScreensaverOverlay::clear),
++                JS_CFUNC_DEF("fade", 3, ScScreensaverOverlay::fade),
++                JS_CFUNC_DEF("measureText", 2, ScScreensaverOverlay::measureText),
++                JS_CFUNC_DEF("setDefaultFonts", 2, ScScreensaverOverlay::setDefaultFonts),
++            };
++            RegisterBase(ctx, "ScreensaverOverlay", nullptr, funcs);
++        }
++
++        JSValue New(JSContext* ctx)
++        {
++            return MakeWithOpaque(ctx, nullptr);
++        }
++
++    private:
++        static JSValue scale_get(JSContext* ctx, JSValue)
++        {
++            return JS_NewFloat64(ctx, ScreensaverJS::Overlay::GetScale());
++        }
++
++        static JSValue set(JSContext* ctx, JSValue, int argc, JSValue* argv)
++        {
++            if (argc < 2 || !JS_IsObject(argv[1]))
++            {
++                JS_ThrowTypeError(ctx, "set(id, element): element must be an object");
++                return JS_EXCEPTION;
++            }
++            ScreensaverJS::Overlay::Set(JSToStdString(ctx, argv[0]), ScreensaverJS::GetElement(ctx, argv[1]));
++            return JS_UNDEFINED;
++        }
++
++        static JSValue remove(JSContext* ctx, JSValue, int argc, JSValue* argv)
++        {
++            return JS_NewBool(ctx, ScreensaverJS::Overlay::Remove(JSToStdString(ctx, argv[0])));
++        }
++
++        static JSValue clear(JSContext*, JSValue, int, JSValue*)
++        {
++            ScreensaverJS::Overlay::Clear();
++            return JS_UNDEFINED;
++        }
++
++        static JSValue fade(JSContext* ctx, JSValue, int argc, JSValue* argv)
++        {
++            double opacity = 1.0;
++            if (JS_ToFloat64(ctx, &opacity, argv[1]) < 0)
++                return JS_EXCEPTION;
++            JS_UNPACK_INT32(ms, ctx, argv[2]);
++            return JS_NewBool(
++                ctx, ScreensaverJS::Overlay::Fade(JSToStdString(ctx, argv[0]), static_cast<float>(opacity), ms));
++        }
++
++        static JSValue measureText(JSContext* ctx, JSValue, int argc, JSValue* argv)
++        {
++            auto size = ScreensaverJS::Overlay::MeasureText(JSToStdString(ctx, argv[0]), ScreensaverJS::GetTextStyle(ctx, argv[1]));
++            JSValue obj = JS_NewObject(ctx);
++            JS_SetPropertyStr(ctx, obj, "width", JS_NewFloat64(ctx, size.width));
++            JS_SetPropertyStr(ctx, obj, "height", JS_NewFloat64(ctx, size.height));
++            return obj;
++        }
++
++        static JSValue setDefaultFonts(JSContext* ctx, JSValue, int argc, JSValue* argv)
++        {
++            auto regular = JS_IsString(argv[0]) ? JSToStdString(ctx, argv[0]) : std::string();
++            auto bold = argc > 1 && JS_IsString(argv[1]) ? JSToStdString(ctx, argv[1]) : regular;
++            ScreensaverJS::Overlay::SetDefaultFonts(regular, bold);
++            return JS_UNDEFINED;
++        }
++    };
++
+     class ScScreensaver final : public ScBase
+     {
+     public:
+@@ -196,6 +386,7 @@ namespace OpenRCT2::Scripting
+                 JS_CGETSET_DEF("launchedByFlag", ScScreensaver::launchedByFlag_get, nullptr),
+                 JS_CGETSET_DEF("settings", ScScreensaver::settings_get, nullptr),
+                 JS_CGETSET_DEF("cursorVisible", ScScreensaver::cursorVisible_get, ScScreensaver::cursorVisible_set),
++                JS_CGETSET_DEF("overlay", ScScreensaver::overlay_get, nullptr),
+                 JS_CFUNC_DEF("enter", 1, ScScreensaver::enter),
+                 JS_CFUNC_DEF("exit", 0, ScScreensaver::exit),
+                 JS_CFUNC_DEF("configure", 1, ScScreensaver::configure),
+@@ -243,6 +434,8 @@ namespace OpenRCT2::Scripting
+             return JS_UNDEFINED;
+         }
+ 
++        static JSValue overlay_get(JSContext* ctx, JSValue);
++
+         static JSValue enter(JSContext* ctx, JSValue, int argc, JSValue* argv)
+         {
+             if (argc > 0 && JS_IsObject(argv[0]))
+@@ -275,6 +468,10 @@ namespace OpenRCT2::Scripting
+         }
+     };
+ 
++    inline JSValue ScScreensaver::overlay_get(JSContext* ctx, JSValue)
++    {
++        return gScScreensaverOverlay.New(ctx);
++    }
+ } // namespace OpenRCT2::Scripting
+ 
+ #endif
+diff --git a/src/openrct2-ui/scripting/UiExtensions.cpp b/src/openrct2-ui/scripting/UiExtensions.cpp
+index 6fbdf61..3cb4e5b 100644
+--- a/src/openrct2-ui/scripting/UiExtensions.cpp
++++ b/src/openrct2-ui/scripting/UiExtensions.cpp
+@@ -29,6 +29,7 @@ using namespace OpenRCT2::Scripting;
+ ScGraphicsContext OpenRCT2::Scripting::gScGraphicsContext;
+ ScImageManager OpenRCT2::Scripting::gScImageManager;
+ ScScreensaver OpenRCT2::Scripting::gScScreensaver;
++ScScreensaverOverlay OpenRCT2::Scripting::gScScreensaverOverlay;
+ ScTileSelection OpenRCT2::Scripting::gScTileSelection;
+ ScTool OpenRCT2::Scripting::gScTool;
+ ScUi OpenRCT2::Scripting::gScUi;
+@@ -67,6 +68,7 @@ void UiScriptExtensions::Extend(ScriptEngine& scriptEngine)
+     gScGraphicsContext.Register(ctx);
+     gScImageManager.Register(ctx);
+     gScScreensaver.Register(ctx);
++    gScScreensaverOverlay.Register(ctx);
+     gScTileSelection.Register(ctx);
+     gScTool.Register(ctx);
+     gScUi.Register(ctx);
+@@ -105,6 +107,7 @@ void UiScriptExtensions::Unregister()
+     gScGraphicsContext.Unregister();
+     gScImageManager.Unregister();
+     gScScreensaver.Unregister();
++    gScScreensaverOverlay.Unregister();
+     gScTileSelection.Unregister();
+     gScTool.Unregister();
+     gScUi.Unregister();

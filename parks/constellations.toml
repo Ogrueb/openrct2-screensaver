@@ -1,0 +1,53 @@
+# Constellations (The Lonely Hearts Club). Ships Object Animator (Constellations-FINAL-LHC.js),
+# whose animation spots are hard-coded in its code, and the eclipse show.
+[match]
+name = "Constellations"
+map = [122, 122]
+
+[extras]
+animations = true       # views on the stars, Tesla launch, Alchemist and rapids lift
+animation_hold = 20.0
+show = "eclipse"        # then the eclipse, played out in full, before the next park
+
+# Read from the plugin's code (docs/companion-plugins.md).
+[[spot]]
+companion = "Object Animator"
+name = "stars"          # STARGAZER (ride 12) entering (53,67) lights a star per tile ahead of it, x 53 to 47
+z = 528
+boxes = [[47, 67, 53, 67]]
+
+[[spot]]
+companion = "Object Animator"
+name = "tesla launch"   # ZODIAC (ride 4) entering (71,60) lights bolts along x 71, y 60 to 45, and its cars
+z = 344
+boxes = [[71, 45, 71, 60]]
+
+[[spot]]
+companion = "Object Animator"
+name = "alchemist"      # always on: windows at 37-39 x 76-80 flash, smoke at x 40, y 78-80
+z = 456
+boxes = [[37, 76, 40, 80]]
+
+[[spot]]
+companion = "Object Animator"
+name = "rapids lift"    # a Meteor Showers boat (ride 26) at (82,63) runs the lift (ride 13, x 83, y 65-68)
+z = 560
+boxes = [[82, 63, 82, 63], [83, 65, 83, 68]]
+
+# Align: the shadow crosses the map and stops; hold the full eclipse; dis-align: it moves off
+# and the window's align button returns. From the plugin's code (its "eclipse" animation): the
+# shadow is a disc of radius 106 tiles whose centre steps +1 x, +1 y every 30 ticks, from
+# (-35,-35) until it pauses at (15,15) (50 steps, 1500 ticks, 37.5 s at 1x), then on from
+# (110,110) to (170,170) (60 steps, 1800 ticks). Its edge sweeps the map's diagonal both times,
+# so the camera glides with it: up the diagonal to the eclipse's own camera tile (55,60) while
+# the shadow comes in, still through the full eclipse (320 ticks, the 8 s at 1x), and on down
+# the diagonal as it leaves, at zoom 0 (owner, 2026-10-30: a slow pan in the shadow's direction):
+# about 13 px/s coming in, then on to (112,117) as it leaves, about 40 px/s (owner's live test,
+# 2026-10-30: the first end, (70,75), stopped too soon). The eclipse itself sets zoom 1.
+[show.eclipse]
+companion = "Object Animator"
+steps = [{press = "alignBtn"}, {until = "disalignBtn"}, {waitTicks = 320},
+         {press = "disalignBtn"}, {until = "alignBtn"}]
+view = {x = 40, y = 45, zoom = 0, rotation = 2}
+path = [{x = 55, y = 60, ticks = 1500}, {ticks = 320}, {x = 112, y = 117, ticks = 1800}]
+hold = 120.0

@@ -1,0 +1,607 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: RCT Screensaver <noreply@example.invalid>
+Date: Tue, 27 Oct 2026 00:33:55 +0000
+Subject: [PATCH] Title screen: import the next park into a second game state
+
+The background load now also imports the park into a GameState_t of its
+own: getGameState() and the map's tile index honor a thread-local
+override while the loader thread imports, so the import code runs
+unchanged against the staging state while the main thread keeps playing
+the current park. On completion the main thread registers the objects,
+swaps the game state and tile index in (swapGameState was unused), and
+redoes the parts of the import that touch state outside GameState_t:
+window intents, palette, animation and patrol caches, research flags,
+plugin storage, the peep animation conversion of old parks, and the
+post-import fix-ups (gameStateInitGlobals, IParkImporter::FinishImport).
+
+Viewport and window invalidation and intents are no-ops on the loader
+thread.
+---
+ src/openrct2-ui/WindowManager.cpp             |  4 ++
+ src/openrct2-ui/title/TitleSequencePlayer.cpp | 39 +++++++++++++-
+ src/openrct2/Context.cpp                      |  2 +
+ src/openrct2/Date.cpp                         |  3 +-
+ src/openrct2/GameState.cpp                    | 34 +++++++++---
+ src/openrct2/GameState.h                      | 10 ++++
+ src/openrct2/ParkImporter.h                   |  7 +++
+ src/openrct2/interface/Viewport.cpp           |  6 +++
+ src/openrct2/park/ParkFile.cpp                | 48 +++++++++++++++--
+ src/openrct2/world/Map.cpp                    | 53 ++++++++++++-------
+ src/openrct2/world/Map.h                      | 12 +++++
+ src/openrct2/world/Park.cpp                   |  7 ++-
+ 12 files changed, 193 insertions(+), 32 deletions(-)
+
+diff --git a/src/openrct2-ui/WindowManager.cpp b/src/openrct2-ui/WindowManager.cpp
+index 5bfd1bf..2ea8668 100644
+--- a/src/openrct2-ui/WindowManager.cpp
++++ b/src/openrct2-ui/WindowManager.cpp
+@@ -1254,6 +1254,8 @@ public:
+     template<typename TPred>
+     static void InvalidateByCondition(TPred pred)
+     {
++        if (isImportingInBackground())
++            return; // Windows belong to the main thread
+         WindowVisitEach([pred](WindowBase* w) {
+             if (pred(w))
+             {
+@@ -1291,6 +1293,8 @@ public:
+      */
+     void InvalidateAll() override
+     {
++        if (isImportingInBackground())
++            return;
+         WindowVisitEach([](WindowBase* w) { w->invalidate(); });
+     }
+ 
+diff --git a/src/openrct2-ui/title/TitleSequencePlayer.cpp b/src/openrct2-ui/title/TitleSequencePlayer.cpp
+index 83bc7a0..a828c94 100644
+--- a/src/openrct2-ui/title/TitleSequencePlayer.cpp
++++ b/src/openrct2-ui/title/TitleSequencePlayer.cpp
+@@ -26,7 +26,10 @@
+ #include <openrct2/drawing/Drawing.h>
+ #include <openrct2/drawing/Palette.h>
+ #include <openrct2/drawing/ScrollingText.h>
++#include <openrct2/Date.h>
+ #include <openrct2/entity/EntityRegistry.h>
++#include <openrct2/entity/PatrolArea.h>
++#include <openrct2/management/Research.h>
+ #include <openrct2/interface/Viewport.h>
+ #include <openrct2/interface/WindowBase.h>
+ #include <openrct2/localisation/StringIds.h>
+@@ -42,6 +45,7 @@
+ #include <openrct2/scenes/title/TitleSequencePlayer.h>
+ #include <openrct2/ui/WindowManager.h>
+ #include <openrct2/windows/Intent.h>
++#include <openrct2/world/Map.h>
+ #include <openrct2/world/MapAnimation.h>
+ #include <stdexcept>
+ 
+@@ -69,6 +73,8 @@ namespace OpenRCT2::Title
+             std::unique_ptr<IParkImporter> importer;
+             std::optional<ParkLoadResult> result;
+             std::vector<std::unique_ptr<Object>> objects;
++            std::unique_ptr<GameState_t> gameState; // the imported park (the old park after the swap)
++            std::unique_ptr<TileIndexState> tileIndex;
+         };
+         std::unique_ptr<BackgroundLoad> _background;
+         std::vector<std::unique_ptr<BackgroundLoad>> _stale; // superseded loads, joined once done
+@@ -497,6 +503,25 @@ namespace OpenRCT2::Title
+                 load.result.emplace(load.importer->LoadFromStream(parkHandle->Stream.get(), false));
+ 
+                 load.objects = GetContext()->GetObjectManager().PreloadObjects(load.result->RequiredObjects);
++
++                // Import into a game state of its own; getGameState() and the map index on this
++                // thread point at it until the import is done.
++                load.gameState = std::make_unique<GameState_t>();
++                load.tileIndex = std::make_unique<TileIndexState>();
++                setThreadGameState(load.gameState.get());
++                MapUseThreadTileIndex(load.tileIndex.get());
++                try
++                {
++                    load.importer->Import(*load.gameState);
++                }
++                catch (...)
++                {
++                    setThreadGameState(nullptr);
++                    MapUseThreadTileIndex(nullptr);
++                    throw;
++                }
++                setThreadGameState(nullptr);
++                MapUseThreadTileIndex(nullptr);
+                 load.ok = true;
+             }
+             catch (const std::exception& e)
+@@ -522,8 +547,18 @@ namespace OpenRCT2::Title
+                 auto& objectManager = GetContext()->GetObjectManager();
+                 objectManager.LoadObjects(load.result->RequiredObjects, std::move(load.objects), false);
+ 
+-                auto& gameState = getGameState();
+-                load.importer->Import(gameState);
++                // Swap the imported park in and redo what the import could not touch from its thread.
++                swapGameState(load.gameState);
++                MapSwapTileIndex(*load.tileIndex);
++                MapAnimations::ClearAll();
++                auto mapIntent = Intent(INTENT_ACTION_MAP);
++                ContextBroadcastIntent(&mapIntent);
++                gameStateInitGlobals();
++                SetEveryRideTypeNotInvented();
++                SetAllSceneryItemsInvented();
++                UpdateConsolidatedPatrolAreas();
++                gCurrentRealTimeTicks = 0;
++                load.importer->FinishImport(getGameState());
+ 
+                 MapAnimations::MarkAllTiles();
+                 PrepareParkForPlayback();
+diff --git a/src/openrct2/Context.cpp b/src/openrct2/Context.cpp
+index 448b4c9..75c5a7d 100644
+--- a/src/openrct2/Context.cpp
++++ b/src/openrct2/Context.cpp
+@@ -1720,6 +1720,8 @@ namespace OpenRCT2
+ 
+     void ContextBroadcastIntent(Intent* intent)
+     {
++        if (isImportingInBackground())
++            return; // Windows belong to the main thread
+         auto windowManager = GetWindowManager();
+         windowManager->BroadcastIntent(*intent);
+     }
+diff --git a/src/openrct2/Date.cpp b/src/openrct2/Date.cpp
+index af1d5af..b185231 100644
+--- a/src/openrct2/Date.cpp
++++ b/src/openrct2/Date.cpp
+@@ -158,5 +158,6 @@ void ResetDate()
+ {
+     auto& gameState = getGameState();
+     gameState.date = {};
+-    gCurrentRealTimeTicks = 0;
++    if (!isImportingInBackground())
++        gCurrentRealTimeTicks = 0;
+ }
+diff --git a/src/openrct2/GameState.cpp b/src/openrct2/GameState.cpp
+index 28ebaeb..15c6302 100644
+--- a/src/openrct2/GameState.cpp
++++ b/src/openrct2/GameState.cpp
+@@ -40,10 +40,21 @@ using namespace OpenRCT2::Scripting;
+ namespace OpenRCT2
+ {
+     static auto _gameState = std::make_unique<GameState_t>();
++    static thread_local GameState_t* _threadGameState = nullptr;
+ 
+     GameState_t& getGameState()
+     {
+-        return *_gameState;
++        return _threadGameState != nullptr ? *_threadGameState : *_gameState;
++    }
++
++    void setThreadGameState(GameState_t* state)
++    {
++        _threadGameState = state;
++    }
++
++    bool isImportingInBackground()
++    {
++        return _threadGameState != nullptr;
+     }
+ 
+     void swapGameState(std::unique_ptr<GameState_t>& otherState)
+@@ -67,15 +78,29 @@ namespace OpenRCT2
+         BannerInit(gameState);
+         RideInitAll();
+         gameState.entities.resetAllEntities();
+-        UpdateConsolidatedPatrolAreas();
++        // On a background import, everything outside the game state (UI, palette,
++        // script storage, animation and patrol caches) is done by gameStateInitGlobals() after the swap.
++        const bool background = isImportingInBackground();
++        if (!background)
++            UpdateConsolidatedPatrolAreas();
+         ResetDate();
+-        Weather::reset();
++        if (!background)
++            Weather::reset();
+         News::InitQueue(gameState.park);
+ 
+         gInMapInitCode = false;
+ 
+         gameState.nextGuestNumber = 1;
+ 
++        CheatsReset();
++        ClearRestrictedScenery();
++
++        if (!background)
++            gameStateInitGlobals();
++    }
++
++    void gameStateInitGlobals()
++    {
+         ContextInit();
+ 
+         auto sceneryIntent = Intent(INTENT_ACTION_SET_DEFAULT_SCENERY_CONFIG);
+@@ -86,9 +111,6 @@ namespace OpenRCT2
+ 
+         Drawing::LoadPalette();
+ 
+-        CheatsReset();
+-        ClearRestrictedScenery();
+-
+ #ifdef ENABLE_SCRIPTING
+         auto& scriptEngine = GetContext()->GetScriptEngine();
+         scriptEngine.ClearParkStorage();
+diff --git a/src/openrct2/GameState.h b/src/openrct2/GameState.h
+index b2d1474..eda8300 100644
+--- a/src/openrct2/GameState.h
++++ b/src/openrct2/GameState.h
+@@ -99,7 +99,17 @@ namespace OpenRCT2
+     GameState_t& getGameState();
+     void swapGameState(std::unique_ptr<GameState_t>& otherState);
+ 
++    /**
++     * Makes getGameState() on the calling thread return `state` (nullptr: the live
++     * state), so a park can be imported into a separate game state on another thread.
++     */
++    void setThreadGameState(GameState_t* state);
++    /** True on a thread that is importing into its own game state (see setThreadGameState). */
++    bool isImportingInBackground();
++
+     void gameStateInitAll(GameState_t& gameState, const TileCoordsXY& mapSize);
++    /** The part of gameStateInitAll outside the game state; run after swapping in a background import. */
++    void gameStateInitGlobals();
+     void gameStateTick();
+     void gameStateUpdateLogic();
+ 
+diff --git a/src/openrct2/ParkImporter.h b/src/openrct2/ParkImporter.h
+index ee07b08..271bd63 100644
+--- a/src/openrct2/ParkImporter.h
++++ b/src/openrct2/ParkImporter.h
+@@ -55,6 +55,13 @@ public:
+         = 0;
+ 
+     virtual void Import(OpenRCT2::GameState_t& gameState) = 0;
++    /**
++     * The steps of Import that need the main thread and the park's objects loaded,
++     * for an Import that ran on another thread (see setThreadGameState). Call after the swap.
++     */
++    virtual void FinishImport(OpenRCT2::GameState_t& gameState)
++    {
++    }
+     virtual bool PopulateIndexEntry(ScenarioIndexEntry* dst) = 0;
+     virtual OpenRCT2::ParkPreview GetParkPreview() = 0;
+ };
+diff --git a/src/openrct2/interface/Viewport.cpp b/src/openrct2/interface/Viewport.cpp
+index 386e1f0..7ad587a 100644
+--- a/src/openrct2/interface/Viewport.cpp
++++ b/src/openrct2/interface/Viewport.cpp
+@@ -223,6 +223,8 @@ namespace OpenRCT2
+ 
+     void ViewportsInvalidate(const int32_t x, const int32_t y, const int32_t z0, const int32_t z1, const ZoomLevel maxZoom)
+     {
++        if (isImportingInBackground())
++            return; // Nothing of a background import is on screen
+         for (const auto& viewport : _viewports)
+         {
+             if (viewport.isVisible)
+@@ -235,6 +237,8 @@ namespace OpenRCT2
+     void ViewportsInvalidate(
+         const CoordsXYZ& pos, const int32_t width, const int32_t minHeight, const int32_t maxHeight, const ZoomLevel maxZoom)
+     {
++        if (isImportingInBackground())
++            return; // Nothing of a background import is on screen
+         for (auto& vp : _viewports)
+         {
+             if (vp.isVisible && (maxZoom == ZoomLevel{ -1 } || vp.zoom <= ZoomLevel{ maxZoom }))
+@@ -250,6 +254,8 @@ namespace OpenRCT2
+ 
+     void ViewportsInvalidate(const ScreenRect& screenRect, const ZoomLevel maxZoom)
+     {
++        if (isImportingInBackground())
++            return; // Nothing of a background import is on screen
+         for (auto& vp : _viewports)
+         {
+             if (vp.isVisible && (maxZoom == ZoomLevel{ -1 } || vp.zoom <= ZoomLevel{ maxZoom }))
+diff --git a/src/openrct2/park/ParkFile.cpp b/src/openrct2/park/ParkFile.cpp
+index 9add455..0314a80 100644
+--- a/src/openrct2/park/ParkFile.cpp
++++ b/src/openrct2/park/ParkFile.cpp
+@@ -126,6 +126,10 @@ namespace OpenRCT2
+         std::array<TerrainSurfaceMapping, kMaxTerrainSurfaceObjects> _terrainSurfaceMap{};
+         std::array<Drawing::Colour, kMaxTerrainEdgeObjects> _terrainEdgeMap{};
+ 
++        // Steps deferred from a background import to FinishImport.
++        bool _deferredPeepAnimationConversion = false;
++        bool _deferredPluginStorage = false;
++
+         void ThrowIfIncompatibleVersion()
+         {
+             const auto& header = _os->getHeader();
+@@ -197,6 +201,24 @@ namespace OpenRCT2
+             gameState.scenarioOptions.initialCash = gameState.park.cash;
+         }
+ 
++        void FinishImport(GameState_t& gameState)
++        {
++            if (_deferredPeepAnimationConversion)
++            {
++                _deferredPeepAnimationConversion = false;
++                ConvertPeepAnimationTypeToObjects(gameState);
++            }
++            if (_deferredPluginStorage)
++            {
++                _deferredPluginStorage = false;
++#ifdef ENABLE_SCRIPTING
++                auto& scriptEngine = GetContext()->GetScriptEngine();
++                scriptEngine.ClearParkStorage();
++                scriptEngine.SetParkStorageFromJSON(gameState.pluginStorage, gameState.scenarioFileName);
++#endif
++            }
++        }
++
+         void Save(GameState_t& gameState, IStream& stream, int16_t compressionLevel)
+         {
+             OrcaStream os(stream, OrcaStream::Mode::writing, compressionLevel);
+@@ -639,8 +661,11 @@ namespace OpenRCT2
+                 if (cs.getMode() == OrcaStream::Mode::reading)
+                 {
+                     const uint8_t isPaused = cs.read<uint8_t>();
+-                    gGamePaused &= ~GAME_PAUSED_NORMAL;
+-                    gGamePaused |= (isPaused & GAME_PAUSED_NORMAL);
++                    if (!isImportingInBackground()) // The title screen unpauses anyway
++                    {
++                        gGamePaused &= ~GAME_PAUSED_NORMAL;
++                        gGamePaused |= (isPaused & GAME_PAUSED_NORMAL);
++                    }
+                 }
+                 else
+                 {
+@@ -839,6 +864,11 @@ namespace OpenRCT2
+ 
+             if (os.getMode() == OrcaStream::Mode::reading)
+             {
++                if (isImportingInBackground())
++                {
++                    _deferredPluginStorage = true;
++                    return;
++                }
+ #ifdef ENABLE_SCRIPTING
+                 auto& scriptEngine = GetContext()->GetScriptEngine();
+                 scriptEngine.SetParkStorageFromJSON(gameState.pluginStorage, gameState.scenarioFileName);
+@@ -2833,7 +2863,10 @@ namespace OpenRCT2
+                 auto version = os.getHeader().targetVersion;
+                 if (version < kPeepAnimationObjectsVersion)
+                 {
+-                    ConvertPeepAnimationTypeToObjects(gameState);
++                    if (isImportingInBackground())
++                        _deferredPeepAnimationConversion = true; // needs the park's objects loaded
++                    else
++                        ConvertPeepAnimationTypeToObjects(gameState);
+                 }
+             }
+             else
+@@ -2969,6 +3002,15 @@ public:
+     void Import(GameState_t& gameState) override
+     {
+         _parkFile->Import(gameState);
++        if (isImportingInBackground())
++            return; // the rest needs the park's objects loaded: FinishImport
++        ResearchDetermineFirstOfType();
++        GameFixSaveVars();
++    }
++
++    void FinishImport(GameState_t& gameState) override
++    {
++        _parkFile->FinishImport(gameState);
+         ResearchDetermineFirstOfType();
+         GameFixSaveVars();
+     }
+diff --git a/src/openrct2/world/Map.cpp b/src/openrct2/world/Map.cpp
+index df36765..3180dd0 100644
+--- a/src/openrct2/world/Map.cpp
++++ b/src/openrct2/world/Map.cpp
+@@ -79,29 +79,44 @@ namespace OpenRCT2
+ 
+     bool gMapLandRightsUpdateSuccess;
+ 
+-    static TilePointerIndex<TileElement> _tileIndex;
++    static TileIndexState _mainTileIndex;
++    static thread_local TileIndexState* _threadTileIndex = nullptr;
+     static TilePointerIndex<TileElement> _tileIndexStash;
+     static std::vector<TileElement> _tileElementsStash;
+-    static size_t _tileElementsInUse;
+     static size_t _tileElementsInUseStash;
+     static TileCoordsXY _mapSizeStash;
+ 
++    static TileIndexState& TileIndex()
++    {
++        return _threadTileIndex != nullptr ? *_threadTileIndex : _mainTileIndex;
++    }
++
++    void MapUseThreadTileIndex(TileIndexState* state)
++    {
++        _threadTileIndex = state;
++    }
++
++    void MapSwapTileIndex(TileIndexState& state)
++    {
++        std::swap(_mainTileIndex, state);
++    }
++
+     void StashMap()
+     {
+         auto& gameState = getGameState();
+-        _tileIndexStash = std::move(_tileIndex);
++        _tileIndexStash = std::move(TileIndex().index);
+         _tileElementsStash = std::move(gameState.tileElements);
+         _mapSizeStash = gameState.mapSize;
+-        _tileElementsInUseStash = _tileElementsInUse;
++        _tileElementsInUseStash = TileIndex().elementsInUse;
+     }
+ 
+     void UnstashMap()
+     {
+         auto& gameState = getGameState();
+-        _tileIndex = std::move(_tileIndexStash);
++        TileIndex().index = std::move(_tileIndexStash);
+         gameState.tileElements = std::move(_tileElementsStash);
+         gameState.mapSize = _mapSizeStash;
+-        _tileElementsInUse = _tileElementsInUseStash;
++        TileIndex().elementsInUse = _tileElementsInUseStash;
+     }
+ 
+     CoordsXY GetMapSizeUnits()
+@@ -128,9 +143,9 @@ namespace OpenRCT2
+     void SetTileElements(GameState_t& gameState, std::vector<TileElement>&& tileElements)
+     {
+         gameState.tileElements = std::move(tileElements);
+-        _tileIndex = TilePointerIndex<TileElement>(
++        TileIndex().index = TilePointerIndex<TileElement>(
+             kMaximumMapSizeTechnical, gameState.tileElements.data(), gameState.tileElements.size());
+-        _tileElementsInUse = gameState.tileElements.size();
++        TileIndex().elementsInUse = gameState.tileElements.size();
+     }
+ 
+     static TileElement GetDefaultSurfaceElement(Drawing::Colour colour = Drawing::Colour::black)
+@@ -232,7 +247,7 @@ namespace OpenRCT2
+     static bool MapCheckFreeElementsAndReorganise(size_t numElementsOnTile, size_t numNewElements)
+     {
+         // Check hard cap on num in use tiles (this would be the size of _tileElements immediately after a reorg)
+-        if (_tileElementsInUse + numNewElements > kMaxTileElements)
++        if (TileIndex().elementsInUse + numNewElements > kMaxTileElements)
+         {
+             return false;
+         }
+@@ -246,7 +261,7 @@ namespace OpenRCT2
+         }
+ 
+         // if space issue is due to fragmentation then Reorg Tiles without increasing capacity
+-        if (gameState.tileElements.size() > totalElementsRequired + _tileElementsInUse)
++        if (gameState.tileElements.size() > totalElementsRequired + TileIndex().elementsInUse)
+         {
+             ReorganiseTileElements();
+             // This check is not expected to fail
+@@ -332,7 +347,7 @@ namespace OpenRCT2
+             LOG_VERBOSE("Trying to access element outside of range");
+             return nullptr;
+         }
+-        return _tileIndex.GetFirstElementAt(tilePos);
++        return TileIndex().index.GetFirstElementAt(tilePos);
+     }
+ 
+     TileElement* MapGetFirstElementAt(const CoordsXY& elementPos)
+@@ -390,7 +405,7 @@ namespace OpenRCT2
+             LOG_ERROR("Trying to access element outside of range");
+             return;
+         }
+-        _tileIndex.SetTile(tilePos, elements);
++        TileIndex().index.SetTile(tilePos, elements);
+     }
+ 
+     SurfaceElement* MapGetSurfaceElementAt(const TileCoordsXY& coords)
+@@ -447,6 +462,8 @@ namespace OpenRCT2
+         gameState.widePathTileLoopPosition = {};
+         gameState.mapSize = size;
+         MapRemoveOutOfRangeElements();
++        if (isImportingInBackground())
++            return; // Done after the swap (see gameStateInitGlobals)
+         MapAnimations::ClearAll();
+ 
+         auto intent = Intent(INTENT_ACTION_MAP);
+@@ -1000,7 +1017,7 @@ namespace OpenRCT2
+         // Mark the latest element with the last element flag.
+         (tileElement - 1)->setLastForTile(true);
+         tileElement->baseHeight = kMaxTileElementHeight;
+-        _tileElementsInUse--;
++        TileIndex().elementsInUse--;
+         auto& gameState = getGameState();
+         if (tileElement == &gameState.tileElements.back())
+         {
+@@ -1076,7 +1093,7 @@ namespace OpenRCT2
+     static size_t CountElementsOnTile(const CoordsXY& loc)
+     {
+         size_t count = 0;
+-        auto* element = _tileIndex.GetFirstElementAt(TileCoordsXY(loc));
++        auto* element = TileIndex().index.GetFirstElementAt(TileCoordsXY(loc));
+         do
+         {
+             count++;
+@@ -1095,7 +1112,7 @@ namespace OpenRCT2
+         auto& gameState = getGameState();
+         auto oldSize = gameState.tileElements.size();
+         gameState.tileElements.resize(gameState.tileElements.size() + numElementsOnTile + numNewElements);
+-        _tileElementsInUse += numNewElements;
++        TileIndex().elementsInUse += numNewElements;
+         return &gameState.tileElements[oldSize];
+     }
+ 
+@@ -1109,14 +1126,14 @@ namespace OpenRCT2
+ 
+         auto numElementsOnTileOld = CountElementsOnTile(loc);
+         auto* newTileElement = AllocateTileElements(numElementsOnTileOld, 1);
+-        auto* originalTileElement = _tileIndex.GetFirstElementAt(tileLoc);
++        auto* originalTileElement = TileIndex().index.GetFirstElementAt(tileLoc);
+         if (newTileElement == nullptr)
+         {
+             return nullptr;
+         }
+ 
+         // Set tile index pointer to point to new element block
+-        _tileIndex.SetTile(tileLoc, newTileElement);
++        TileIndex().index.SetTile(tileLoc, newTileElement);
+ 
+         bool isLastForTile = false;
+         if (originalTileElement == nullptr)
+@@ -2159,7 +2176,7 @@ namespace OpenRCT2
+                 if (x > 0 && y > 0 && x < gameState.mapSize.x - 1 && y < gameState.mapSize.y - 1 && srcX > 0 && srcY > 0
+                     && srcX < gameState.mapSize.x - 1 && srcY < gameState.mapSize.y - 1)
+                 {
+-                    auto srcTile = _tileIndex.GetFirstElementAt(TileCoordsXY(srcX, srcY));
++                    auto srcTile = TileIndex().index.GetFirstElementAt(TileCoordsXY(srcX, srcY));
+                     do
+                     {
+                         newElements.push_back(*srcTile);
+diff --git a/src/openrct2/world/Map.h b/src/openrct2/world/Map.h
+index 95782ac..b3a16fd 100644
+--- a/src/openrct2/world/Map.h
++++ b/src/openrct2/world/Map.h
+@@ -12,6 +12,7 @@
+ #include "../Identifiers.h"
+ #include "Location.hpp"
+ #include "MapOwnership.h"
++#include "TilePointerIndex.hpp"
+ #include "tile_element/TileElement.h"
+ 
+ #include <array>
+@@ -57,6 +58,17 @@ namespace OpenRCT2
+     void ReorganiseTileElements();
+     const std::vector<TileElement>& GetTileElements();
+     void SetTileElements(GameState_t& gameState, std::vector<TileElement>&& tileElements);
++
++    /** The tile index of a game state; one per game state being imported in the background. */
++    struct TileIndexState
++    {
++        TilePointerIndex<TileElement> index;
++        size_t elementsInUse{};
++    };
++    /** Makes map lookups on the calling thread use `state` (nullptr: the live map). */
++    void MapUseThreadTileIndex(TileIndexState* state);
++    /** Exchanges the live tile index with `state`; call with swapGameState on the main thread. */
++    void MapSwapTileIndex(TileIndexState& state);
+     void StashMap();
+     void UnstashMap();
+     std::vector<TileElement> GetReorganisedTileElementsWithoutGhosts();
+diff --git a/src/openrct2/world/Park.cpp b/src/openrct2/world/Park.cpp
+index 5935a8e..18ac344 100644
+--- a/src/openrct2/world/Park.cpp
++++ b/src/openrct2/world/Park.cpp
+@@ -278,9 +278,12 @@ namespace OpenRCT2::Park
+         ResearchResetItems(gameState);
+         FinanceInit();
+ 
+-        SetEveryRideTypeNotInvented();
++        if (!isImportingInBackground()) // Research flags are global, redone after the swap
++        {
++            SetEveryRideTypeNotInvented();
+ 
+-        SetAllSceneryItemsInvented();
++            SetAllSceneryItemsInvented();
++        }
+ 
+         park.entranceFee = 10.00_GBP;
+ 

@@ -1,0 +1,52 @@
+# Speed ladder, second run (owner, 2026-10-28: too slow is no concern; 100 px/s was the first
+# smooth step, 400 still acceptable but too brief to judge): straight pans of 1536 screen pixels
+# (about 80% of a 1920-wide window) at zoom -2, -1, 0 and 1, each at 200, 300, 400, 600 and
+# 800 px/s in that order, with 2 s still before each. Rate each: smooth, acceptable or too fast.
+# No angle or zoom changes, and no zooming out (zoom_threshold is set out of reach). About 2 min.
+# The first run (512 px at 25-400 px/s) is in the git history.
+# Install (close OpenRCT2 first), with the camera log to confirm the speeds:
+#   python3 tools/mksequence.py playlists/speed-ladder.toml --install --ignore-edits --keep-palette --camera-log
+#   python3 tools/cameralog.py build/openrct2-run.log
+# Paths are relative to this file. Installing it replaces the installed playlist.
+
+name = "RCT Screensaver Speed Ladder"
+order = "playlist"
+layout = "plugin"
+
+[views]
+fit = false             # play the views exactly as listed
+zoom_threshold = 100000 # never travel zoomed out
+
+[[park]]
+file = "../ExampleParks/220710-rct2-j_k-ghillie_dhu.zip"
+name = "Ghillie Dhu (speed ladder)"
+view = [
+    # zoom -2: 6 tiles apart on each axis
+    { x = 53, y = 31, z = 228, rotation = 0, zoom = -2, hold = 9.68, pan = 0.7934 },  # 200 px/s, 7.68 s
+    { x = 47, y = 37, z = 228, rotation = 0, zoom = -2, hold = 7.12, pan = 0.7191 },  # 300 px/s, 5.12 s
+    { x = 53, y = 31, z = 228, rotation = 0, zoom = -2, hold = 5.84, pan = 0.6575 },  # 400 px/s, 3.84 s
+    { x = 47, y = 37, z = 228, rotation = 0, zoom = -2, hold = 4.56, pan = 0.5614 },  # 600 px/s, 2.56 s
+    { x = 53, y = 31, z = 228, rotation = 0, zoom = -2, hold = 3.92, pan = 0.4898 },  # 800 px/s, 1.92 s
+    { x = 47, y = 37, z = 228, rotation = 0, zoom = -2, hold = 2.0 },  # end of zoom -2: cut
+    # zoom -1: 12 tiles apart on each axis
+    { x = 56, y = 28, z = 228, rotation = 0, zoom = -1, hold = 9.68, pan = 0.7934 },  # 200 px/s, 7.68 s
+    { x = 44, y = 40, z = 228, rotation = 0, zoom = -1, hold = 7.12, pan = 0.7191 },  # 300 px/s, 5.12 s
+    { x = 56, y = 28, z = 228, rotation = 0, zoom = -1, hold = 5.84, pan = 0.6575 },  # 400 px/s, 3.84 s
+    { x = 44, y = 40, z = 228, rotation = 0, zoom = -1, hold = 4.56, pan = 0.5614 },  # 600 px/s, 2.56 s
+    { x = 56, y = 28, z = 228, rotation = 0, zoom = -1, hold = 3.92, pan = 0.4898 },  # 800 px/s, 1.92 s
+    { x = 44, y = 40, z = 228, rotation = 0, zoom = -1, hold = 2.0 },  # end of zoom -1: cut
+    # zoom 0: 24 tiles apart on each axis
+    { x = 62, y = 22, z = 228, rotation = 0, zoom = 0, hold = 9.68, pan = 0.7934 },  # 200 px/s, 7.68 s
+    { x = 38, y = 46, z = 228, rotation = 0, zoom = 0, hold = 7.12, pan = 0.7191 },  # 300 px/s, 5.12 s
+    { x = 62, y = 22, z = 228, rotation = 0, zoom = 0, hold = 5.84, pan = 0.6575 },  # 400 px/s, 3.84 s
+    { x = 38, y = 46, z = 228, rotation = 0, zoom = 0, hold = 4.56, pan = 0.5614 },  # 600 px/s, 2.56 s
+    { x = 62, y = 22, z = 228, rotation = 0, zoom = 0, hold = 3.92, pan = 0.4898 },  # 800 px/s, 1.92 s
+    { x = 38, y = 46, z = 228, rotation = 0, zoom = 0, hold = 2.0 },  # end of zoom 0: cut
+    # zoom 1: 48 tiles apart on each axis
+    { x = 74, y = 10, z = 228, rotation = 0, zoom = 1, hold = 9.68, pan = 0.7934 },  # 200 px/s, 7.68 s
+    { x = 26, y = 58, z = 228, rotation = 0, zoom = 1, hold = 7.12, pan = 0.7191 },  # 300 px/s, 5.12 s
+    { x = 74, y = 10, z = 228, rotation = 0, zoom = 1, hold = 5.84, pan = 0.6575 },  # 400 px/s, 3.84 s
+    { x = 26, y = 58, z = 228, rotation = 0, zoom = 1, hold = 4.56, pan = 0.5614 },  # 600 px/s, 2.56 s
+    { x = 74, y = 10, z = 228, rotation = 0, zoom = 1, hold = 3.92, pan = 0.4898 },  # 800 px/s, 1.92 s
+    { x = 26, y = 58, z = 228, rotation = 0, zoom = 1, hold = 2.0 },  # end of zoom 1: cut
+]

@@ -1,0 +1,76 @@
+# Yucca Desert Park (MoreParks survey). Ships Special Effects Editor: a one-off timeline from the
+# park's load, hard-coded in its sfxEditor-1.0.7.js (alienInvasionAnimation, invasionTimeDelay
+# 2400 ticks; the plugin's tickCounter starts with it, as the park's clock does).
+[match]
+name = "Yucca Desert Park"
+
+# Timeline views (owner, 2026-10-30: one view per UFO, on schedule, in place of the overview
+# show): each cuts in on the park's clock, the camera panning there `lead` seconds before the
+# event, and stays `ticks` (plus a 2 s tail); the park's views loop until the last has played.
+# The finale's events overlap, so their ticks are staggered to follow one another: the butte
+# from 6000, the cow (abducted 6100-6626) from 6300, the entrance rocks (rising, then spinning)
+# from 6750, the crater from 7100 (done about 7540). Left out: the cliff (6075) and the coaster
+# station (6275), which overlap the butte and the cow, and the shack fire, which follows the
+# park's date rather than its ticks.
+[extras]
+animations = true
+animation_views = 8
+
+[[spot]]
+companion = "Special Effects Editor"
+name = "UFO at the shack"
+boxes = [[82, 85, 84, 87]]
+zoom = 0
+cue = {tick = 2400, lead = 4, ticks = 480, cut = true}
+
+[[spot]]
+companion = "Special Effects Editor"
+name = "UFO over the water tower"
+boxes = [[100, 117, 102, 119]]
+zoom = 0
+cue = {tick = 3200, lead = 4, ticks = 480, cut = true}
+
+[[spot]]
+companion = "Special Effects Editor"
+name = "UFO over the ghost town"
+boxes = [[129, 62, 131, 64]]
+zoom = 0
+cue = {tick = 4200, lead = 4, ticks = 480, cut = true}
+
+[[spot]]
+companion = "Special Effects Editor"
+name = "UFO terraforming the butte"
+boxes = [[136, 103, 141, 108]]
+zoom = 0
+cue = {tick = 6000, lead = 4, ticks = 200, cut = true}
+
+[[spot]]
+companion = "Special Effects Editor"
+name = "Cow abduction"
+boxes = [[90, 97, 95, 102]]
+zoom = 0
+cue = {tick = 6300, lead = 3, ticks = 320, cut = true}
+
+[[spot]]
+companion = "Special Effects Editor"
+name = "Rocks at the entrance"
+boxes = [[83, 109, 85, 111]]
+zoom = 0
+cue = {tick = 6750, lead = 3, ticks = 240, cut = true}
+
+[[spot]]
+companion = "Special Effects Editor"
+name = "Large UFO over the crater"
+boxes = [[110, 81, 118, 89]]
+zoom = 0
+cue = {tick = 7100, lead = 4, ticks = 440, cut = true}
+
+# The invasion as one overview show, held until the timeline is over (the timeline views above
+# replace it; kept for playlists that name it).
+[show.invasion]
+companion = "Special Effects Editor"
+steps = [{ticks = 9000}]
+spot = {boxes = [[110, 81, 118, 89], [83, 109, 85, 111], [82, 85, 84, 87], [133, 75, 135, 77],
+                 [90, 97, 95, 102], [100, 117, 102, 119], [129, 62, 131, 64], [118, 112, 123, 117],
+                 [136, 103, 141, 108]]}
+hold = 240.0

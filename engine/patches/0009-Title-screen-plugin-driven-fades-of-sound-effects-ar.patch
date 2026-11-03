@@ -1,0 +1,186 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: RCT Screensaver <noreply@example.invalid>
+Date: Wed, 28 Oct 2026 00:43:44 +0000
+Subject: [PATCH] Title screen: plugin-driven fades of sound effects around
+ view changes
+
+TitleSequence.fadeSounds(level, ms) ramps the title screen's sound effects and positional ride music to level (0 to 1) over ms of real time, starting from the current level. The mixer applies it to the sound effects group on the title screen; ride music channels apply it on top of the park cross-fade, except a park's even soundtrack and circus music (a sound effect, faded by the mixer). Any scene change resets it. The screensaver plugin fades out ahead of each scheduled view change and fades in on each new view.
+---
+ src/openrct2-ui/audio/AudioMixer.cpp          |  1 +
+ src/openrct2-ui/scripting/ScTitleSequence.hpp | 16 +++++++++
+ src/openrct2/audio/Audio.cpp                  | 35 +++++++++++++++++++
+ src/openrct2/audio/Audio.h                    | 12 +++++++
+ src/openrct2/ride/RideAudio.cpp               | 12 +++++--
+ 5 files changed, 73 insertions(+), 3 deletions(-)
+
+diff --git a/src/openrct2-ui/audio/AudioMixer.cpp b/src/openrct2-ui/audio/AudioMixer.cpp
+index c7fb801..855045d 100644
+--- a/src/openrct2-ui/audio/AudioMixer.cpp
++++ b/src/openrct2-ui/audio/AudioMixer.cpp
+@@ -343,6 +343,7 @@ int32_t AudioMixer::ApplyVolume(const IAudioChannel* channel, void* buffer, size
+             if (gLegacyScene == LegacyScene::titleSequence)
+             {
+                 volumeAdjust = std::min(volumeAdjust, 0.75f);
++                volumeAdjust *= GetTitleEffectsGain();
+             }
+             break;
+         case MixerGroup::rideMusic:
+diff --git a/src/openrct2-ui/scripting/ScTitleSequence.hpp b/src/openrct2-ui/scripting/ScTitleSequence.hpp
+index f4a8401..45fb330 100644
+--- a/src/openrct2-ui/scripting/ScTitleSequence.hpp
++++ b/src/openrct2-ui/scripting/ScTitleSequence.hpp
+@@ -17,6 +17,7 @@
+     #include <openrct2/GameState.h>
+     #include <openrct2/OpenRCT2.h>
+     #include <openrct2/ParkImporter.h>
++    #include <openrct2/audio/Audio.h>
+     #include <openrct2/core/EnumMap.hpp>
+     #include <openrct2/core/String.hpp>
+     #include <openrct2/object/ObjectManager.h>
+@@ -571,6 +572,20 @@ namespace OpenRCT2::Scripting
+             return JS_TRUE;
+         }
+ 
++        /**
++         * fadeSounds(level, ms) ramps the title screen's sound effects and
++         * positional ride music to level (0 to 1) over ms of real time.
++         */
++        static JSValue fadeSounds(JSContext* ctx, JSValue thisVal, int argc, JSValue* argv)
++        {
++            double level = 1.0;
++            if (JS_ToFloat64(ctx, &level, argv[0]) < 0)
++                return JS_EXCEPTION;
++            JS_UNPACK_INT32(ms, ctx, argv[1]);
++            Audio::FadeTitleEffects(static_cast<float>(level), ms);
++            return JS_UNDEFINED;
++        }
++
+         static JSValue play(JSContext* ctx, JSValue thisVal, int argc, JSValue* argv)
+         {
+             auto index = GetManagerIndex(ctx, thisVal);
+@@ -642,6 +657,7 @@ namespace OpenRCT2::Scripting
+                 JS_CFUNC_DEF("clone", 1, ScTitleSequence::clone),
+                 JS_CFUNC_DEF("delete", 0, ScTitleSequence::delete_),
+ 
++                JS_CFUNC_DEF("fadeSounds", 2, ScTitleSequence::fadeSounds),
+                 JS_CFUNC_DEF("play", 0, ScTitleSequence::play),
+                 JS_CFUNC_DEF("seek", 1, ScTitleSequence::seek),
+                 JS_CFUNC_DEF("stop", 0, ScTitleSequence::stop),
+diff --git a/src/openrct2/audio/Audio.cpp b/src/openrct2/audio/Audio.cpp
+index e9b5914..aaa17d4 100644
+--- a/src/openrct2/audio/Audio.cpp
++++ b/src/openrct2/audio/Audio.cpp
+@@ -35,6 +35,8 @@
+ #include "AudioContext.h"
+ #include "AudioMixer.h"
+ 
++#include <atomic>
++#include <chrono>
+ #include <cmath>
+ #include <memory>
+ #include <vector>
+@@ -333,6 +335,39 @@ namespace OpenRCT2::Audio
+         StopSFX();
+         StopTitleMusic();
+         RideAudio::StopAllChannels();
++        FadeTitleEffects(1.0f, 0);
++    }
++
++    // Title screen effects fade, read by the mixer thread: a ramp from one level to another
++    static std::atomic<float> _effectsFadeFrom{ 1.0f };
++    static std::atomic<float> _effectsFadeTo{ 1.0f };
++    static std::atomic<int64_t> _effectsFadeStart{};
++    static std::atomic<int32_t> _effectsFadeMs{};
++
++    static int64_t EffectsFadeNow()
++    {
++        using namespace std::chrono;
++        return duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
++    }
++
++    float GetTitleEffectsGain()
++    {
++        const float from = _effectsFadeFrom;
++        const float to = _effectsFadeTo;
++        const int32_t ms = _effectsFadeMs;
++        const auto elapsed = EffectsFadeNow() - _effectsFadeStart;
++        if (ms <= 0 || elapsed >= ms)
++            return to;
++        return from + (to - from) * static_cast<float>(std::max<int64_t>(elapsed, 0)) / static_cast<float>(ms);
++    }
++
++    void FadeTitleEffects(float level, int32_t ms)
++    {
++        const float current = GetTitleEffectsGain();
++        _effectsFadeFrom = current;
++        _effectsFadeTo = std::clamp(level, 0.0f, 1.0f);
++        _effectsFadeStart = EffectsFadeNow();
++        _effectsFadeMs = std::max(ms, 0);
+     }
+ 
+     int32_t GetDeviceCount()
+diff --git a/src/openrct2/audio/Audio.h b/src/openrct2/audio/Audio.h
+index 6691609..4f93354 100644
+--- a/src/openrct2/audio/Audio.h
++++ b/src/openrct2/audio/Audio.h
+@@ -184,6 +184,18 @@ namespace OpenRCT2::Audio
+      */
+     void StopAll();
+ 
++    /**
++     * Title screen: ramps the sound effects and positional ride music to level (0 to 1) over ms
++     * of real time, starting from the current level. A screensaver plugin fades them around its
++     * view changes. Any scene change resets the level to 1.
++     */
++    void FadeTitleEffects(float level, int32_t ms);
++
++    /**
++     * The current title screen effects level (1 outside a fade). Safe from the mixer thread.
++     */
++    float GetTitleEffectsGain();
++
+     /**
+      * Returns the currently used device index, -1 if not available.
+      */
+diff --git a/src/openrct2/ride/RideAudio.cpp b/src/openrct2/ride/RideAudio.cpp
+index 300c384..2824184 100644
+--- a/src/openrct2/ride/RideAudio.cpp
++++ b/src/openrct2/ride/RideAudio.cpp
+@@ -47,7 +47,8 @@ namespace OpenRCT2::RideAudio
+         int16_t Volume{};
+         int16_t Pan{};
+         uint16_t Frequency{};
+-        float Gain = 1.0f; // Title screen fades
++        float Gain = 1.0f;            // Title screen fades
++        bool FadesWithView = true;    // Title screen: not the park's soundtrack
+ 
+         std::shared_ptr<IAudioChannel> Channel{};
+         IAudioSource* Source{};
+@@ -93,6 +94,7 @@ namespace OpenRCT2::RideAudio
+             Pan = src.Pan;
+             Frequency = src.Frequency;
+             Gain = src.Gain;
++            FadesWithView = src.FadesWithView;
+ 
+             swap(Channel, src.Channel);
+             swap(Source, src.Source);
+@@ -429,13 +431,17 @@ namespace OpenRCT2::RideAudio
+             {
+                 _fadingChannels.clear();
+             }
++            // The view fade (Audio::FadeTitleEffects) leaves the park's soundtrack and circus music,
++            // which is a sound effect the mixer fades, alone
++            const auto effects = GetTitleEffectsGain();
+             for (auto& channel : _fadingChannels)
+             {
+-                channel.SetGain(1.0f - progress);
++                channel.SetGain((1.0f - progress) * (channel.FadesWithView ? effects : 1.0f));
+             }
+             for (auto& channel : _musicChannels)
+             {
+-                channel.SetGain(progress);
++                channel.FadesWithView = channel.Source != nullptr && !(_soundtrackActive && channel.RideId == _soundtrack.Ride);
++                channel.SetGain(progress * (channel.FadesWithView ? effects : 1.0f));
+             }
+         }
+         // TODO Allow circus music (CSS24) to play if ride music is disabled (that should be sound)

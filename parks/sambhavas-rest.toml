@@ -1,0 +1,49 @@
+# Sambhava's Rest (Jens_J, FKCoastermind, Hex). Ships Animator (mist, honey pots); its
+# animation spots come from Animator's data in the park.
+[match]
+name = "Sambhava's Rest"
+map = [152, 152]
+
+[extras]
+animations = true       # a view on each of Animator's animations, after the generated views
+animation_hold = 20.0
+
+# Animator's "Fade mist" hides the mist objects (small scenery 1326) in tiles (50,40)-(108,81):
+# every intervalTicks (50 as saved) each mist object turns invisible with a chance of 1 in
+# randomize.factor (10) times a distance multiplier: 0.02 at the viewport's centre (certain, after
+# rounding up, within about a twelfth of the radius), 1 at randomize.viewport.maxDistance tiles
+# (13, times zoom + 3), and past that 20, over randomize.maxFactor (100), so never: the mist clears
+# where the camera looks. Only this animation reads these fields; the honey pots are others.
+# Paused during pans, where its per-tick work judders the camera (owner's live test with pan 0.6,
+# 2026-10-29). The radius grows with the zoom, so a wide view burnt off most of the mist (owner,
+# 2026-10-30): Animator runs at zoom 0 and closer, at a twentieth of its pace at zoom 1 (owner),
+# and not at all wider.
+[companion.Animator]
+pause_during_pans = true
+pause_above_zoom = 1
+zoom_rates = { "1" = 0.05 }
+
+# The owner's pace is a run every 25 ticks (2026-10-30; 15 and 20 cleared too quickly). It runs
+# five times as often with five times the factor here (and maxFactor with it, so the same radius
+# counts): the same clearing per second, spread over smaller steps, and no instant hole at the
+# centre. Back to the plain pace: intervalTicks = 25 and drop the two factor fields.
+[[companion.Animator.patch]]
+id = "fademist"
+set = { intervalTicks = 5, "frames.0.actions.0.randomize.factor" = 50, "frames.0.actions.0.randomize.maxFactor" = 500 }
+
+# Measured timing (timeline test, 2026-10-30; the owner: save measured times in the profile): the
+# honey-pot train reaches the trigger at ticks 912, 1928, 2940, 3956, 4968, 5984 (and 4 just after
+# the load), always while another view was on screen, so the waiting view at the end never caught
+# it. It cuts in on the park's clock instead.
+[animation."Unload honey pot 1"]  # merged with Load honey pot 1
+cue = {tick = 912, lead = 3, cut = true, every = 1015}
+
+# No view of its own (owner, 2026-10-31): the mist clears naturally around whatever view the
+# circuit passes through. (A first try moved its view from zoom 2, where Animator does not run,
+# to zoom 0, but overrides apply to each animation before merging, and the view kept Fade mist's
+# zoom 2.) Both animations of the mist are off.
+[animation."Make mist visible"]
+off = true
+
+[animation."Fade mist"]
+off = true

@@ -1,0 +1,26 @@
+# Base X (MoreParks survey). Ships RCTAnimator Runtime: pumps and fountains, an icicle, shooting, ice.
+[match]
+name = "Base X"
+map = [302, 302]
+
+# Owner's live review of the event views, 2026-10-30: Break Ice 1 from angle 1; Shooting 1 off (two
+# cars of ride 11 recoloured, late and off-centre).
+#
+# Measured timings (owner, 2026-10-30: save them in the profile; cameralog.py --triggers on a 15 min
+# run, three visits, first arrivals identical within 4 ticks): all four effects run off ride 3, one
+# lap of 3120 ticks (78 s), so each view cuts in on the park's clock, panning there 3 s ahead.
+[animation."Falling Icicle"]
+cue = {tick = 2004, lead = 3, cut = true, every = 3120}
+
+[animation."Break Ice 1"]
+rotation = 1
+cue = {tick = 2212, lead = 3, cut = true, every = 3120}
+
+[animation."Break Ice 2"]
+cue = {tick = 2360, lead = 3, cut = true, every = 3120}
+
+[animation."pump1"]  # the fountains view, merged with pump2, pump3 and Fountains
+cue = {tick = 2968, lead = 3, cut = true, every = 3112}
+
+[animation."Shooting 1"]
+off = true

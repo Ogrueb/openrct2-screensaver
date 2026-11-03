@@ -1,0 +1,113 @@
+# Example playlist: every park in ExampleParks/.
+# Build and install it (close OpenRCT2 first) with:
+#   python3 tools/mksequence.py playlists/example.toml --install
+# Paths are relative to this file.
+
+name = "RCT Screensaver Examples"  # title sequence (folder) name
+order = "playlist"                 # "playlist" or "shuffle" (shuffled once at build time; --seed N to repeat)
+layout = "plugin"                  # "plugin" (views driven by the plugin) or "stock" (plays without it)
+park_plugins = false               # add each park's extras from its profile (parks/*.toml): views on
+                                   # its companions' animations and shows (Constellations' eclipse)
+park_scripts = true                # run the parks' companion plugins (their bundled scripts); a park's
+                                   # own `companions = []` turns off just its own
+title_music = "keep"               # "ride": --install sets OpenRCT2's title music to the parks' ride
+                                   # music (patched engine); "theme" takes that off again; "keep": as set
+
+# Defaults for generated views, used for any park that lists no views of its own.
+# Any of these can be overridden per park under [park.views].
+[views]
+method = "spots"    # an overview of the whole park, then close-ups of its busiest spots at
+                    # varying zoom ("grid": the busiest 32-tile cells, all at one zoom)
+count = 8           # at most this many views per park (including the overview)
+cell = 32           # cell size in tiles at zoom 0; halves per zoom level in
+zoom_min = -2       # "spots": closest zoom for close-ups
+zoom_max = 1        # "spots": widest zoom for close-ups
+park_time = 30.0    # "spots": seconds per park with up to base_views views, shared between them
+base_views = 4
+view_time = 5.0     # "spots": seconds added per view beyond base_views, and the least any view gets
+overview_time = 1.0 # "spots": of each view_time added, seconds that go to the overview
+budget_tiles = 256  # "spots": views = base_views + log2(built tiles / budget_tiles), up to count
+min_score = 0.25    # skip cells with less than this fraction of the busiest cells' elements
+count_cap = 0.9     # "spots": a tile counts at most as many elements as this quantile of tiles
+layer_gap = 0.5     # "spots": split cells at empty height bands this tall (fraction of a screen)
+detail_span = 5     # "spots": weight down cells under 1/detail_span of the content's size
+activity = 0.5      # "spots": share of scoring weight for rides, track and paths (vs. scenery)
+angle_repeat = 0.5  # "spots": a spot shown again from another angle keeps this much of its score
+overview_lead = 2.0 # "spots": seconds the overview holds longer than any close-up
+rotation = "auto"   # "auto" (spots: each close-up from the angle that hides least of it), "cycle", "keep", 0-3
+zoom = 0            # "grid": -2 (closest) to 3; "keep" for the park's saved zoom
+hold = 10.0         # seconds per view ("grid" and listed views; "spots" sets its own)
+motion = "pans"     # "static": every view held still, then a cut (no ride pans, beads or nudges)
+pan = 0.6           # share of each view's hold spent panning on to the next view (0: held still,
+                    # then a cut; a view can set its own `pan`; "auto": timed from each pan's length)
+park_cap = 150.0    # "spots": longest park, seconds (the lowest-scoring views drop to fit)
+park_min = 0.0      # "spots": shortest park, seconds (still times grow to fill it; 0: off)
+time_scale = 1.0    # every generated hold and pan, and the holds below, times this (above 1 is slower)
+change_hold = 2.0   # seconds still after a pan's angle or zoom change
+arrive_hold = 1.0   # seconds a pan rests on arrival before its angle or zoom changes
+return_hold = 2.0   # seconds at the first view after the return pan, before the next park
+return_pan = true   # a park's last view pans back to its first (false: cuts to the next park)
+pan_changes = "end"  # a pan's angle and zoom change as it arrives ("end") or sets off ("start")
+circuit_variants = 1  # orders of the circuit per park (within variant_margin of the cheapest), played in turn (2 to try variety)
+circuit_reverse = false  # each order's reverse is a variant too (route = "random": the pick order's reverse)
+inertia = false     # pans start and stop slowly (on) or move at one speed (off)
+overview_pan = 0.1  # a generated overview pans this share to the first close-up, whatever `pan` is,
+overview_pan_changes = "end"  # changing angle and zoom on arrival
+pan_tolerance = 500       # fastest legible pan, screen px/s at zoom -2; the build reports pans over it
+pan_tolerance_step = 100  # less per zoom level out (zoom -1: 400, 0: 300, 1: 200)
+fit = true          # plugin moves views back onto the park's content and merges views that end
+                    # up on the same spot; a park that fits on screen gets one centred view per
+                    # angle, and one taller than the screen gets views spread up its height
+
+# author is kept as data (not shown yet); these are read from the zip and park file names,
+# not checked against New Element Designs.
+# A park entry with `use = false` stays listed (its place in the order, its settings) but is not played.
+[[park]]
+file = "../ExampleParks/230116-rct2-lurker-tin_train.zip"
+author = "Lurker"
+
+[[park]]
+file = "../ExampleParks/220710-rct2-j_k-ghillie_dhu.zip"
+author = "J_K"
+
+[[park]]
+file = "../ExampleParks/230118-rct2-xtreme97-the_koi_pond.zip"
+author = "Xtreme97"
+name = "The Koi Pond"  # shown name; the park file still carries its working title
+
+[[park]]
+file = "../ExampleParks/230206-rct2-xtreme97-qhyre_rock.zip"
+author = "Xtreme97"
+
+[[park]]
+file = "../ExampleParks/231026-rct2-jens_j-san_avaiki.zip"
+author = "Jens_J"
+
+[[park]]
+file = "../ExampleParks/240430-rct2wwtt-collabo-troubadours_et_baladins.zip"
+author = "Evergreen Gardeners (team)"
+
+[[park]]
+file = "../ExampleParks/240502-rct2tt-collabo-constellations.zip"
+author = "The Lonely Hearts Club (team)"
+
+[[park]]
+file = "../ExampleParks/240512-rct2-jens_j-fkcoastermind-hex-sambhavas_rest.zip"
+author = "Jens_J, FKCoastermind, Hex (The Lonely Hearts Club)"
+
+[[park]]
+file = "../ExampleParks/240804-rct2ww-hoobaroo-alex-a_n_d_r_e_w-gardens_of_light.zip"
+author = "Hoobaroo, Alex, A_n_d_r_e_w (Dambusters)"
+member = "Dambusters - Gardens of Light (match version).park"
+name = "Gardens of Light"  # the park is saved as "Dream"
+
+[[park]]
+file = "../ExampleParks/240818-rct2-collabo-sonnental.zip"
+author = "Dambusters (team)"
+# Explicit views replace generated ones. Coordinates are tiles; rotation, zoom and hold are
+# optional. Views set in the plugin's view editor (key E) are kept in example.views.json next
+# to this file and replace both. For example:
+# view = [
+#     { x = 80, y = 60 },
+#     { x = 120, y = 40, rotation = 2, hold = 15.0 },
+# ]

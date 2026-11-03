@@ -1,0 +1,1178 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: RCT Screensaver <noreply@example.invalid>
+Date: Tue, 3 Nov 2026 17:46:30 +0000
+Subject: [PATCH] Diagnostics: park load timings and the perf log (test builds
+ only)
+
+Test-only instrumentation, kept last so a release build drops this one
+patch.
+
+Title park loads: each load's stages (read, objects, early registration,
+register with ObjectManager's breakdown, import, swap, finish, prepare,
+total, in milliseconds) are appended to <user dir>/rct-screensaver-engine.log
+and stdout. ObjectManager::GetLastLoadTimings() reports the parts of the
+last LoadObjects call.
+
+Perf log: --perf-log <file> writes one line per drawn frame (interval,
+ticks, and the time spent in the tick, plugin calls, input, paint and
+present, with the main viewport's position, zoom and rotation), a sample
+every 10 s (process memory, handles, GDI objects, the QuickJS heap, image
+list use and fragmentation, guests, staff, vehicles, litter, all entities,
+rides) and events (each title park load's stages, marks from the plugin,
+quit). Off and free without the flag. --perf-quit-after <s> ends the run;
+--no-background-loading loads title parks the stock way for A/B runs
+(TitleSequence.backgroundLoading then reads false).
+
+Plugin API: screensaver.perfLog (bool) and screensaver.perfMark(text).
+
+Read by tools/perfreport.py; runs driven by tools/perfrun.py.
+---
+ src/openrct2-ui/scripting/ScScreensaver.hpp   |  16 +
+ src/openrct2-ui/scripting/ScTitleSequence.hpp |   2 +-
+ src/openrct2-ui/title/TitleSequencePlayer.cpp | 128 +++++++-
+ src/openrct2/Context.cpp                      |  40 ++-
+ src/openrct2/OpenRCT2.cpp                     |   1 +
+ src/openrct2/OpenRCT2.h                       |   2 +
+ src/openrct2/PerfLog.cpp                      | 302 ++++++++++++++++++
+ src/openrct2/PerfLog.h                        |  74 +++++
+ src/openrct2/command_line/RootCommands.cpp    |  10 +
+ src/openrct2/drawing/Image.cpp                |  20 ++
+ src/openrct2/libopenrct2.vcxproj              |   2 +
+ src/openrct2/object/ObjectManager.cpp         |  35 +-
+ src/openrct2/object/ObjectManager.h           |  12 +
+ src/openrct2/scripting/ScriptEngine.cpp       |   2 +
+ 14 files changed, 633 insertions(+), 13 deletions(-)
+ create mode 100644 src/openrct2/PerfLog.cpp
+ create mode 100644 src/openrct2/PerfLog.h
+
+diff --git a/src/openrct2-ui/scripting/ScScreensaver.hpp b/src/openrct2-ui/scripting/ScScreensaver.hpp
+index b00cef8..4a5d301 100644
+--- a/src/openrct2-ui/scripting/ScScreensaver.hpp
++++ b/src/openrct2-ui/scripting/ScScreensaver.hpp
+@@ -17,6 +17,7 @@
+     #include "../screensaver/Screensaver.h"
+ 
+     #include <openrct2/Context.h>
++    #include <openrct2/PerfLog.h>
+     #include <openrct2/scripting/ScriptEngine.h>
+     #include <algorithm>
+     #include <vector>
+@@ -445,6 +446,8 @@ namespace OpenRCT2::Scripting
+                 JS_CFUNC_DEF("configure", 1, ScScreensaver::configure),
+                 JS_CFUNC_DEF("onChange", 1, ScScreensaver::onChange),
+                 JS_CFUNC_DEF("onMouse", 1, ScScreensaver::onMouse),
++                JS_CGETSET_DEF("perfLog", ScScreensaver::perfLog_get, nullptr),
++                JS_CFUNC_DEF("perfMark", 1, ScScreensaver::perfMark),
+             };
+             RegisterBase(ctx, "Screensaver", nullptr, funcs);
+             ScreensaverJS::InstallListeners();
+@@ -466,6 +469,19 @@ namespace OpenRCT2::Scripting
+             return JS_NewBool(ctx, Ui::Screensaver::IsActive());
+         }
+ 
++        // The perf log (--perf-log): whether it is on, and marks into it.
++        static JSValue perfLog_get(JSContext* ctx, JSValue)
++        {
++            return JS_NewBool(ctx, PerfLog::IsEnabled());
++        }
++
++        static JSValue perfMark(JSContext* ctx, JSValue, int argc, JSValue* argv)
++        {
++            if (argc > 0 && PerfLog::IsEnabled() && JS_IsString(argv[0]))
++                PerfLog::Mark(JSToStdString(ctx, argv[0]));
++            return JS_UNDEFINED;
++        }
++
+         static JSValue launchedByFlag_get(JSContext* ctx, JSValue)
+         {
+             return JS_NewBool(ctx, Ui::Screensaver::LaunchedByFlag());
+diff --git a/src/openrct2-ui/scripting/ScTitleSequence.hpp b/src/openrct2-ui/scripting/ScTitleSequence.hpp
+index b67e2c8..7a49181 100644
+--- a/src/openrct2-ui/scripting/ScTitleSequence.hpp
++++ b/src/openrct2-ui/scripting/ScTitleSequence.hpp
+@@ -569,7 +569,7 @@ namespace OpenRCT2::Scripting
+         /** True when the engine loads title-sequence parks in the background. */
+         static JSValue backgroundLoading_get(JSContext* ctx, JSValue thisVal)
+         {
+-            return JS_TRUE;
++            return JS_NewBool(ctx, !gOpenRCT2NoBackgroundLoading);
+         }
+ 
+         /** True once the park being loaded in the background is ready to switch to. */
+diff --git a/src/openrct2-ui/title/TitleSequencePlayer.cpp b/src/openrct2-ui/title/TitleSequencePlayer.cpp
+index 19560b2..f57b95d 100644
+--- a/src/openrct2-ui/title/TitleSequencePlayer.cpp
++++ b/src/openrct2-ui/title/TitleSequencePlayer.cpp
+@@ -10,6 +10,8 @@
+ #include "TitleSequencePlayer.h"
+ 
+ #include <atomic>
++#include <chrono>
++#include <fstream>
+ #include <memory>
+ #include <optional>
+ #include <thread>
+@@ -17,10 +19,12 @@
+ #include <openrct2/Context.h>
+ #include <openrct2/Diagnostic.h>
+ #include <openrct2/Game.h>
++#include <openrct2/PlatformEnvironment.h>
+ #include <openrct2/core/Path.hpp>
+ #include <openrct2/core/String.hpp>
+ #include <openrct2/GameState.h>
+ #include <openrct2/OpenRCT2.h>
++#include <openrct2/PerfLog.h>
+ #include <openrct2/ParkImporter.h>
+ #include <openrct2/core/Console.hpp>
+ #include <openrct2/drawing/Drawing.h>
+@@ -49,6 +53,78 @@
+ #include <openrct2/world/MapAnimation.h>
+ #include <stdexcept>
+ 
++namespace OpenRCT2::Title
++{
++    // Times each stage of a title-screen park load and appends the result to
++    // <user dir>/rct-screensaver-engine.log, so the breakdown can be read without a console.
++    class LoadTimer
++    {
++        using clock = std::chrono::steady_clock;
++        std::string _park;
++        clock::time_point _start = clock::now();
++        clock::time_point _last = _start;
++        std::string _line;
++
++    public:
++        explicit LoadTimer(std::string park)
++            : _park(std::move(park))
++        {
++        }
++
++        void Stage(const char* name)
++        {
++            auto now = clock::now();
++            auto ms = std::chrono::duration_cast<std::chrono::microseconds>(now - _last).count() / 1000.0;
++            _last = now;
++            Stage(name, ms);
++        }
++
++        /** A part of the previous stage, shown in brackets. */
++        void Detail(const char* name, double ms)
++        {
++            char buf[96];
++            snprintf(buf, sizeof(buf), " [%s=%.1fms]", name, ms);
++            _line += buf;
++        }
++
++        /** A count belonging to the previous stage, shown in brackets. */
++        void Count(const char* name, size_t n)
++        {
++            char buf[96];
++            snprintf(buf, sizeof(buf), " [%s=%zu]", name, n);
++            _line += buf;
++        }
++
++        /** A stage that was timed elsewhere (for example on another thread). */
++        void Stage(const char* name, double ms)
++        {
++            char buf[96];
++            snprintf(buf, sizeof(buf), " %s=%.1fms", name, ms);
++            _line += buf;
++        }
++
++        ~LoadTimer()
++        {
++            auto total = std::chrono::duration_cast<std::chrono::microseconds>(clock::now() - _start).count() / 1000.0;
++            char buf[64];
++            snprintf(buf, sizeof(buf), " total=%.1fms", total);
++            _line += buf;
++            try
++            {
++                auto& env = GetContext()->GetPlatformEnvironment();
++                auto path = Path::Combine(env.GetDirectoryPath(DirBase::user), u8"rct-screensaver-engine.log");
++                std::ofstream out(path, std::ios::app);
++                out << "load " << _park << _line << "\n";
++                PerfLog::Event("load", _park + _line);
++            }
++            catch (...)
++            {
++            }
++            Console::WriteLine("[rct-screensaver] load %s%s", _park.c_str(), _line.c_str());
++        }
++    };
++} // namespace OpenRCT2::Title
++
+ namespace OpenRCT2::Title
+ {
+     class TitleSequencePlayer final : public ITitleSequencePlayer
+@@ -71,12 +147,17 @@ namespace OpenRCT2::Title
+             std::atomic<bool> objectsReady{ false }; // `objects` is complete; the import may still run
+             bool ok = false;
+             std::vector<ObjectEntryDescriptor> registeredEarly; // registered on the main thread before done
++            size_t numRegisteredEarly = 0;
++            double earlyMs = 0;
+             std::string error;
+             std::unique_ptr<IParkImporter> importer;
+             std::optional<ParkLoadResult> result;
+             std::vector<std::unique_ptr<Object>> objects;
+             std::unique_ptr<GameState_t> gameState; // the imported park (the old park after the swap)
+             std::unique_ptr<TileIndexState> tileIndex;
++            double readMs = 0;
++            double objectsMs = 0;
++            double importMs = 0;
+         };
+         std::unique_ptr<BackgroundLoad> _background;
+         std::vector<std::unique_ptr<BackgroundLoad>> _stale; // superseded loads, joined once done
+@@ -400,6 +481,7 @@ namespace OpenRCT2::Title
+         {
+             LOG_VERBOSE("TitleSequencePlayer::LoadParkFromFile(%s)", path.c_str());
+             bool success = false;
++            std::optional<LoadTimer> timer;
+             try
+             {
+                 if (gPreviewingTitleSequenceInGame)
+@@ -413,14 +495,17 @@ namespace OpenRCT2::Title
+                     // Inhibit viewport rendering while we're loading
+                     WindowSetFlagForAllViewports(ViewportFlag::renderingInhibited, true);
+ 
++                    timer.emplace(Path::GetFileName(path));
+                     ReportProgress(0);
+                     auto parkImporter = ParkImporter::Create(path);
+ 
+                     auto result = parkImporter->Load(path, false);
++                    timer->Stage("read");
+                     ReportProgress(10);
+ 
+                     auto& objectManager = GetContext()->GetObjectManager();
+                     objectManager.LoadObjects(result.RequiredObjects, true);
++                    timer->Stage("objects");
+                     ReportProgress(90);
+ 
+                     // TODO: Have a separate GameState and exchange once loaded.
+@@ -428,12 +513,15 @@ namespace OpenRCT2::Title
+                     parkImporter->Import(gameState);
+ 
+                     GameFixSaveVars();
++                    timer->Stage("import");
+ 
+                     ReportProgress(100);
+ 
+                     MapAnimations::MarkAllTiles();
+                 }
+                 PrepareParkForPlayback();
++                if (timer)
++                    timer->Stage("prepare");
+                 _initialLoadCommand = false;
+                 success = true;
+             }
+@@ -458,6 +546,7 @@ namespace OpenRCT2::Title
+         {
+             LOG_VERBOSE("TitleSequencePlayer::LoadParkFromStream(%s)", hintPath.c_str());
+             bool success = false;
++            std::optional<LoadTimer> timer;
+             try
+             {
+                 if (gPreviewingTitleSequenceInGame)
+@@ -471,25 +560,31 @@ namespace OpenRCT2::Title
+                     // Inhibit viewport rendering while we're loading
+                     WindowSetFlagForAllViewports(ViewportFlag::renderingInhibited, true);
+ 
++                    timer.emplace(Path::GetFileName(hintPath));
+                     ReportProgress(0);
+                     bool isScenario = ParkImporter::ExtensionIsScenario(hintPath);
+                     auto parkImporter = ParkImporter::Create(hintPath);
+ 
+                     auto result = parkImporter->LoadFromStream(stream, isScenario);
++                    timer->Stage("read");
+                     ReportProgress(30);
+ 
+                     auto& objectManager = GetContext()->GetObjectManager();
+                     objectManager.LoadObjects(result.RequiredObjects, true);
++                    timer->Stage("objects");
+                     ReportProgress(70);
+ 
+                     // TODO: Have a separate GameState and exchange once loaded.
+                     auto& gameState = getGameState();
+                     parkImporter->Import(gameState);
++                    timer->Stage("import");
+                     ReportProgress(100);
+ 
+                     MapAnimations::MarkAllTiles();
+                 }
+                 PrepareParkForPlayback();
++                if (timer)
++                    timer->Stage("prepare");
+                 _initialLoadCommand = false;
+                 success = true;
+             }
+@@ -508,7 +603,8 @@ namespace OpenRCT2::Title
+ 
+         bool CanLoadInBackground(size_t saveIndex) const
+         {
+-            if (_initialLoadCommand || _synchronous || gPreviewingTitleSequenceInGame || gOpenRCT2Headless)
++            if (_initialLoadCommand || _synchronous || gPreviewingTitleSequenceInGame || gOpenRCT2Headless
++                || gOpenRCT2NoBackgroundLoading)
+                 return false;
+             if (saveIndex >= _sequence->Saves.size())
+                 return false;
+@@ -528,8 +624,10 @@ namespace OpenRCT2::Title
+ 
+         static void RunBackgroundLoad(const TitleSequence& sequence, BackgroundLoad& load)
+         {
++            using clock = std::chrono::steady_clock;
+             try
+             {
++                auto start = clock::now();
+                 auto parkHandle = TitleSequenceGetParkHandle(sequence, load.saveIndex);
+                 if (parkHandle == nullptr)
+                 {
+@@ -537,8 +635,12 @@ namespace OpenRCT2::Title
+                 }
+                 load.importer = ParkImporter::Create(parkHandle->HintPath);
+                 load.result.emplace(load.importer->LoadFromStream(parkHandle->Stream.get(), false));
++                auto read = clock::now();
++                load.readMs = std::chrono::duration<double, std::milli>(read - start).count();
+ 
+                 load.objects = GetContext()->GetObjectManager().PreloadObjects(load.result->RequiredObjects);
++                auto objects = clock::now();
++                load.objectsMs = std::chrono::duration<double, std::milli>(objects - read).count();
+                 load.objectsReady = true;
+ 
+                 // Import into a game state of its own; getGameState() and the map index on this
+@@ -559,6 +661,7 @@ namespace OpenRCT2::Title
+                 }
+                 setThreadGameState(nullptr);
+                 MapUseThreadTileIndex(nullptr);
++                load.importMs = std::chrono::duration<double, std::milli>(clock::now() - objects).count();
+                 load.ok = true;
+             }
+             catch (const std::exception& e)
+@@ -577,16 +680,33 @@ namespace OpenRCT2::Title
+         {
+             LOG_VERBOSE("TitleSequencePlayer::FinishBackgroundLoad(%s)", load.hintPath.c_str());
+             bool success = false;
++            std::optional<LoadTimer> timer;
+             try
+             {
+                 WindowSetFlagForAllViewports(ViewportFlag::renderingInhibited, true);
++                timer.emplace(Path::GetFileName(load.hintPath));
++                timer->Stage("read", load.readMs);
++                timer->Stage("objects", load.objectsMs);
++                timer->Stage("early", load.earlyMs);
++                timer->Count("objects", load.numRegisteredEarly);
+ 
+                 auto& objectManager = GetContext()->GetObjectManager();
+                 objectManager.LoadObjects(load.result->RequiredObjects, std::move(load.objects), false);
++                timer->Stage("register");
++                auto t = objectManager.GetLastLoadTimings();
++                timer->Detail("preloaded", t.preloaded);
++                timer->Detail("read", t.read);
++                timer->Detail("unload", t.unload);
++                timer->Detail("lists", t.lists);
++                timer->Detail("groups", t.groups);
++                timer->Detail("rides", t.rides);
++
++                timer->Stage("import", load.importMs);
+ 
+                 // Swap the imported park in and redo what the import could not touch from its thread.
+                 swapGameState(load.gameState);
+                 MapSwapTileIndex(*load.tileIndex);
++                timer->Stage("swap");
+                 MapAnimations::ClearAll();
+                 auto mapIntent = Intent(INTENT_ACTION_MAP);
+                 ContextBroadcastIntent(&mapIntent);
+@@ -596,9 +716,11 @@ namespace OpenRCT2::Title
+                 UpdateConsolidatedPatrolAreas();
+                 gCurrentRealTimeTicks = 0;
+                 load.importer->FinishImport(getGameState());
++                timer->Stage("finish");
+ 
+                 MapAnimations::MarkAllTiles();
+                 PrepareParkForPlayback();
++                timer->Stage("prepare");
+                 success = true;
+             }
+             catch (const std::exception& e)
+@@ -616,8 +738,12 @@ namespace OpenRCT2::Title
+         {
+             if (!load.objectsReady || load.objects.empty())
+                 return;
++            auto start = std::chrono::steady_clock::now();
++            auto before = load.registeredEarly.size();
+             GetContext()->GetObjectManager().RegisterPreloadedObjects(
+                 load.objects, kEarlyRegisterBudgetMs, load.registeredEarly);
++            load.numRegisteredEarly += load.registeredEarly.size() - before;
++            load.earlyMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+         }
+ 
+         void DiscardBackgroundLoad()
+diff --git a/src/openrct2/Context.cpp b/src/openrct2/Context.cpp
+index 75c5a7d..0bf044f 100644
+--- a/src/openrct2/Context.cpp
++++ b/src/openrct2/Context.cpp
+@@ -17,6 +17,7 @@
+ #include "Diagnostic.h"
+ #include "FileClassifier.h"
+ #include "Game.h"
++#include "PerfLog.h"
+ #include "GameState.h"
+ #include "GameStateSnapshots.h"
+ #include "Input.h"
+@@ -1312,7 +1313,10 @@ namespace OpenRCT2
+         {
+             PROFILED_FUNCTION();
+ 
+-            _uiContext->ProcessMessages();
++            {
++                PerfLog::ScopedStage perfInput(PerfLog::Stage::input);
++                _uiContext->ProcessMessages();
++            }
+ 
+             if (_ticksAccumulator < kGameUpdateTimeMS)
+             {
+@@ -1330,8 +1334,11 @@ namespace OpenRCT2
+ 
+             _backgroundWorker.dispatchCompleted();
+ 
+-            ContextHandleInput();
+-            WindowUpdateAll();
++            {
++                PerfLog::ScopedStage perfInput(PerfLog::Stage::input);
++                ContextHandleInput();
++                WindowUpdateAll();
++            }
+ 
+             if (ShouldDraw())
+             {
+@@ -1346,7 +1353,10 @@ namespace OpenRCT2
+             const bool shouldDraw = ShouldDraw();
+             auto& tweener = EntityTweener::get();
+ 
+-            _uiContext->ProcessMessages();
++            {
++                PerfLog::ScopedStage perfInput(PerfLog::Stage::input);
++                _uiContext->ProcessMessages();
++            }
+ 
+             while (_ticksAccumulator >= kGameUpdateTimeMS)
+             {
+@@ -1365,8 +1375,11 @@ namespace OpenRCT2
+ 
+             _backgroundWorker.dispatchCompleted();
+ 
+-            ContextHandleInput();
+-            WindowUpdateAll();
++            {
++                PerfLog::ScopedStage perfInput(PerfLog::Stage::input);
++                ContextHandleInput();
++                WindowUpdateAll();
++            }
+ 
+             if (shouldDraw)
+             {
+@@ -1381,14 +1394,23 @@ namespace OpenRCT2
+         {
+             PROFILED_FUNCTION();
+ 
+-            _drawingEngine->BeginDraw();
+-            _painter->Paint(*_drawingEngine);
+-            _drawingEngine->EndDraw();
++            {
++                PerfLog::ScopedStage perfPaint(PerfLog::Stage::paint);
++                _drawingEngine->BeginDraw();
++                _painter->Paint(*_drawingEngine);
++            }
++            {
++                PerfLog::ScopedStage perfPresent(PerfLog::Stage::present);
++                _drawingEngine->EndDraw();
++            }
++            PerfLog::FrameDrawn();
+         }
+ 
+         void Tick()
+         {
+             PROFILED_FUNCTION();
++            PerfLog::ScopedStage perfTick(PerfLog::Stage::tick);
++            PerfLog::CountTick();
+ 
+             // TODO: This variable has been never "variable" in time, some code expects
+             // this to be 40Hz (25 ms). Refactor this once the UI is decoupled.
+diff --git a/src/openrct2/OpenRCT2.cpp b/src/openrct2/OpenRCT2.cpp
+index d657257..9f42b46 100644
+--- a/src/openrct2/OpenRCT2.cpp
++++ b/src/openrct2/OpenRCT2.cpp
+@@ -22,6 +22,7 @@ u8string gSilentRecordingName = {};
+ 
+ bool gOpenRCT2Headless = false;
+ bool gOpenRCT2ScreensaverLaunch = false;
++bool gOpenRCT2NoBackgroundLoading = false;
+ bool gOpenRCT2NoGraphics = false;
+ 
+ bool gOpenRCT2ShowChangelog;
+diff --git a/src/openrct2/OpenRCT2.h b/src/openrct2/OpenRCT2.h
+index 784bb62..095842f 100644
+--- a/src/openrct2/OpenRCT2.h
++++ b/src/openrct2/OpenRCT2.h
+@@ -45,6 +45,8 @@ extern u8string gCustomPassword;
+ extern bool gOpenRCT2Headless;
+ // Launched with --screensaver (the title screen in screensaver mode).
+ extern bool gOpenRCT2ScreensaverLaunch;
++// --no-background-loading (perf tests): title parks load the stock way.
++extern bool gOpenRCT2NoBackgroundLoading;
+ extern bool gOpenRCT2NoGraphics;
+ extern bool gOpenRCT2ShowChangelog;
+ extern bool gOpenRCT2SilentBreakpad;
+diff --git a/src/openrct2/PerfLog.cpp b/src/openrct2/PerfLog.cpp
+new file mode 100644
+index 0000000..837297b
+--- /dev/null
++++ b/src/openrct2/PerfLog.cpp
+@@ -0,0 +1,302 @@
++/*****************************************************************************
++ * Copyright (c) 2014-2026 OpenRCT2 developers
++ *
++ * For a complete list of all authors, please refer to contributors.md
++ * Interested in contributing? Visit https://github.com/OpenRCT2/OpenRCT2
++ *
++ * OpenRCT2 is licensed under the GNU General Public License version 3.
++ *****************************************************************************/
++
++// See PerfLog.h. The format (one record per line, comma separated, the record
++// type first; free text only as the last field):
++//   C,<ms>,<key=value ...>                 configuration, written with the first frame
++//   F,<ms>,<interval>,<ticks>,<tick>,<script>,<input>,<paint>,<present>,<viewX>,<viewY>,<zoom>,<rotation>
++//   M,<ms>,<sampleMs>,<privateBytes>,<workingSet>,<handles>,<gdi>,<jsMalloc>,<jsUsed>,<imgUsed>,
++//     <imgFreeRuns>,<imgLargestFree>,<guests>,<staff>,<vehicles>,<litter>,<entities>,<rides>
++//   E,<ms>,<kind>,<text>                   events: load (park switch stages), mark (from the plugin), quit
++// Times are milliseconds since the log was opened; F's interval is the time since the previous
++// drawn frame ended. Lines are buffered and flushed with every sample and event.
++
++#include "PerfLog.h"
++
++#include "Context.h"
++#include "GameState.h"
++#include "Version.h"
++#include "config/Config.h"
++#include "core/String.hpp"
++#include "drawing/IDrawingEngine.h"
++#include "entity/EntityRegistry.h"
++#include "interface/Viewport.h"
++#include "interface/Window.h"
++#include "interface/WindowBase.h"
++#include "ride/RideManager.hpp"
++
++#ifdef ENABLE_SCRIPTING
++    #include "scripting/ScriptEngine.h"
++#endif
++
++#include <array>
++#include <cstdio>
++
++#ifdef _WIN32
++    #ifndef WIN32_LEAN_AND_MEAN
++        #define WIN32_LEAN_AND_MEAN
++    #endif
++    #ifndef NOMINMAX
++        #define NOMINMAX
++    #endif
++    #include <windows.h>
++    #include <psapi.h>
++#elif defined(__linux__)
++    #include <unistd.h>
++#endif
++
++namespace OpenRCT2::PerfLog
++{
++    using clock = std::chrono::steady_clock;
++
++    static constexpr double kSampleIntervalMs = 10000.0;
++
++    static FILE* _file = nullptr;
++    static clock::time_point _origin;
++    static double _quitAfterMs = 0;
++    static bool _quitRequested = false;
++    static bool _configWritten = false;
++    static double _lastFrameEnd = -1;
++    static double _lastSample = -kSampleIntervalMs;
++    static uint32_t _ticks = 0;
++    static std::array<double, static_cast<size_t>(Stage::count)> _stageMs{};
++    static std::array<uint8_t, static_cast<size_t>(Stage::count)> _depth{};
++
++    static double ToMs(clock::duration d)
++    {
++        return std::chrono::duration_cast<std::chrono::microseconds>(d).count() / 1000.0;
++    }
++
++    void Open(const std::string& path, double quitAfterSeconds)
++    {
++        if (_file != nullptr || path.empty())
++            return;
++#ifdef _WIN32
++        _file = _wfopen(String::toWideChar(path).c_str(), L"w");
++#else
++        _file = std::fopen(path.c_str(), "w");
++#endif
++        if (_file == nullptr)
++        {
++            std::fprintf(stderr, "perf log: cannot open %s\n", path.c_str());
++            return;
++        }
++        std::setvbuf(_file, nullptr, _IOFBF, 1 << 16);
++        _origin = clock::now();
++        _quitAfterMs = quitAfterSeconds > 0 ? quitAfterSeconds * 1000.0 : 0;
++        std::fprintf(_file, "# rct-screensaver perf log 1\n");
++        std::fflush(_file);
++        std::atexit([] {
++            if (_file != nullptr)
++            {
++                std::fprintf(_file, "E,%.1f,exit,\n", Now());
++                std::fclose(_file);
++                _file = nullptr;
++            }
++        });
++    }
++
++    bool IsEnabled()
++    {
++        return _file != nullptr;
++    }
++
++    double Now()
++    {
++        return ToMs(clock::now() - _origin);
++    }
++
++    void AddStageTime(Stage stage, double ms)
++    {
++        _stageMs[static_cast<size_t>(stage)] += ms;
++    }
++
++    void CountTick()
++    {
++        _ticks++;
++    }
++
++    ScopedStage::ScopedStage(Stage stage)
++        : _stage(stage)
++        , _active(_file != nullptr && _depth[static_cast<size_t>(stage)]++ == 0)
++        , _start(_active ? clock::now() : clock::time_point{})
++    {
++    }
++
++    ScopedStage::~ScopedStage()
++    {
++        if (_file == nullptr)
++            return;
++        auto& depth = _depth[static_cast<size_t>(_stage)];
++        if (depth > 0)
++            depth--;
++        if (_active)
++            _stageMs[static_cast<size_t>(_stage)] += ToMs(clock::now() - _start);
++    }
++
++    static void WriteConfig()
++    {
++        const auto& general = Config::Get().general;
++        const char* engine = "none";
++        switch (general.drawingEngine)
++        {
++            case DrawingEngine::softwareWithHardwareDisplay:
++                engine = "software";
++                break;
++            case DrawingEngine::openGL:
++                engine = "opengl";
++                break;
++            default:
++                break;
++        }
++        std::fprintf(
++            _file, "C,%.1f,version=%s engine=%s multithreading=%d uncap_fps=%d vsync=%d scale=%.2f fullscreen=%d window=%dx%d\n",
++            Now(), gVersionInfoFull, engine, general.multiThreading ? 1 : 0, general.uncapFPS ? 1 : 0,
++            general.useVSync ? 1 : 0, general.windowScale, general.fullscreenMode, ContextGetWidth(), ContextGetHeight());
++    }
++
++    struct ProcessMemory
++    {
++        uint64_t privateBytes = 0;
++        uint64_t workingSet = 0;
++        uint32_t handles = 0;
++        uint32_t gdi = 0;
++    };
++
++    static ProcessMemory GetProcessMemory()
++    {
++        ProcessMemory m;
++#ifdef _WIN32
++        PROCESS_MEMORY_COUNTERS_EX pmc{};
++        pmc.cb = sizeof(pmc);
++        if (K32GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&pmc), sizeof(pmc)))
++        {
++            m.privateBytes = pmc.PrivateUsage;
++            m.workingSet = pmc.WorkingSetSize;
++        }
++        DWORD handles = 0;
++        if (GetProcessHandleCount(GetCurrentProcess(), &handles))
++            m.handles = handles;
++        m.gdi = GetGuiResources(GetCurrentProcess(), GR_GDIOBJECTS);
++#elif defined(__linux__)
++        if (FILE* f = std::fopen("/proc/self/statm", "r"))
++        {
++            unsigned long size = 0, resident = 0, shared = 0, text = 0, lib = 0, data = 0;
++            if (std::fscanf(f, "%lu %lu %lu %lu %lu %lu", &size, &resident, &shared, &text, &lib, &data) == 6)
++            {
++                auto page = static_cast<uint64_t>(sysconf(_SC_PAGESIZE));
++                m.privateBytes = data * page;
++                m.workingSet = resident * page;
++            }
++            std::fclose(f);
++        }
++#endif
++        return m;
++    }
++
++    static void WriteSample(double now)
++    {
++        auto start = clock::now();
++        auto mem = GetProcessMemory();
++
++        int64_t jsMalloc = 0, jsUsed = 0;
++#ifdef ENABLE_SCRIPTING
++        if (auto* rt = Scripting::ScriptEngine::GetRuntime())
++        {
++            JSMemoryUsage usage{};
++            JS_ComputeMemoryUsage(rt, &usage);
++            jsMalloc = usage.malloc_size;
++            jsUsed = usage.memory_used_size;
++        }
++#endif
++        auto images = GetImageListStats();
++
++        auto& gameState = getGameState();
++        auto& entities = gameState.entities;
++        uint32_t guests = entities.getEntityListCount(EntityType::guest);
++        uint32_t staff = entities.getEntityListCount(EntityType::staff);
++        uint32_t vehicles = entities.getEntityListCount(EntityType::vehicle);
++        uint32_t litter = entities.getEntityListCount(EntityType::litter);
++        uint32_t all = 0;
++        for (size_t i = 0; i < static_cast<size_t>(EntityType::count); i++)
++            all += entities.getEntityListCount(static_cast<EntityType>(i));
++        size_t rides = RideManager(gameState).size();
++
++        double sampleMs = ToMs(clock::now() - start);
++        std::fprintf(
++            _file, "M,%.1f,%.2f,%llu,%llu,%u,%u,%lld,%lld,%u,%u,%u,%u,%u,%u,%u,%u,%zu\n", now, sampleMs,
++            static_cast<unsigned long long>(mem.privateBytes), static_cast<unsigned long long>(mem.workingSet), mem.handles,
++            mem.gdi, static_cast<long long>(jsMalloc), static_cast<long long>(jsUsed), images.used, images.freeRuns,
++            images.largestFreeRun, guests, staff, vehicles, litter, all, rides);
++        std::fflush(_file);
++    }
++
++    void FrameDrawn()
++    {
++        if (_file == nullptr)
++            return;
++        if (!_configWritten)
++        {
++            WriteConfig();
++            _configWritten = true;
++        }
++
++        double now = Now();
++        double interval = _lastFrameEnd < 0 ? 0 : now - _lastFrameEnd;
++        _lastFrameEnd = now;
++
++        int32_t viewX = 0, viewY = 0, zoom = 0, rotation = 0;
++        if (auto* w = WindowGetMain(); w != nullptr && w->viewport != nullptr)
++        {
++            viewX = w->viewport->viewPos.x;
++            viewY = w->viewport->viewPos.y;
++            zoom = static_cast<int8_t>(w->viewport->zoom);
++            rotation = w->viewport->rotation;
++        }
++
++        auto ms = [](Stage s) { return _stageMs[static_cast<size_t>(s)]; };
++        std::fprintf(
++            _file, "F,%.1f,%.2f,%u,%.2f,%.2f,%.2f,%.2f,%.2f,%d,%d,%d,%d\n", now, interval, _ticks, ms(Stage::tick),
++            ms(Stage::script), ms(Stage::input), ms(Stage::paint), ms(Stage::present), viewX, viewY, zoom, rotation);
++        _stageMs.fill(0);
++        _ticks = 0;
++
++        if (now - _lastSample >= kSampleIntervalMs)
++        {
++            _lastSample = now;
++            WriteSample(now);
++        }
++
++        if (_quitAfterMs > 0 && now >= _quitAfterMs && !_quitRequested)
++        {
++            _quitRequested = true;
++            Event("quit", "run time reached");
++            ContextQuit();
++        }
++    }
++
++    void Event(const char* kind, const std::string& text)
++    {
++        if (_file == nullptr)
++            return;
++        std::string clean = text;
++        for (auto& c : clean)
++        {
++            if (c == '\n' || c == '\r')
++                c = ' ';
++        }
++        std::fprintf(_file, "E,%.1f,%s,%s\n", Now(), kind, clean.c_str());
++        std::fflush(_file);
++    }
++
++    void Mark(const std::string& text)
++    {
++        Event("mark", text);
++    }
++} // namespace OpenRCT2::PerfLog
+diff --git a/src/openrct2/PerfLog.h b/src/openrct2/PerfLog.h
+new file mode 100644
+index 0000000..5634efc
+--- /dev/null
++++ b/src/openrct2/PerfLog.h
+@@ -0,0 +1,74 @@
++/*****************************************************************************
++ * Copyright (c) 2014-2026 OpenRCT2 developers
++ *
++ * For a complete list of all authors, please refer to contributors.md
++ * Interested in contributing? Visit https://github.com/OpenRCT2/OpenRCT2
++ *
++ * OpenRCT2 is licensed under the GNU General Public License version 3.
++ *****************************************************************************/
++
++// A performance log for test runs (--perf-log <file>). Off, and free, unless the
++// flag is given. One line per drawn frame (where its time went), a sample of memory and counts
++// every 10 s, and events (park loads, marks from the plugin). Read by tools/perfreport.py.
++
++#pragma once
++
++#include <chrono>
++#include <cstdint>
++#include <string>
++
++namespace OpenRCT2::PerfLog
++{
++    enum class Stage : uint8_t
++    {
++        tick,    // Context::Tick: the scene (simulation, title player) and the script engine's tick
++        script,  // every plugin call (hooks, intervals, UI callbacks), also counted inside tick
++        input,   // input handling and window updates
++        paint,   // BeginDraw and the painter
++        present, // EndDraw: copy to the screen, the overlay, vsync waits
++        count,
++    };
++
++    /** Opens the log; called once from the command line. quitAfterSeconds > 0 quits the game then. */
++    void Open(const std::string& path, double quitAfterSeconds);
++    bool IsEnabled();
++
++    /** Time since the log was opened, in milliseconds. */
++    double Now();
++
++    void AddStageTime(Stage stage, double ms);
++    void CountTick();
++
++    /** Ends a drawn frame: writes its line, a sample when one is due, and quits when the run is over. */
++    void FrameDrawn();
++
++    /** An event line: kind is one word, text the rest of the line. */
++    void Event(const char* kind, const std::string& text);
++
++    /** A mark from the plugin (scripting: screensaver.perfMark). */
++    void Mark(const std::string& text);
++
++    /** Image list use, filled in by drawing/Image.cpp. */
++    struct ImageListStats
++    {
++        uint32_t used = 0;
++        uint32_t freeRuns = 0;
++        uint32_t largestFreeRun = 0;
++    };
++    ImageListStats GetImageListStats();
++
++    /** Times a stage while in scope; nested scopes of the same stage count once. */
++    class ScopedStage
++    {
++        using clock = std::chrono::steady_clock;
++        Stage _stage;
++        bool _active;
++        clock::time_point _start;
++
++    public:
++        explicit ScopedStage(Stage stage);
++        ~ScopedStage();
++        ScopedStage(const ScopedStage&) = delete;
++        ScopedStage& operator=(const ScopedStage&) = delete;
++    };
++} // namespace OpenRCT2::PerfLog
+diff --git a/src/openrct2/command_line/RootCommands.cpp b/src/openrct2/command_line/RootCommands.cpp
+index bc80e0c..7bd752c 100644
+--- a/src/openrct2/command_line/RootCommands.cpp
++++ b/src/openrct2/command_line/RootCommands.cpp
+@@ -10,6 +10,7 @@
+ #include "../Context.h"
+ #include "../Diagnostic.h"
+ #include "../OpenRCT2.h"
++#include "../PerfLog.h"
+ #include "../PlatformEnvironment.h"
+ #include "../Version.h"
+ #include "../config/Config.h"
+@@ -63,6 +64,9 @@ namespace OpenRCT2
+     static u8string _rct2DataPath = {};
+     static bool _silentBreakpad = false;
+     static bool _screensaver = false;
++    static u8string _perfLogPath = {};
++    static int32_t _perfQuitAfter = 0;
++    static bool _noBackgroundLoading = false;
+ 
+     // clang-format off
+     static constexpr CommandLineOptionDefinition kStandardOptions[]
+@@ -76,6 +80,9 @@ namespace OpenRCT2
+         { CMDLINE_TYPE_SWITCH,  &_headless,         kNAC, "headless",           "run " OPENRCT2_NAME " headless" IMPLIES_SILENT_BREAKPAD     },
+         { CMDLINE_TYPE_SWITCH,  &_silentReplays,    kNAC, "silent-replays",     "use unobtrusive replays"                                    },
+         { CMDLINE_TYPE_SWITCH,  &_screensaver,      kNAC, "screensaver",        "start the title screen in screensaver mode; Esc quits"      },
++        { CMDLINE_TYPE_STRING,  &_perfLogPath,      kNAC, "perf-log",           "write a performance log to this file (RCT Screensaver tests)" },
++        { CMDLINE_TYPE_INTEGER, &_perfQuitAfter,    kNAC, "perf-quit-after",    "with --perf-log: quit after this many seconds"              },
++        { CMDLINE_TYPE_SWITCH,  &_noBackgroundLoading, kNAC, "no-background-loading", "load title-sequence parks the stock way (tests)"     },
+     #ifndef DISABLE_NETWORK
+         { CMDLINE_TYPE_INTEGER, &_port,             kNAC, "port",               "port to use for hosting or joining a server"                },
+         { CMDLINE_TYPE_STRING,  &_address,          kNAC, "address",            "address to listen on when hosting a server"                 },
+@@ -203,6 +210,9 @@ namespace OpenRCT2
+         gOpenRCT2NoGraphics = _headless;
+         gOpenRCT2SilentBreakpad = _silentBreakpad || _headless;
+         gOpenRCT2ScreensaverLaunch = _screensaver && !_headless;
++        gOpenRCT2NoBackgroundLoading = _noBackgroundLoading;
++        if (!_perfLogPath.empty())
++            PerfLog::Open(_perfLogPath, _perfQuitAfter);
+ 
+         if (!_userDataPath.empty())
+         {
+diff --git a/src/openrct2/drawing/Image.cpp b/src/openrct2/drawing/Image.cpp
+index 065edf1..5bf9aa3 100644
+--- a/src/openrct2/drawing/Image.cpp
++++ b/src/openrct2/drawing/Image.cpp
+@@ -11,6 +11,7 @@
+ 
+ #include "../Diagnostic.h"
+ #include "../OpenRCT2.h"
++#include "../PerfLog.h"
+ #include "../SpriteIds.h"
+ #include "../core/Guard.hpp"
+ #include "Drawing.Sprite.h"
+@@ -249,3 +250,22 @@ const std::list<ImageList>& GetAvailableAllocationRanges()
+ {
+     return _freeLists;
+ }
++
++// Image list use for the perf log (fragmentation over many park switches).
++OpenRCT2::PerfLog::ImageListStats OpenRCT2::PerfLog::GetImageListStats()
++{
++    ImageListStats stats;
++    stats.used = _allocatedImageCount;
++    if (!_initialised)
++    {
++        stats.freeRuns = 1;
++        stats.largestFreeRun = kMaxImages;
++        return stats;
++    }
++    for (const auto& list : _freeLists)
++    {
++        stats.freeRuns++;
++        stats.largestFreeRun = std::max(stats.largestFreeRun, list.Count);
++    }
++    return stats;
++}
+diff --git a/src/openrct2/libopenrct2.vcxproj b/src/openrct2/libopenrct2.vcxproj
+index 60b10e0..7fdf014 100644
+--- a/src/openrct2/libopenrct2.vcxproj
++++ b/src/openrct2/libopenrct2.vcxproj
+@@ -399,6 +399,7 @@
+     <ClInclude Include="object\WaterEntry.h" />
+     <ClInclude Include="object\WaterObject.h" />
+     <ClInclude Include="OpenRCT2.h" />
++    <ClInclude Include="PerfLog.h" />
+     <ClInclude Include="openrct2_pch.h"/>
+     <ClInclude Include="paint\Boundbox.h" />
+     <ClInclude Include="paint\Paint.Entity.h" />
+@@ -1022,6 +1023,7 @@
+     <ClCompile Include="object\WaterEntry.cpp" />
+     <ClCompile Include="object\WaterObject.cpp" />
+     <ClCompile Include="OpenRCT2.cpp" />
++    <ClCompile Include="PerfLog.cpp" />
+     <ClCompile Include="openrct2_pch.cpp" Condition="'$(UsePCH)'=='true'">
+       <PrecompiledHeader>Create</PrecompiledHeader>
+     </ClCompile>
+diff --git a/src/openrct2/object/ObjectManager.cpp b/src/openrct2/object/ObjectManager.cpp
+index 9b234c4..0c2ebba 100644
+--- a/src/openrct2/object/ObjectManager.cpp
++++ b/src/openrct2/object/ObjectManager.cpp
+@@ -56,6 +56,23 @@ namespace OpenRCT2
+ 
+     class ObjectManager final : public IObjectManager
+     {
++    private:
++        ObjectLoadTimings _lastTimings{};
++        using TimingClock = std::chrono::steady_clock;
++        static double MsSince(TimingClock::time_point& since)
++        {
++            auto now = TimingClock::now();
++            auto ms = std::chrono::duration<double, std::milli>(now - since).count();
++            since = now;
++            return ms;
++        }
++
++    public:
++        ObjectLoadTimings GetLastLoadTimings() const override
++        {
++            return _lastTimings;
++        }
++
+     private:
+         IObjectRepository& _objectRepository;
+ 
+@@ -208,6 +225,7 @@ namespace OpenRCT2
+ 
+         void LoadObjects(const ObjectList& objectList, const bool reportProgress) override
+         {
++            auto t = TimingClock::now();
+             // Find all the required objects
+             auto requiredObjects = GetRequiredObjects(objectList);
+ 
+@@ -215,8 +233,11 @@ namespace OpenRCT2
+             LoadObjects(requiredObjects, reportProgress);
+ 
+             // Update indices.
++            t = TimingClock::now();
+             UpdateSceneryGroupIndexes();
++            _lastTimings.groups = MsSince(t);
+             ResetTypeToRideEntryIndexMap();
++            _lastTimings.rides = MsSince(t);
+         }
+ 
+         std::vector<std::unique_ptr<Object>> PreloadObjects(const ObjectList& objectList) override
+@@ -262,7 +283,7 @@ namespace OpenRCT2
+             std::vector<std::unique_ptr<Object>>& preloaded, double budgetMs,
+             std::vector<ObjectEntryDescriptor>& registered) override
+         {
+-            auto start = std::chrono::steady_clock::now();
++            auto start = TimingClock::now();
+             while (!preloaded.empty())
+             {
+                 auto object = std::move(preloaded.back());
+@@ -274,7 +295,7 @@ namespace OpenRCT2
+                 _objectRepository.RegisterLoadedObject(ori, std::move(object));
+                 loadedObject->Load();
+                 registered.push_back(loadedObject->GetDescriptor());
+-                if (std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count() >= budgetMs)
++                if (std::chrono::duration<double, std::milli>(TimingClock::now() - start).count() >= budgetMs)
+                     break;
+             }
+             return preloaded.size();
+@@ -284,6 +305,8 @@ namespace OpenRCT2
+             const ObjectList& objectList, std::vector<std::unique_ptr<Object>>&& preloaded, bool reportProgress) override
+         {
+             // Register and load the objects read earlier, as LoadObjects does for the ones it reads itself.
++            _lastTimings = {};
++            auto t = TimingClock::now();
+             std::vector<Object*> registered;
+             for (auto& object : preloaded)
+             {
+@@ -296,10 +319,12 @@ namespace OpenRCT2
+                 registered.push_back(loadedObject);
+             }
+             preloaded.clear();
++            auto preloadedMs = MsSince(t);
+ 
+             try
+             {
+                 LoadObjects(objectList, reportProgress);
++                _lastTimings.preloaded = preloadedMs;
+             }
+             catch (...)
+             {
+@@ -687,6 +712,7 @@ namespace OpenRCT2
+ 
+         void LoadObjects(std::vector<ObjectToLoad>& requiredObjects, bool reportProgress)
+         {
++            auto t = TimingClock::now();
+             std::vector<Object*> objects;
+             std::vector<Object*> newLoadedObjects;
+             std::vector<ObjectEntryDescriptor> badObjects;
+@@ -786,6 +812,8 @@ namespace OpenRCT2
+                 throw ObjectLoadException(std::move(badObjects));
+             }
+ 
++            _lastTimings.read = MsSince(t);
++
+             // Unload objects which are not in the required list.
+             if (objects.empty())
+             {
+@@ -795,6 +823,7 @@ namespace OpenRCT2
+             {
+                 UnloadObjectsExcept(objects);
+             }
++            _lastTimings.unload = MsSince(t);
+ 
+             // Set the new object lists
+             for (auto type : getAllObjectTypes())
+@@ -816,6 +845,8 @@ namespace OpenRCT2
+                 list[otl.Index] = otl.LoadedObject;
+             }
+ 
++            _lastTimings.lists = MsSince(t);
++
+             LOG_VERBOSE("%u / %u new objects loaded", newLoadedObjects.size(), requiredObjects.size());
+         }
+ 
+diff --git a/src/openrct2/object/ObjectManager.h b/src/openrct2/object/ObjectManager.h
+index dedf3dd..4087f38 100644
+--- a/src/openrct2/object/ObjectManager.h
++++ b/src/openrct2/object/ObjectManager.h
+@@ -27,11 +27,23 @@ namespace OpenRCT2
+     struct ObjectRepositoryItem;
+     struct RCTObjectEntry;
+ 
++    /** Milliseconds spent in the parts of the last LoadObjects call (diagnostics). */
++    struct ObjectLoadTimings
++    {
++        double preloaded{}; // registering and loading objects read earlier
++        double read{};      // reading objects from disk and loading them
++        double unload{};    // unloading objects the new list does not use
++        double lists{};     // rebuilding the loaded-object lists
++        double groups{};    // scenery group indexes
++        double rides{};     // ride type to entry map
++    };
++
+     struct IObjectManager
+     {
+         virtual ~IObjectManager()
+         {
+         }
++        virtual ObjectLoadTimings GetLastLoadTimings() const = 0;
+ 
+         virtual Object* GetLoadedObject(ObjectType objectType, size_t index) = 0;
+         template<typename TClass>
+diff --git a/src/openrct2/scripting/ScriptEngine.cpp b/src/openrct2/scripting/ScriptEngine.cpp
+index bb88d98..432696a 100644
+--- a/src/openrct2/scripting/ScriptEngine.cpp
++++ b/src/openrct2/scripting/ScriptEngine.cpp
+@@ -12,6 +12,7 @@
+     #include "ScriptEngine.h"
+ 
+     #include "../Context.h"
++    #include "../PerfLog.h"
+     #include "../PlatformEnvironment.h"
+     #include "../actions/GameAction.hpp"
+     #include "../actions/general/CustomAction.h"
+@@ -1281,6 +1282,7 @@ JSValue ScriptEngine::ExecutePluginCall(
+     if (JS_IsFunction(ctx, func) && (!plugin || plugin->HasStarted()))
+     {
+         ScriptExecutionInfo::PluginScope scope(_execInfo, plugin, isGameStateMutable);
++        PerfLog::ScopedStage perfScript(PerfLog::Stage::script);
+ 
+         // The call can free itself (by closing windows/clearing timers etc.) so we need to dup the values to keep them alive
+         JS_DupValue(ctx, thisValue);

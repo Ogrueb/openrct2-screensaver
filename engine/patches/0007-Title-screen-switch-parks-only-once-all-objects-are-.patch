@@ -1,0 +1,41 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: RCT Screensaver <noreply@example.invalid>
+Date: Tue, 27 Oct 2026 01:31:18 +0000
+Subject: [PATCH] Title screen: switch parks only once all objects are
+ registered
+
+With the import taking only a few ticks, few registration slices fit
+before the switch and most of the cost still landed on it. The switch now
+waits until the slices have registered every object, so the switch itself
+only unloads, swaps and prepares. The slice is 5 ms.
+---
+ src/openrct2-ui/title/TitleSequencePlayer.cpp | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/src/openrct2-ui/title/TitleSequencePlayer.cpp b/src/openrct2-ui/title/TitleSequencePlayer.cpp
+index f760880..0143b18 100644
+--- a/src/openrct2-ui/title/TitleSequencePlayer.cpp
++++ b/src/openrct2-ui/title/TitleSequencePlayer.cpp
+@@ -178,10 +178,10 @@ namespace OpenRCT2::Title
+                                 DiscardBackgroundLoad();
+                                 StartBackgroundLoad(saveIndex);
+                             }
+-                            if (!_background->done)
++                            if (!_background->done || !_background->objects.empty())
+                             {
+-                                // Keep playing the current park until the next one has been read; meanwhile
+-                                // register its objects a few milliseconds per tick.
++                                // Keep playing the current park until the next one has been imported and
++                                // all of its objects have been registered, a few milliseconds per tick.
+                                 RegisterEarly(*_background);
+                                 break;
+                             }
+@@ -580,7 +580,7 @@ namespace OpenRCT2::Title
+             return success;
+         }
+ 
+-        static constexpr double kEarlyRegisterBudgetMs = 4.0;
++        static constexpr double kEarlyRegisterBudgetMs = 5.0;
+ 
+         /** Registers some of a pending load's objects on the main thread, within a small time budget. */
+         void RegisterEarly(BackgroundLoad& load)

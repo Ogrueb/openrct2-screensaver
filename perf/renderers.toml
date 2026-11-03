@@ -1,0 +1,58 @@
+# Renderer x camera motion: four renderer settings, each with cuts and with pans, on a bench of
+# four parks spread over simulation size. Make the bench once from your park library:
+#   python tools/perfrun.py sample "<park folder>" --count 4 --out perf/local/bench.toml
+# then run (about 1.5 h):
+#   python tools/perfrun.py run perf/renderers.toml --exe <path to openrct2.exe>
+name = "renderers"
+playlist = "local/bench.toml"
+seconds = 300
+repeats = 2          # interleaved: every cell once, then every cell again in reverse order
+warmup = 30
+cooldown = 10
+pairs = [
+  ["software-cuts", "software-pans"], ["software-mt-cuts", "software-mt-pans"],
+  ["opengl-cuts", "opengl-pans"], ["opengl-mt-cuts", "opengl-mt-pans"],
+  ["software-pans", "software-mt-pans"], ["software-mt-pans", "opengl-pans"], ["opengl-pans", "opengl-mt-pans"],
+]
+
+[base]
+profiler = true      # OpenRCT2's function profiler, exported to profiler.csv in each cell
+
+[base.settings]
+speed = 1
+
+[[cell]]
+name = "software-cuts"
+build = { set = { motion = "static" } }
+config = { general = { drawing_engine = "SOFTWARE_HWD", multithreading = false } }
+
+[[cell]]
+name = "software-pans"
+config = { general = { drawing_engine = "SOFTWARE_HWD", multithreading = false } }
+
+[[cell]]
+name = "software-mt-cuts"
+build = { set = { motion = "static" } }
+config = { general = { drawing_engine = "SOFTWARE_HWD", multithreading = true } }
+
+[[cell]]
+name = "software-mt-pans"
+config = { general = { drawing_engine = "SOFTWARE_HWD", multithreading = true } }
+
+[[cell]]
+name = "opengl-cuts"
+build = { set = { motion = "static" } }
+config = { general = { drawing_engine = "OPENGL", multithreading = false } }
+
+[[cell]]
+name = "opengl-pans"
+config = { general = { drawing_engine = "OPENGL", multithreading = false } }
+
+[[cell]]
+name = "opengl-mt-cuts"
+build = { set = { motion = "static" } }
+config = { general = { drawing_engine = "OPENGL", multithreading = true } }
+
+[[cell]]
+name = "opengl-mt-pans"
+config = { general = { drawing_engine = "OPENGL", multithreading = true } }

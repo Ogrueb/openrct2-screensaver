@@ -1,0 +1,36 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: RCT Screensaver <noreply@example.invalid>
+Date: Tue, 27 Oct 2026 00:36:13 +0000
+Subject: [PATCH] Scripting: TitleSequence.backgroundLoading
+
+Lets a plugin tell that the engine loads title-sequence parks in the
+background (always true in this build; undefined on a stock engine).
+---
+ src/openrct2-ui/scripting/ScTitleSequence.hpp | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/src/openrct2-ui/scripting/ScTitleSequence.hpp b/src/openrct2-ui/scripting/ScTitleSequence.hpp
+index 5536575..f4a8401 100644
+--- a/src/openrct2-ui/scripting/ScTitleSequence.hpp
++++ b/src/openrct2-ui/scripting/ScTitleSequence.hpp
+@@ -565,6 +565,12 @@ namespace OpenRCT2::Scripting
+             return JS_NULL;
+         }
+ 
++        /** True when the engine loads title-sequence parks in the background. */
++        static JSValue backgroundLoading_get(JSContext* ctx, JSValue thisVal)
++        {
++            return JS_TRUE;
++        }
++
+         static JSValue play(JSContext* ctx, JSValue thisVal, int argc, JSValue* argv)
+         {
+             auto index = GetManagerIndex(ctx, thisVal);
+@@ -630,6 +636,7 @@ namespace OpenRCT2::Scripting
+                 JS_CGETSET_DEF("commands", ScTitleSequence::commands_get, ScTitleSequence::commands_set),
+                 JS_CGETSET_DEF("isPlaying", ScTitleSequence::isPlaying_get, nullptr),
+                 JS_CGETSET_DEF("position", ScTitleSequence::position_get, nullptr),
++                JS_CGETSET_DEF("backgroundLoading", ScTitleSequence::backgroundLoading_get, nullptr),
+ 
+                 JS_CFUNC_DEF("addPark", 2, ScTitleSequence::addPark),
+                 JS_CFUNC_DEF("clone", 1, ScTitleSequence::clone),

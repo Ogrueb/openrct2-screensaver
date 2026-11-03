@@ -1,0 +1,70 @@
+# Builds OpenRCT2 at the release in engine/VERSION with the patches in engine/patches applied,
+# the same way OpenRCT2's own CI builds its Windows x64 binaries. Produces openrct2.exe and
+# openrct2.com, which replace the two files of the same name in a stock OpenRCT2 install.
+name: Engine build
+
+on:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: "Release build: leave out the diagnostics patch (0016)"
+        type: boolean
+        default: false
+  push:
+    branches:
+      - main
+    paths:
+      - "engine/**"
+      - ".github/workflows/engine.yml"
+
+env:
+  OPENRCT2_BUILD_SERVER: openrct2-screensaver
+  PLATFORM: x64
+  CONFIGURATION: Release
+
+jobs:
+  windows:
+    name: Windows x64
+    runs-on: windows-2025-vs2026
+    steps:
+      - name: Checkout openrct2-screensaver
+        uses: actions/checkout@v4
+      - name: Read the OpenRCT2 version
+        id: version
+        shell: bash
+        run: |
+          ref=$(tr -d '[:space:]' < engine/VERSION)
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "OPENRCT2_VERSION=${ref#v}" >> "$GITHUB_ENV"
+      - name: Checkout OpenRCT2 ${{ steps.version.outputs.ref }}
+        uses: actions/checkout@v4
+        with:
+          repository: OpenRCT2/OpenRCT2
+          ref: ${{ steps.version.outputs.ref }}
+          path: openrct2
+      - name: Apply patches
+        shell: bash
+        working-directory: openrct2
+        run: |
+          for p in ../engine/patches/*.patch; do
+            if [ "${{ inputs.release }}" = "true" ] && [[ "$(basename "$p")" == 0016-* ]]; then
+              echo "== $p (left out of the release build)"
+              continue
+            fi
+            echo "== $p"
+            git apply --verbose "$p"
+          done
+      - name: Build OpenRCT2
+        shell: bash
+        working-directory: openrct2
+        run: |
+          export DISTANCE_FROM_TAG=0
+          . scripts/setenv && build
+      - name: Upload binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: openrct2-${{ steps.version.outputs.ref }}-openrct2-screensaver-x64${{ inputs.release == true && '-release' || '' }}
+          path: |
+            openrct2/bin/openrct2.exe
+            openrct2/bin/openrct2.com
+          if-no-files-found: error

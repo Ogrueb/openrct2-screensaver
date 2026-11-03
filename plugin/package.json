@@ -1,0 +1,18 @@
+{
+  "name": "rct-screensaver-plugin",
+  "version": "0.1.0",
+  "private": true,
+  "description": "OpenRCT2 title screen playlist player for RCT Screensaver",
+  "license": "GPL-3.0-or-later",
+  "scripts": {
+    "check": "tsc --noEmit",
+    "bundle": "esbuild src/main.ts --bundle --format=iife --target=es2020 --outfile=dist/rct-screensaver.js && esbuild src/companion-host.ts --bundle --format=iife --target=es2020 --outfile=dist/companion-host.js",
+    "build": "npm run check && npm run bundle",
+    "test": "node test/pan-unit.mjs && node test/cue-run.mjs && node test/companion-host-unit.mjs && node test/with-build.mjs \"../build/sequence/RCT Screensaver Examples\" test/mode-run.mjs test/mock-run.mjs",
+    "test:companions": "node test/mock-run.mjs \"../build/sequence/RCT Screensaver Companions\" \"../build/sequence/RCT Screensaver Companions.playlist.json\""
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "typescript": "6.0.3"
+  }
+}

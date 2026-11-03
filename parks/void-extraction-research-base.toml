@@ -1,0 +1,24 @@
+# Void Extraction Research Base (MoreParks survey). Ships AnimationService: the coaster's launch and
+# repainted trains.
+[match]
+name = "Void Extraction Research Base"
+map = [334, 334]
+
+# Owner's live review of the event views, 2026-10-30: the launch one zoom closer (placed at 0).
+#
+# Measured timings (owner, 2026-10-30: save them in the profile; cameralog.py --triggers on a 15 min
+# run, first arrivals identical on every visit): the coaster's lap is about 1120 ticks (28 s), so
+# each view cuts in on the park's clock, panning there 3 s ahead. Block1Paint4's view also holds
+# Paint5's trigger, 310 ticks later in the same lap.
+[animation."TrainEnteredPrelaunch"]  # the launch view, merged with TrainLeftPrelaunch and others
+zoom = -1
+cue = {tick = 112, lead = 3, cut = true, every = 1120}
+
+[animation."Block2Paint1"]
+cue = {tick = 88, lead = 3, cut = true, every = 1124}
+
+[animation."Block2Paint2"]  # merged with Block2Paint5
+cue = {tick = 328, lead = 3, cut = true, every = 1116}
+
+[animation."Block1Paint4"]  # merged with Block1Paint5
+cue = {tick = 520, lead = 3, cut = true, every = 1120}

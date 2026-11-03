@@ -1,0 +1,1025 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Draw views</title>
+<style>
+:root {
+  --bg: #16191c; --panel: #1f2327; --line: #343a40; --text: #dde1e5; --dim: #8a939b;
+  --accent: #ffb000; --onaccent: #111; --view: #4fc3f7; --other: #9ccc65; --gen: #ce93d8; --bad: #ef5350; --selbg: #3a3220;
+  --hand: #c2185b;
+  /* The picture's boxes and route (the Tint button picks one of TINTS; manual views and pans in the tint,
+     generated views neutral gray, owner 2026-11-02) */
+  --sel: #ff6a1a;
+}
+/* The generator's light mode (settings page, same browser setting) */
+/* (the picture's boxes keep the dark colours, read from :root) */
+body.light { --bg: #e6d8b8; --panel: #f2e9d3; --line: #c4ad82; --text: #1f1a10; --dim: #56492f; --accent: #b86b00;
+  --view: #0277bd; --other: #558b2f; --gen: #8e24aa; --bad: #c62828; --selbg: #e9d29a; }
+body.light button, body.light select, body.light input, body.light textarea { background: #ece0c2; }
+body.light kbd { background: #ece0c2; }
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 13px/1.4 system-ui, sans-serif; }
+body { display: grid; grid-template-rows: auto 1fr auto; grid-template-columns: 1fr 6px var(--aside, max(320px, 30vw)); height: 100vh; }
+header { grid-column: 1 / 4; position: relative; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 6px 8px;
+  background: var(--panel); border-bottom: 1px solid var(--line); }
+header .grow { flex: 1; }
+button, select, input { font: inherit; color: var(--text); background: #2a2f34; border: 1px solid var(--line); border-radius: 4px; padding: 3px 8px; }
+button:hover:not(:disabled) { border-color: var(--dim); }
+button:disabled { opacity: .4; }
+button.on { background: var(--accent); color: var(--onaccent); border-color: var(--accent); font-weight: 600; }
+select { max-width: 280px; }
+#stage { position: relative; overflow: hidden; }
+canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: crosshair; }
+#overlay { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); padding: 10px 16px;
+  background: rgba(0,0,0,.7); border-radius: 6px; pointer-events: none; white-space: pre-wrap; max-width: 80%; }
+/* The list's width: drag the bar between the picture and the list (kept in the browser) */
+#split { cursor: col-resize; background: var(--line); }
+#split:hover, #split.on { background: var(--accent); }
+aside { min-width: 0; background: var(--panel); overflow-y: auto; padding: 8px; }
+aside h2 { font-size: 13px; margin: 4px 0 8px; display: flex; justify-content: space-between; }
+table { width: 100%; border-collapse: collapse; }
+td { padding: 3px 2px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+tr { cursor: pointer; }
+thead th { position: sticky; top: 0; background: var(--panel); text-align: left; font-weight: 600; color: var(--dim);
+  padding: 3px 2px; border-bottom: 1px solid var(--line); white-space: nowrap; cursor: default; z-index: 1; }
+tr.sel td { background: var(--selbg); }
+tr.away td.n { color: var(--dim); }
+td.n { font-weight: 600; width: 24px; }
+td input { width: 52px; padding: 1px 4px; }
+td input.auto { color: var(--dim); font-style: italic; }
+td input.pan { width: 40px; }
+td button { padding: 0 5px; }
+.tag { font-size: 11px; color: var(--dim); }
+.tag.you { color: #fff; background: var(--hand); padding: 0 5px; font-weight: 600; }
+#notes { margin-top: 12px; line-height: 1.45; }
+#notes ul { padding-left: 16px; margin: 4px 0; }
+#notes li { margin-bottom: 4px; white-space: normal; }
+#notes code { font-size: 11px; }
+/* Centred on the bar, over whatever sits there */
+#status { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); pointer-events: none;
+  padding: 2px 12px; border-radius: 10px; color: var(--dim); white-space: nowrap; }
+#status:empty { display: none; }
+/* only changes not yet saved get the yellow backing */
+#status.pending { background: #ffb000; color: #111; font-weight: 600; }
+#status.err { background: var(--bad); color: #fff; font-weight: 600; }
+#events { margin-top: 14px; }
+#events .ev { display: grid; grid-template-columns: auto 1fr 58px; gap: 4px 8px; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--line); }
+#events .ev .when { grid-column: 2 / 4; font-size: 12px; color: var(--dim); white-space: normal; }
+#events .ev.off .name { color: var(--dim); text-decoration: line-through; }
+#events .name { font-weight: 600; white-space: normal; }
+#events input { width: 58px; }
+#events input.wide { width: 100%; }
+#events .row.full { grid-template-columns: 1fr; gap: 3px; }
+#events .row.full input { width: 100%; font-family: monospace; }
+#events .row { display: grid; grid-template-columns: 1fr 150px; gap: 6px; align-items: center; padding: 4px 0; }
+#events .sub { margin: 10px 0 4px; font-weight: 600; }
+button.sw { min-width: 38px; }
+#pasteBox[hidden], #events[hidden] { display: none; }
+#pasteBox { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: flex; align-items: center; justify-content: center; z-index: 10; }
+#pasteBox > div { background: var(--panel); border: 1px solid var(--line); padding: 12px; width: min(640px, 90vw); display: flex; flex-direction: column; gap: 8px; }
+#pasteBox textarea { width: 100%; height: 220px; font: 12px monospace; color: var(--text); background: var(--bg); border: 1px solid var(--line); }
+footer { grid-column: 1 / 4; padding: 4px 8px; color: var(--dim); background: var(--panel); border-top: 1px solid var(--line); font-size: 12px; }
+kbd { background: #2a2f34; border: 1px solid var(--line); border-radius: 3px; padding: 0 3px; font: 11px monospace; color: var(--text); }
+</style>
+</head>
+<body>
+<header>
+  <button id="prev" title="Previous park (Page Up)">◀</button>
+  <select id="parks"></select>
+  <button id="next" title="Next park (Page Down)">▶</button>
+  <span style="margin-left:8px">Angle</span>
+  <span id="angles"></span>
+  <button id="gen" title="Show the generated views as dashed boxes (G)">Generated</button>
+  <button id="tint" title="Colors of the boxes and route">Tint 1</button>
+  <button id="undo" title="Undo (Ctrl+Z)">Undo</button>
+  <button id="redo" title="Redo (Ctrl+Y)">Redo</button>
+  <span class="grow"></span>
+  <button id="copy" title="Copy this park's views (and, in the generator, its event settings) as text, to keep or to paste into another playlist">Copy</button>
+  <button id="paste" title="Load views (and event settings) copied before, replacing this park's">Paste</button>
+  <button id="reset" title="Drop custom views for this park and revert to automatic ones">Reset views</button>
+  <span id="status"></span>
+</header>
+<div id="stage"><canvas id="c"></canvas><div id="overlay" hidden></div></div>
+<div id="split" title="Drag to widen or narrow the list"></div>
+<aside>
+  <h2><span id="title">Views</span><span id="total" class="tag"></span></h2>
+  <table><thead><tr><th title="Play order">#</th><th title="Angle (rotation) the view is seen from">↻</th><th title="Zoom level (−2 closest)"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-label="Zoom" style="vertical-align:-2px"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l4.5 4.5" stroke-linecap="round"/></svg></th>
+    <th title="Hold: seconds on the view (typed holds 🔒 stay as set)">⏱︎</th><th title="Share of the hold spent panning on to the next view">Pan</th>
+    <th title="Align: the angle and zoom change as the pan sets off (start) or arrives (end)">Align</th><th></th><th title="Who placed the view: you (manual), the generator (auto), or the overview">Source</th></tr></thead>
+    <tbody id="list"></tbody></table>
+  <div id="events" hidden></div>
+  <div class="tag" id="notes"></div>
+</aside>
+<div id="pasteBox" hidden><div><b>Paste views</b><span class="tag">Your browser didn't hand over the clipboard: paste the copied text here.</span>
+  <textarea id="pasteText"></textarea><div style="display:flex;gap:6px;justify-content:flex-end"><button id="pasteCancel">Cancel</button><button id="pasteOk" class="on">Load</button></div></div></div>
+<footer>
+  <b>Drag</b> on the picture to draw a view (its size snaps to a zoom level) ·
+  <b>double-click</b> adds one at the last zoom · click selects, drag a box by its edge or label to move it ·
+  <kbd>+</kbd><kbd>-</kbd> or <kbd>Shift</kbd>+wheel zoom it · <kbd>Del</kbd> deletes ·
+  <kbd>[</kbd><kbd>]</kbd> or <kbd>,</kbd><kbd>.</kbd> reorder · <kbd>Tab</kbd> next view · <kbd>O</kbd> marks the overview ·
+  <kbd>Q</kbd><kbd>E</kbd> turn the picture, with <kbd>Shift</kbd> turn the view ·
+  wheel zooms the picture, right-drag or <kbd>Space</kbd>+drag pans, <kbd>F</kbd> fits ·
+  <kbd>PgUp</kbd><kbd>PgDn</kbd> parks. Saved as you go.
+</footer>
+<script>
+"use strict";
+const TILE = 32, MIN_ZOOM = -2, MAX_ZOOM = 3, NEW_HOLD = 8;
+const $ = id => document.getElementById(id);
+// Served by the generator's settings server (its token in the URL: /draw?t=…&park=<key>), or by drawviews.py
+const QUERY = new URLSearchParams(location.search), TOKEN = QUERY.get("t") || "", GEN = !!TOKEN;
+const apiUrl = path => GEN ? `/api/draw/${path}${path.includes("?") ? "&" : "?"}t=${encodeURIComponent(TOKEN)}` : "/api/" + path;
+const imageUrl = (p, r) => GEN ? apiUrl(`image?park=${p}&rotation=${r}`) : `/image?park=${p}&rotation=${r}`;
+const canvas = $("c"), ctx = canvas.getContext("2d");
+
+let state, screen;
+let cur = -1;            // park index
+let rot = 0;             // angle shown
+let sel = -1;            // selected view
+let showGen = false;
+let lastZoom = 0;
+const renders = {};      // "park/rot" -> {plan, img, error}
+const cams = {};         // "park/rot" -> {x, y}: screen point at the canvas centre
+const scales = {};       // park -> canvas px per screen px, the same for all its angles
+const history = {};      // park -> {undo: [], redo: []}
+let saveTimer = null, saving = Promise.resolve();
+
+// --- projection (as the plugin's fit.ts) ---
+function toScreen(x, y, z, r) {
+  const [a, b] = [[x, y], [y, -x], [-x, -y], [-y, x]][r & 3];
+  return { x: b - a, y: (a + b) / 2 - z };
+}
+function toWorld(p, z, r) {
+  const a = p.y + z - p.x / 2, b = p.y + z + p.x / 2;
+  const [x, y] = [[a, b], [-b, a], [-a, -b], [b, -a]][r & 3];
+  return { x, y };
+}
+function park() { return state.parks[cur]; }
+function views() { return park().views; }
+function centreOf(v, r = v.rotation) { return toScreen(v.x * TILE + TILE / 2, v.y * TILE + TILE / 2, v.z, r); }
+function sizeOf(zoom) { return { w: screen.width * 2 ** zoom, h: screen.height * 2 ** zoom }; }
+/** The height along the line of sight through screen point p where it passes nearest the
+ * middle of the park's content (within its heights), so a view's x and y stay near the park.
+ * Any height on that line gives the same camera. */
+function planeZ(p, r) {
+  const b = park().box, w0 = toWorld(p, 0, r), w1 = toWorld(p, 1, r);
+  const cx = (b.cx ?? (b.x0 + b.x1 + 1) / 2) * TILE, cy = (b.cy ?? (b.y0 + b.y1 + 1) / 2) * TILE;
+  const dx = w1.x - w0.x, dy = w1.y - w0.y;
+  const t = ((cx - w0.x) * dx + (cy - w0.y) * dy) / (dx * dx + dy * dy);
+  return Math.round(Math.max(b.z0 ?? 0, Math.min(b.z1 ?? 0, t)));
+}
+function placeAt(v, p) {
+  v.z = planeZ(p, v.rotation);
+  const w = toWorld(p, v.z, v.rotation);
+  v.x = round2((w.x - TILE / 2) / TILE); v.y = round2((w.y - TILE / 2) / TILE);
+  return v;
+}
+function viewAt(p, r, zoom, hold) {
+  return placeAt({ x: 0, y: 0, z: 0, rotation: r, zoom, hold, manual: true }, p);
+}
+function round2(n) { return Math.round(n * 100) / 100; }
+function moveView(v, p) {
+  placeAt(v, p);
+  v.manual = true;
+}
+function snapZoom(w, h) {
+  const r = Math.max(w / screen.width, h / screen.height, 1e-6);
+  return Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, Math.round(Math.log2(r))));
+}
+
+// --- canvas camera ---
+function camKey() { return cur + "/" + rot; }
+function cam() { return cams[camKey()]; }
+function makeCam(x, y) {
+  return { x, y, get scale() { return scales[cur]; }, set scale(v) { scales[cur] = v; } };
+}
+/** Points the picture at screen point p, keeping the zoom; the first time, at a zoom where a
+ * zoom-0 view fills most of the canvas (each park starts there). */
+function lookAt(p) {
+  if (scales[cur] === undefined) scales[cur] = Math.min(canvas.clientWidth / screen.width, canvas.clientHeight / screen.height) * 0.9;
+  cams[camKey()] = makeCam(p.x, p.y);
+}
+/** The world point at the middle of the picture now (on the content's height there). */
+function lookingAt() {
+  const c = cam();
+  if (!c) return null;
+  const z = planeZ(c, rot), w = toWorld(c, z, rot);
+  return { x: w.x, y: w.y, z };
+}
+function contentMiddle() {
+  const b = park().box;
+  return { x: (b.cx ?? (b.x0 + b.x1 + 1) / 2) * TILE, y: (b.cy ?? (b.y0 + b.y1 + 1) / 2) * TILE, z: b.zm ?? b.z0 ?? 0 };
+}
+function toCanvas(p) { const c = cam(); return { x: (p.x - c.x) * c.scale + canvas.clientWidth / 2, y: (p.y - c.y) * c.scale + canvas.clientHeight / 2 }; }
+function fromCanvas(x, y) { const c = cam(); return { x: (x - canvas.clientWidth / 2) / c.scale + c.x, y: (y - canvas.clientHeight / 2) / c.scale + c.y }; }
+function fit() {
+  const r = renders[camKey()], plan = r && r.plan;
+  if (!plan || plan.error) return;
+  const w = plan.width * 2 ** plan.zoom, h = plan.height * 2 ** plan.zoom;
+  cams[camKey()] = makeCam(plan.left + w / 2, plan.top + h / 2);
+  scales[cur] = Math.min(canvas.clientWidth / w, canvas.clientHeight / h) * 0.98;
+}
+function centreOn(v) {
+  if (!cam()) lookAt(centreOf(v));
+  const p = centreOf(v), s = sizeOf(v.zoom), c = cam();
+  c.x = p.x; c.y = p.y;
+  // Zoom the picture out if the box wouldn't fit.
+  c.scale = Math.min(c.scale, canvas.clientWidth / s.w * 0.9, canvas.clientHeight / s.h * 0.9);
+}
+
+// --- drawing ---
+function draw() {
+  const dpr = window.devicePixelRatio || 1;
+  const W = canvas.clientWidth, H = canvas.clientHeight;
+  if (canvas.width !== Math.round(W * dpr) || canvas.height !== Math.round(H * dpr)) {
+    canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr);
+  }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = "#000"; ctx.fillRect(0, 0, W, H);
+  if (cur < 0 || !cam()) return;
+  const r = renders[camKey()];
+  if (r && r.img) {
+    const p = r.plan, a = toCanvas({ x: p.left, y: p.top }), s = cam().scale * 2 ** p.zoom;
+    ctx.imageSmoothingEnabled = s < 1;
+    ctx.drawImage(r.img, a.x, a.y, p.width * s, p.height * s);
+  }
+  if (showGen) {
+    ctx.setLineDash([6, 5]);
+    park().generated.forEach((v, i) => { if (v.rotation === rot) box(v, "var(--gen)", "g" + (i + 1), false); });
+    ctx.setLineDash([]);
+  }
+  // The route as the renders page draws it: a solid line with an arrow where a view pans on to the next
+  // (the last back to the first), a dashed one where it cuts (the camera's path, seen from this angle),
+  // each in the colour of the view it leaves
+  const vs = views();
+  if (vs.length > 1) vs.forEach((v, i) => {
+    const a = toCanvas(centreOf(v, rot)), b = toCanvas(centreOf(vs[(i + 1) % vs.length], rot));
+    if (Math.hypot(b.x - a.x, b.y - a.y) < 4) return;
+    const panning = v.pan > 0;
+    ctx.setLineDash(panning ? [] : [8, 6]); ctx.lineWidth = panning ? 3 : 2;
+    ctx.strokeStyle = ctx.fillStyle = viewColour(v, i);
+    ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+    ctx.setLineDash([]);
+    const ang = Math.atan2(b.y - a.y, b.x - a.x), mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2, k = 9;
+    ctx.beginPath(); ctx.moveTo(mx + k * Math.cos(ang), my + k * Math.sin(ang));
+    ctx.lineTo(mx + k * Math.cos(ang + 2.5), my + k * Math.sin(ang + 2.5)); ctx.lineTo(mx + k * Math.cos(ang - 2.5), my + k * Math.sin(ang - 2.5));
+    ctx.closePath(); ctx.fill();
+  });
+  drawMarkers();
+  views().forEach((v, i) => { if (v.rotation === rot && i !== sel) box(v, viewColour(v, i), String(i + 1), false); });
+  if (sel >= 0 && views()[sel] && views()[sel].rotation === rot) box(views()[sel], "var(--sel)", String(sel + 1), true);
+  if (drag && drag.mode === "draw" && drag.moved) {
+    const a = toCanvas(drag.start), b = toCanvas(drag.now);
+    ctx.setLineDash([3, 3]); ctx.strokeStyle = "#fff"; ctx.lineWidth = 1;
+    ctx.strokeRect(a.x, a.y, b.x - a.x, b.y - a.y); ctx.setLineDash([]);
+    box(drawnView(drag), "var(--sel)", "+", true);
+  }
+}
+// (from the body, where the light mode sets its colours)
+// (from :root: the boxes on the picture keep the dark mode's colours in light mode too)
+function cssVar(c) { return c.startsWith("var(") ? getComputedStyle(document.documentElement).getPropertyValue(c.slice(4, -1)).trim() : c; }
+function box(v, colour, label, strong) {
+  const c = centreOf(v, rot), s = sizeOf(v.zoom);
+  const a = toCanvas({ x: c.x - s.w / 2, y: c.y - s.h / 2 }), w = s.w * cam().scale, h = s.h * cam().scale;
+  colour = cssVar(colour);
+  if (strong) { ctx.fillStyle = colour + "22"; ctx.fillRect(a.x, a.y, w, h); }
+  ctx.strokeStyle = colour; ctx.lineWidth = strong ? 3 : 2;
+  ctx.strokeRect(a.x, a.y, w, h);
+  const text = label + "  zoom " + v.zoom + (v.hold ? "  " + v.hold + " s" : "");
+  ctx.font = "600 12px system-ui, sans-serif";
+  const tw = ctx.measureText(text).width + 8;
+  // Keep the label on the canvas for boxes larger than it.
+  const lx = Math.min(Math.max(a.x, 0), a.x + w - tw), ly = Math.min(Math.max(a.y, 0), a.y + h - 17);
+  ctx.fillStyle = colour; ctx.fillRect(lx, ly, tw, 17);
+  ctx.fillStyle = ink(colour); ctx.fillText(text, lx + 4, ly + 13);
+}
+/** Text colour on a fill: dark on light colours, white on dark ones (the light mode's are dark). */
+function ink(colour) {
+  const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})/i.exec(colour.trim());
+  if (!m) return "#111";
+  const [r, g, b] = m.slice(1).map(h => parseInt(h, 16));
+  return 0.299 * r + 0.587 * g + 0.114 * b > 150 ? "#111" : "#fff";
+}
+/** Views seen from other angles: a numbered marker at where each one looks, as seen from this angle
+ * (a click selects it, turning the picture to its angle). Returns their canvas positions. */
+const MARK = 13;
+function markers() {
+  return views().map((v, i) => v.rotation === rot ? null : { i, ...toCanvas(centreOf(v, rot)) }).filter(Boolean);
+}
+function drawMarkers() {
+  ctx.font = "600 12px system-ui, sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  for (const m of markers()) {
+    const colour = viewColour(views()[m.i], m.i);
+    ctx.beginPath(); ctx.arc(m.x, m.y, MARK, 0, Math.PI * 2);
+    ctx.fillStyle = colour; ctx.fill(); ctx.lineWidth = 2; ctx.strokeStyle = "#fff"; ctx.stroke();
+    ctx.fillStyle = ink(colour); ctx.fillText(String(m.i + 1), m.x, m.y + 1);
+  }
+  ctx.textAlign = "start"; ctx.textBaseline = "alphabetic";
+}
+function markerAt(x, y) {
+  const hit = markers().filter(m => Math.hypot(m.x - x, m.y - y) <= MARK + 2);
+  return hit.length ? hit[hit.length - 1].i : -1;
+}
+
+// --- sidebar and header ---
+function renderList() {
+  const list = $("list"), vs = views();
+  list.innerHTML = "";
+  vs.forEach((v, i) => {
+    const tr = document.createElement("tr");
+    tr.className = (i === sel ? "sel " : "") + (v.rotation !== rot ? "away" : "");
+    tr.dataset.i = i;
+    tr.innerHTML = `<td class="n">${i + 1}</td>
+      <td>${v.rotation}</td><td>${v.zoom}</td>
+      <td><input type="number" min="1" max="600" step="0.5" value="${v.hold}" title="${v.holdSet ? "Seconds held (set by you)" : "Seconds held (shared out automatically until you set it)"}" ${v.holdSet ? "" : 'class="auto"'}> s${v.holdSet ? ' <button data-a="unlock" title="Set by you: click to share it out automatically again">🔒</button>' : ""}</td>
+      <td><input class="pan" type="number" min="0" max="100" step="10" value="${Math.round((v.pan || 0) * 100)}" title="Share of the hold spent panning to the next view (0: held still, then a cut)"> %</td>
+      <td><button data-a="changes" title="Angle and zoom change as the pan sets off (start) or arrives (end)">${v.panChanges === "start" ? "start" : "end"}</button></td>
+      <td><button data-a="up" title="Earlier ([)">↑</button><button data-a="down" title="Later (])">↓</button><button data-a="del" title="Delete (Del)">✕</button></td>
+      <td><span class="tag ${v.manual ? "you" : ""}" title="${v.manual ? "Manual: drawn or moved by you" : v.overview ? "The park's overview" : "Placed by the generator"}">${v.overview ? (v.manual ? "overview ✎" : "overview") : v.manual ? "manual" : "auto"}</span></td>`;
+    tr.addEventListener("click", e => {
+      if (e.target.tagName === "INPUT") return;
+      const a = e.target.dataset && e.target.dataset.a;
+      if (a === "up") return reorder(i, -1);
+      if (a === "down") return reorder(i, 1);
+      if (a === "del") return remove(i);
+      if (a === "unlock") return change(() => { delete vs[i].holdSet; }, true);
+      if (a === "changes") return change(() => { vs[i].panChanges = vs[i].panChanges === "start" ? "end" : "start"; });
+      select(i, true);
+    });
+    const panInput = tr.querySelector("input.pan");
+    panInput.addEventListener("change", () => {
+      const pan = Math.max(0, Math.min(100, Math.round(parseFloat(panInput.value))));
+      if (!isFinite(pan)) { panInput.value = Math.round((v.pan || 0) * 100); return; }
+      panInput.blur();
+      change(() => { if (pan > 0) vs[i].pan = pan / 100; else delete vs[i].pan; });
+    });
+    const input = tr.querySelector("input:not(.pan)");
+    input.addEventListener("change", () => {
+      const hold = Math.max(1, Math.min(600, Math.round(parseFloat(input.value) * 10) / 10));
+      if (!isFinite(hold)) { input.value = v.hold; return; }
+      input.blur();
+      change(() => { vs[i].hold = hold; vs[i].holdSet = true; }, true);
+    });
+    list.appendChild(tr);
+  });
+  const total = vs.reduce((t, v) => t + (+v.hold || 0), 0);
+  $("total").textContent = vs.length + " views, " + Math.round(total * 10) / 10 + " s";
+  $("title").textContent = park().saved ? "Views (drawn)" : "Views (generated)";
+  $("reset").disabled = !park().saved;
+  const h = history[cur];
+  $("undo").disabled = !h || !h.undo.length;
+  $("redo").disabled = !h || !h.redo.length;
+}
+function renderHeader() {
+  const angles = $("angles");
+  angles.innerHTML = "";
+  for (let r = 0; r < 4; r++) {
+    const b = document.createElement("button");
+    b.textContent = r; b.className = r === rot ? "on" : ""; b.title = "Angle " + r + " (Q/E)";
+    b.onclick = () => setRotation(r);
+    angles.appendChild(b);
+  }
+  $("gen").className = showGen ? "on" : "";
+  $("parks").value = cur;
+}
+function refresh() { renderHeader(); renderList(); renderEvents(); draw(); }
+function setStatus(text, err) { const s = $("status"); s.textContent = text; s.className = err ? "err" : text.startsWith("unsaved") ? "pending" : ""; }
+function overlay(text) { const o = $("overlay"); o.hidden = !text; o.textContent = text || ""; }
+
+// --- renders ---
+async function ensureRender(p, r) {
+  const key = p + "/" + r;
+  if (renders[key]) return renders[key].ready;
+  const entry = renders[key] = {};
+  entry.ready = (async () => {
+    const plan = await (await fetch(apiUrl(`render?park=${p}&rotation=${r}`))).json();
+    entry.plan = plan;
+    if (plan.error) { entry.error = plan.error; return; }
+    const img = new Image();
+    img.src = imageUrl(p, r);
+    await img.decode();
+    entry.img = img;
+  })().catch(e => { entry.error = String(e); });
+  return entry.ready;
+}
+async function showRender() {
+  const key = camKey(), p = cur, r = rot;
+  const entry = renders[key];
+  if (!entry || (!entry.img && !entry.error)) overlay("Rendering " + park().name + " from angle " + r + " …");
+  await ensureRender(p, r);
+  if (p !== cur || r !== rot) return;
+  const e = renders[key];
+  overlay(e.error ? "OpenRCT2 could not render this angle:\n" + e.error : "");
+  draw();
+}
+
+// --- navigation ---
+function setPark(i) {
+  flush();
+  cur = (i + state.parks.length) % state.parks.length;
+  sel = -1;
+  const first = views()[0];
+  rot = first ? first.rotation : 0;
+  history[cur] = history[cur] || { undo: [], redo: [] };
+  // The park's first view in the middle (owner, 2026-11-02), else the middle of its content
+  const m = contentMiddle();
+  if (!cam()) lookAt(first ? centreOf(first) : toScreen(m.x, m.y, m.z, rot));
+  if (first) centreOn(first);
+  refresh();
+  showRender();
+  for (let r = 0; r < 4; r++) ensureRender(cur, r); // the other angles in the background
+}
+function setRotation(r) {
+  // The new angle looks at the same spot, at the same zoom.
+  const w = lookingAt();
+  rot = (r + 4) % 4;
+  if (w) lookAt(toScreen(w.x, w.y, w.z, rot));
+  refresh();
+  showRender();
+}
+function select(i, follow) {
+  sel = i;
+  const v = views()[i];
+  if (v && follow) {
+    if (v.rotation !== rot) {
+      const w = lookingAt();
+      rot = v.rotation;
+      if (w) lookAt(toScreen(w.x, w.y, w.z, rot));
+      centreOn(v); refresh(); showRow(i); showRender().then(() => { centreOn(v); draw(); });
+      return;
+    }
+    const c = toCanvas(centreOf(v)), s = sizeOf(v.zoom), k = cam().scale;
+    const W = canvas.clientWidth, H = canvas.clientHeight;
+    if (c.x - s.w * k / 2 < 0 || c.x + s.w * k / 2 > W || c.y - s.h * k / 2 < 0 || c.y + s.h * k / 2 > H) centreOn(v);
+  }
+  refresh();
+  showRow(i);
+}
+function showRow(i) { const tr = $("list").querySelector(`tr[data-i="${i}"]`); if (tr) tr.scrollIntoView({ block: "nearest" }); }
+
+// --- edits ---
+/** Shares the park's time between the views whose hold you haven't set: the playlist's
+ * park_time for up to base_views views, plus view_time per further view, at least view_time each. */
+function spreadHolds(vs) {
+  const t = state.timing, auto = vs.filter(v => !v.holdSet);
+  if (!auto.length) return;
+  const total = t.park_time + t.view_time * Math.max(0, vs.length - t.base_views);
+  const fixed = vs.reduce((sum, v) => sum + (v.holdSet ? +v.hold : 0), 0);
+  // An overview (not set by hand) holds overview_lead longer than the longest close-up.
+  const overview = auto.find(v => v.overview);
+  const lead = overview ? t.overview_lead : 0;
+  const share = Math.max(t.view_time, (total - fixed - lead) / auto.length);
+  const longest = Math.max(share, ...vs.filter(v => v.holdSet && !v.overview).map(v => +v.hold));
+  const r1 = n => Math.round(n * 10) / 10;
+  auto.forEach(v => { v.hold = r1(v === overview ? longest + lead : share); });
+  // Rounding leftovers go to the first close-up, so the total comes out even.
+  const first = auto.find(v => v !== overview) || auto[0];
+  first.hold = r1(first.hold + r1(share - r1(share)) * (auto.length - (overview ? 1 : 0)));
+}
+/** Applies an edit with undo; `spread` shares the time out again (views added, removed, or a
+ * hold set or released). */
+function change(fn, spread) {
+  const h = history[cur];
+  h.undo.push(JSON.stringify(views()));
+  if (h.undo.length > 200) h.undo.shift();
+  h.redo = [];
+  fn();
+  if (spread) spreadHolds(views());
+  scheduleSave();
+  refresh();
+}
+function undo(redo) {
+  const h = history[cur], from = redo ? h.redo : h.undo, to = redo ? h.undo : h.redo;
+  if (!from.length) return;
+  to.push(JSON.stringify(views()));
+  park().views = JSON.parse(from.pop());
+  if (sel >= views().length) sel = views().length - 1;
+  scheduleSave();
+  const v = views()[sel];
+  if (v && v.rotation !== rot) { rot = v.rotation; showRender(); }
+  refresh();
+}
+function reorder(i, d) {
+  const j = i + d, vs = views();
+  if (j < 0 || j >= vs.length) return;
+  change(() => { [vs[i], vs[j]] = [vs[j], vs[i]]; if (sel === i) sel = j; else if (sel === j) sel = i; });
+}
+function remove(i) {
+  change(() => { views().splice(i, 1); if (sel >= i) sel = Math.min(sel, views().length - 1); if (sel === i && i >= views().length) sel = -1; }, true);
+}
+function zoomView(i, d) {
+  const v = views()[i];
+  const z = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, v.zoom + d));
+  if (z === v.zoom) return;
+  change(() => { v.zoom = z; v.manual = true; lastZoom = z; });
+}
+function turnView(i, d) {
+  const v = views()[i];
+  change(() => { v.rotation = (v.rotation + d + 4) % 4; v.manual = true; });
+  rot = v.rotation;
+  refresh();
+  showRender().then(() => { centreOn(v); draw(); });
+}
+
+// --- saving ---
+let pending = null;
+function scheduleSave() {
+  pending = cur;
+  setStatus("unsaved…");
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(flush, 400);
+}
+function flush() {
+  clearTimeout(saveTimer);
+  if (pending === null) return saving;
+  const p = pending, vs = JSON.parse(JSON.stringify(state.parks[p].views));
+  pending = null;
+  setStatus("saving…");
+  saving = saving.then(() => post("save", { park: p, views: vs })).then(res => {
+    if (res.error) throw new Error(res.error);
+    state.parks[p].saved = res.saved; // deleting every view drops the park's entry
+    if (pending === null) setStatus("saved");
+    if (p === cur) renderList();
+  }).catch(e => setStatus("not saved: " + e.message, true));
+  return saving;
+}
+async function post(path, body) {
+  const url = path.startsWith("/") ? path : GEN ? "/api/draw/" + path : "/api/" + path;
+  const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json", "X-Draw-Views": "1", "X-Token": TOKEN }, body: JSON.stringify(body) });
+  return res.json();
+}
+async function reset() {
+  if (!confirm("Drop custom views for this park and revert to automatic ones?")) return;
+  clearTimeout(saveTimer); pending = null;
+  await saving;
+  const res = await post("reset", { park: cur });
+  if (res.error) return setStatus("reset failed: " + res.error, true);
+  history[cur].undo.push(JSON.stringify(views())); history[cur].redo = [];
+  park().views = res.views || JSON.parse(JSON.stringify(park().generated)); park().saved = false; sel = -1;
+  setStatus("reset");
+  refresh();
+}
+
+// --- copy and paste: a park's views (and in the generator its event settings) as text ---
+const EVENT_SECTIONS = { extras: ["animation_hold", "show"], views: ["show_pan", "events"] };
+function eventSettings(p) {
+  const d = (p.facts && p.facts.profileData) || {}, out = {};
+  for (const [section, keys] of Object.entries(EVENT_SECTIONS))
+    for (const k of keys) if (d[section] && k in d[section]) (out[section] = out[section] || {})[k] = d[section][k];
+  if (d.animation) out.animation = d.animation;
+  if (d.show) out.show = d.show;
+  return out;
+}
+async function copyViews() {
+  await flush();
+  const p = park();
+  const text = JSON.stringify({ format: "rct-screensaver-views", version: 1, park: p.name, key: p.key,
+    screen: [screen.width, screen.height], views: p.views, ...(GEN && p.facts ? { events: eventSettings(p) } : {}) }, null, 1);
+  try { await navigator.clipboard.writeText(text); setStatus("copied " + p.views.length + " views"); }
+  catch (e) { $("pasteText").value = text; $("pasteBox").hidden = false; $("pasteText").select(); setStatus("copy the text shown"); }
+}
+async function pasteViews() {
+  let text = "";
+  try { text = await navigator.clipboard.readText(); } catch (e) { text = ""; }
+  if (!text.trim()) { $("pasteText").value = ""; $("pasteBox").hidden = false; $("pasteText").focus(); return; }
+  loadPasted(text);
+}
+async function loadPasted(text) {
+  let data;
+  try { data = JSON.parse(text); } catch (e) { return setStatus("not views: the text isn't what Copy gives", true); }
+  const list = Array.isArray(data) ? data : data.views;
+  if (!Array.isArray(list) || !list.every(v => v && isFinite(v.x) && isFinite(v.y))) return setStatus("not views: no view list in the text", true);
+  // Views copied for another screen keep their framing: whole zoom levels, as the plugin scales them
+  const from = data.screen, offset = from && from[0] ? Math.ceil(Math.log2(Math.max(from[0] / screen.width, from[1] / screen.height)) - 0.25) : 0;
+  const vs = list.map(v => ({ ...v, zoom: Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, (v.zoom | 0) + offset)), z: v.z | 0, rotation: (v.rotation | 0) & 3,
+    hold: +v.hold > 0 ? +v.hold : NEW_HOLD, manual: true }));
+  change(() => { park().views = vs; sel = -1; });
+  let note = "pasted " + vs.length + " views" + (data.park && data.park !== park().name ? " (copied from " + data.park + ")" : "");
+  const f = park().facts;
+  if (GEN && data.events && f && ((f.animations || []).length || (f.shows || []).length) && Object.keys(data.events).length) {
+    // Only what this park has: its own animation spots, and a show its companions offer
+    const known = new Set((f.animations || []).map(a => a.name));
+    data.events.animation = Object.fromEntries(Object.entries(data.events.animation || {}).filter(([n]) => known.has(n)));
+    if (data.events.extras && data.events.extras.show && !(f.shows || []).includes(data.events.extras.show)) delete data.events.extras.show;
+    const before = eventSettings(park()), changes = { extras: {}, views: {}, animation: {}, show: {} };
+    for (const [section, keys] of Object.entries(EVENT_SECTIONS))
+      for (const k of keys) {
+        const a = (before[section] || {})[k], b = (data.events[section] || {})[k];
+        if (JSON.stringify(a) !== JSON.stringify(b)) changes[section][k] = b === undefined ? null : b;
+      }
+    const names = new Set([...Object.keys(before.animation || {}).filter(n => known.has(n)), ...Object.keys(data.events.animation || {})]);
+    for (const n of names) {
+      const a = (before.animation || {})[n], b = (data.events.animation || {})[n];
+      if (JSON.stringify(a) !== JSON.stringify(b)) changes.animation[n] = b ? { off: b.off ?? null, hold: b.hold ?? null } : null;
+    }
+    for (const [n, def] of Object.entries(data.events.show || {})) if ((park().facts.showDefs || {})[n]) changes.show[n] = def;
+    if (await saveEvents(changes)) note += " and their event settings";
+  }
+  setStatus(note);
+}
+
+// --- events: the park's animation spots and show, from its profile (generator only) ---
+const TICKS = 40;
+const secs = t => (Math.round(t / TICKS * 10) / 10) + " s";
+/** When an event happens, in seconds: a timeline event at its time after the park loads (and its
+ * repeat), a car-cued one when a car arrives; continuous ones play whenever the camera is there. */
+function cueText(c) {
+  if (!c) return "plays whenever the camera is there: a stop on the route";
+  const runs = c.ticks ? "; runs " + secs(c.ticks) : "";
+  if (c.tick !== undefined) {
+    if (c.every) return `repeats every ${secs(c.every)}, first at ${secs(c.tick)}${runs}`;
+    return `at ${secs(c.tick)} after the park loads${c.cut ? ", cutting in" : ""}${c.lead ? `, the view ${c.lead} s ahead` : ""}${runs}`;
+  }
+  return `when a ${c.ride !== undefined ? "car of ride " + c.ride : "listed car"} reaches its tiles${runs}`;
+}
+function profileVal(section, key) { const d = (park().facts && park().facts.profileData) || {}; return d[section] && key in d[section] ? d[section][key] : undefined; }
+function renderEvents() {
+  const box = $("events"), p = cur >= 0 && park(), f = p && p.facts;
+  if (!GEN || !f || (!(f.animations || []).length && !(f.shows || []).length)) { box.hidden = true; return; }
+  box.hidden = false;
+  const d = f.profileData || {}, anim = d.animation || {};
+  const on = profileVal("views", "events") !== false && state.defaults.events !== false;
+  const defHold = profileVal("extras", "animation_hold");
+  const spots = (f.animations || []).map(a => {
+    const own = anim[a.name] || {}, offByDefault = (a.status || "").startsWith("off by default");
+    const off = "off" in own ? !!own.off : offByDefault;
+    return `<div class="ev ${off ? "off" : ""}"><button class="sw ${off ? "" : "on"}" data-spot="${esc(a.name)}" title="${off ? "Off: no view on it" : "On: a view on it, added at build"}">${off ? "off" : "on"}</button>
+      <div class="name" title="${esc(a.status || "")}">${esc(a.name)} <span class="tag">${esc(a.companion)}</span></div>
+      <input type="number" min="1" max="600" step="1" data-hold="${esc(a.name)}" value="${own.hold ?? ""}" placeholder="${defHold ?? state.defaults.hold}" title="Hold, s (empty: the default)">
+      <div class="when">${esc(cueText(a.cue))} · ${esc(a.status || "")}</div></div>`;
+  }).join("");
+  const show = profileVal("extras", "show") ?? "", def = show && (f.showDefs || {})[show];
+  const pathTicks = def && def.path ? def.path.reduce((t, q) => t + (+q.ticks || 0), 0) : 0;
+  const built = (p.events || []).filter(v => v.show);
+  box.innerHTML = `<h2><span>Events</span><button class="sw ${on ? "on" : ""}" id="evAll" title="Event views for this park, added to the views at build">${on ? "on" : "off"}</button></h2>
+    <div class="row"><span>Default hold per spot, s</span><input type="number" id="evHold" min="1" max="600" value="${defHold ?? ""}" placeholder="${state.defaults.hold}"></div>
+    ${spots ? `<div class="sub">Animation spots</div>${spots}` : ""}
+    ${(f.shows || []).length ? `<div class="sub">Show</div>
+      <div class="row"><span>Scripted show as last view</span><select id="evShow"><option value="">none</option>${f.shows.map(n => `<option ${n === show ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></div>
+      ${def ? `<div class="row full" title="Tile x, y, zoom, angle"><span>Show view: x, y, zoom, rotation</span><input type="text" id="evView" value="${def.view ? `${def.view.x}, ${def.view.y}, ${def.view.zoom ?? 0}, ${def.view.rotation ?? 0}` : ""}" ${def.view ? "" : "disabled placeholder='placed on a spot'"}></div>
+      <div class="row full" title="Points with game ticks (40/s); a bare tick count waits"><span>Camera path: x,y ticks · … (40 ticks a second)</span><input type="text" id="evPath" value="${esc(pathText(def.path))}" ${def.view ? "" : "disabled"}></div>
+      <div class="row"><span>Longest show time, s</span><input type="number" id="evShowHold" min="1" value="${def.hold ?? ""}"></div>` : show ? `<div class="tag">The ${esc(show)} show is defined in another park's profile.</div>` : ""}
+      ${show ? `<div class="row"><span>Pan share of the show</span><input type="number" id="evPan" min="0" max="1" step="0.05" value="${profileVal("views", "show_pan") ?? ""}" placeholder="${state.defaults.show_pan}"></div>
+      <div class="when tag">${def && def.hold ? "at most " + def.hold + " s" : ""}${pathTicks ? (def && def.hold ? "; " : "") + "camera path " + secs(pathTicks) : ""}${built.length ? "; " + built[0].hold + " s in the last build" : ""}</div>` : ""}` : ""}
+    <div class="tag" style="margin-top:6px">Saved to the park's profile as you change them; the next Build redoes this park.</div>`;
+}
+function pathText(path) { return (path || []).map(q => q.x !== undefined ? `${q.x},${q.y} ${q.ticks}` : `${q.ticks}`).join(" · "); }
+function parsePath(text) {
+  return text.split(/[·;]/).map(t => t.trim()).filter(Boolean).map(t => {
+    const m = t.match(/^(\d+)\s*,\s*(\d+)\s+(\d+)$/), w = t.match(/^(\d+)$/);
+    if (m) return { x: Number(m[1]), y: Number(m[2]), ticks: Number(m[3]) };
+    if (w) return { ticks: Number(w[1]) };
+    throw new Error(`can't read path point "${t}" (x,y ticks, or ticks)`);
+  });
+}
+function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]); }
+async function saveEvents(changes) {
+  setStatus("saving events…");
+  const res = await fetch("/api/profile", { method: "POST", headers: { "Content-Type": "application/json", "X-Token": TOKEN },
+    body: JSON.stringify({ key: park().key, changes }) }).then(r => r.json()).catch(e => ({ error: String(e) }));
+  if (res.error) { setStatus("events not saved: " + res.error, true); return false; }
+  // The park's profile changed: take its facts again (the views stay as they are on the page)
+  const fresh = await (await fetch(apiUrl("state"))).json();
+  if (!fresh.error) fresh.parks.forEach(q => { const mine = state.parks.find(x => x.key === q.key); if (mine) { mine.facts = q.facts; mine.events = q.events; } });
+  setStatus("events saved");
+  renderEvents();
+  return true;
+}
+$("events").addEventListener("click", e => {
+  const t = e.target, p = park();
+  if (t.id === "evAll") saveEvents({ views: { events: profileVal("views", "events") === false ? null : false } });
+  else if (t.dataset.spot) {
+    const a = p.facts.animations.find(x => x.name === t.dataset.spot), own = (p.facts.profileData.animation || {})[a.name] || {};
+    const offByDefault = (a.status || "").startsWith("off by default"), off = "off" in own ? !!own.off : offByDefault;
+    saveEvents({ animation: { [a.name]: { off: !off === offByDefault ? null : !off } } });
+  }
+});
+$("events").addEventListener("change", e => {
+  const t = e.target, num = v => v.trim() === "" ? null : Number(v);
+  if (t.dataset.hold) saveEvents({ animation: { [t.dataset.hold]: { hold: num(t.value) } } });
+  else if (t.id === "evHold") saveEvents({ extras: { animation_hold: num(t.value) } });
+  else if (t.id === "evShow") saveEvents({ extras: { show: t.value === "" ? (profileVal("extras", "show") !== undefined ? "" : null) : t.value } });
+  else if (t.id === "evPan") saveEvents({ views: { show_pan: num(t.value) } });
+  else if (t.id === "evView" || t.id === "evPath" || t.id === "evShowHold") {
+    const show = profileVal("extras", "show");
+    try {
+      const change = {};
+      if (t.id === "evView") { const [x, y, zoom, rotation] = t.value.split(",").map(v => Number(v.trim())); change.view = { x, y, zoom, rotation }; }
+      if (t.id === "evPath") change.path = parsePath(t.value);
+      if (t.id === "evShowHold") change.hold = num(t.value);
+      saveEvents({ show: { [show]: change } });
+    } catch (err) { setStatus(String(err.message || err), true); }
+  }
+});
+
+// --- mouse ---
+let drag = null, spaceDown = false;
+const GRAB = 7; // canvas px either side of a box's edge that pick it up
+/** The box whose edge or label is at canvas point (x, y) (the selected one first), or -1. */
+function grab(x, y) {
+  const vs = views(), order = [];
+  if (sel >= 0) order.push(sel);
+  for (let i = vs.length - 1; i >= 0; i--) if (i !== sel) order.push(i);
+  return order.find(i => {
+    const v = vs[i];
+    if (!v || v.rotation !== rot) return false;
+    const c = toCanvas(centreOf(v)), s = sizeOf(v.zoom), hw = s.w * cam().scale / 2, hh = s.h * cam().scale / 2;
+    const dx = Math.abs(x - c.x), dy = Math.abs(y - c.y);
+    const lx = Math.max(c.x - hw, 0), ly = Math.max(c.y - hh, 0);
+    const label = x >= lx && x <= lx + 120 && y >= ly && y <= ly + 17 && dx <= hw && dy <= hh;
+    const edge = dx <= hw + GRAB && dy <= hh + GRAB && (dx >= hw - GRAB || dy >= hh - GRAB);
+    return label || edge;
+  }) ?? -1;
+}
+/** The smallest box around screen point p, or -1. */
+function inside(p) {
+  let best = -1;
+  views().forEach((v, i) => {
+    if (v.rotation !== rot) return;
+    const c = centreOf(v), s = sizeOf(v.zoom);
+    if (Math.abs(p.x - c.x) <= s.w / 2 && Math.abs(p.y - c.y) <= s.h / 2 && (best < 0 || v.zoom < views()[best].zoom)) best = i;
+  });
+  return best;
+}
+function drawnView(d) {
+  const a = d.start, b = d.now;
+  const zoom = snapZoom(Math.abs(b.x - a.x), Math.abs(b.y - a.y));
+  return viewAt({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }, rot, zoom, NEW_HOLD);
+}
+canvas.addEventListener("contextmenu", e => e.preventDefault());
+canvas.addEventListener("mousedown", e => {
+  if (cur < 0 || !cam()) return;
+  const p = fromCanvas(e.offsetX, e.offsetY);
+  if (e.button === 1 || e.button === 2 || spaceDown) {
+    drag = { mode: "pan", x: e.offsetX, y: e.offsetY, cam: { ...cam() } };
+  } else if (e.button === 0) {
+    const m = markerAt(e.offsetX, e.offsetY);
+    if (m >= 0) { select(m, true); e.preventDefault(); return; }
+    const i = grab(e.offsetX, e.offsetY);
+    if (i >= 0) {
+      const c = centreOf(views()[i]);
+      drag = { mode: "move", i, dx: c.x - p.x, dy: c.y - p.y, moved: false };
+      sel = i; refresh();
+    } else {
+      drag = { mode: "draw", start: p, now: p, sx: e.offsetX, sy: e.offsetY, moved: false };
+    }
+  }
+  e.preventDefault();
+});
+window.addEventListener("mousemove", e => {
+  if (!drag) {
+    if (e.target === canvas && cur >= 0 && cam() && !spaceDown) canvas.style.cursor = markerAt(e.offsetX, e.offsetY) >= 0 ? "pointer" : grab(e.offsetX, e.offsetY) >= 0 ? "move" : "";
+    return;
+  }
+  const r = canvas.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
+  const p = fromCanvas(x, y);
+  if (drag.mode === "pan") {
+    const c = cam();
+    c.x = drag.cam.x - (x - drag.x) / c.scale; c.y = drag.cam.y - (y - drag.y) / c.scale;
+  } else if (drag.mode === "move") {
+    if (!drag.moved) { change(() => {}); drag.moved = true; }
+    moveView(views()[drag.i], { x: p.x + drag.dx, y: p.y + drag.dy });
+    scheduleSave();
+  } else if (drag.mode === "draw") {
+    drag.now = p;
+    if (Math.hypot(x - drag.sx, y - drag.sy) > 6) drag.moved = true;
+  }
+  draw();
+});
+window.addEventListener("mouseup", () => {
+  if (!drag) return;
+  const d = drag;
+  drag = null;
+  if (d.mode === "draw" && d.moved) {
+    const v = drawnView(d);
+    lastZoom = v.zoom;
+    const at = sel >= 0 ? sel + 1 : views().length;
+    change(() => { views().splice(at, 0, v); sel = at; }, true);
+  } else if (d.mode === "draw") {
+    sel = inside(d.start); refresh(); // a click selects the closest box around it
+  } else if (d.mode === "move") {
+    refresh();
+  } else draw();
+});
+canvas.addEventListener("dblclick", e => {
+  const p = fromCanvas(e.offsetX, e.offsetY);
+  if (grab(e.offsetX, e.offsetY) >= 0 || markerAt(e.offsetX, e.offsetY) >= 0) return;
+  const v = viewAt(p, rot, lastZoom, NEW_HOLD);
+  const at = sel >= 0 ? sel + 1 : views().length;
+  change(() => { views().splice(at, 0, v); sel = at; }, true);
+});
+canvas.addEventListener("wheel", e => {
+  if (cur < 0 || !cam()) return;
+  e.preventDefault();
+  const delta = e.deltaY || e.deltaX;
+  if (e.shiftKey && sel >= 0) {
+    if (!wheelLock) { zoomView(sel, delta > 0 ? 1 : -1); wheelLock = setTimeout(() => wheelLock = null, 150); }
+    return;
+  }
+  const c = cam(), before = fromCanvas(e.offsetX, e.offsetY);
+  c.scale = Math.max(0.01, Math.min(8, c.scale * Math.pow(1.0015, -delta)));
+  const after = fromCanvas(e.offsetX, e.offsetY);
+  c.x += before.x - after.x; c.y += before.y - after.y;
+  draw();
+}, { passive: false });
+let wheelLock = null;
+
+// --- keys ---
+window.addEventListener("keydown", e => {
+  if (cur < 0) return;
+  const t = e.target.tagName;
+  if (t === "INPUT" || t === "SELECT" || t === "TEXTAREA") { if (e.key === "Escape") e.target.blur(); return; }
+  // AltGr (needed for [ and ] on many keyboards) reports Ctrl too.
+  const k = e.key, ctrl = (e.ctrlKey || e.metaKey) && !e.getModifierState("AltGraph");
+  if (k === " ") { spaceDown = true; canvas.style.cursor = "grab"; e.preventDefault(); return; }
+  if (ctrl && (k === "z" || k === "Z")) { undo(e.shiftKey); e.preventDefault(); return; }
+  if (ctrl && (k === "y" || k === "Y")) { undo(true); e.preventDefault(); return; }
+  if (ctrl) return;
+  const step = (e.shiftKey ? 64 : 16);
+  switch (k) {
+    case "Delete": case "Backspace": if (sel >= 0) remove(sel); break;
+    case "+": case "=": if (sel >= 0) zoomView(sel, -1); break;
+    case "-": case "_": if (sel >= 0) zoomView(sel, 1); break;
+    case "q": case "Q": if (e.shiftKey && sel >= 0) turnView(sel, -1); else setRotation(rot - 1); break;
+    case "e": case "E": if (e.shiftKey && sel >= 0) turnView(sel, 1); else setRotation(rot + 1); break;
+    case "[": case ",": if (sel >= 0) reorder(sel, -1); break;
+    case "]": case ".": if (sel >= 0) reorder(sel, 1); break;
+    case "Tab": {
+      const n = views().length;
+      if (n) select(sel < 0 ? (e.shiftKey ? n - 1 : 0) : (sel + (e.shiftKey ? n - 1 : 1)) % n, true);
+      break;
+    }
+    case "Escape": sel = -1; refresh(); break;
+    case "PageUp": setPark(cur - 1); break;
+    case "PageDown": setPark(cur + 1); break;
+    case "f": case "F": fit(); draw(); break;
+    case "o": case "O": {
+      // Marks the selected view as the park's overview (one per park), or unmarks it.
+      const v = views()[sel];
+      if (v) change(() => { const on = !v.overview; views().forEach(w => delete w.overview); if (on) v.overview = true; }, true);
+      break;
+    }
+    case "g": case "G": showGen = !showGen; refresh(); break;
+    case "ArrowLeft": case "ArrowRight": case "ArrowUp": case "ArrowDown": {
+      const dx = k === "ArrowLeft" ? -1 : k === "ArrowRight" ? 1 : 0, dy = k === "ArrowUp" ? -1 : k === "ArrowDown" ? 1 : 0;
+      const v = views()[sel];
+      if (v && v.rotation === rot) {
+        const c = centreOf(v), s = step * 2 ** Math.max(0, v.zoom);
+        change(() => moveView(v, { x: c.x + dx * s, y: c.y + dy * s }));
+      } else {
+        const c = cam(), s = step * 4 / c.scale;
+        c.x += dx * s; c.y += dy * s; draw();
+      }
+      break;
+    }
+    default: return;
+  }
+  e.preventDefault();
+});
+window.addEventListener("keyup", e => { if (e.key === " ") { spaceDown = false; canvas.style.cursor = ""; } });
+window.addEventListener("resize", draw);
+window.addEventListener("beforeunload", () => { flush(); });
+
+// --- the boxes' colours: one palette in three tints (kept in the browser) ---
+// Tint 1 is the base palette; tints 2 and 3 turn every hue by the same 120° steps, so boxes and arrows
+// stay readable on parks of any colour scheme. The generator's views are gray in tint 1, and the colour
+// opposite the manual views' in the others (owner, 2026-11-02).
+const PALETTE = { view: "#ffd23f", sel: "#ff6a1a", other: "#b4b4b4", gen: "#ce93d8" };
+const TINT_STEP = 120, TINT_COUNT = 3;
+let tint = 0;
+function hexToHsl(hex) {
+  const [r, g, b] = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16) / 255);
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b), l = (mx + mn) / 2, d = mx - mn;
+  if (!d) return [0, 0, l];
+  const s = d / (1 - Math.abs(2 * l - 1));
+  const h = mx === r ? ((g - b) / d + 6) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
+  return [h * 60, s, l];
+}
+/** #rrggbb for a hue (degrees), saturation and lightness (0-1): hex, as the boxes add an alpha to it. */
+function hsl(h, s, l) {
+  h = ((h % 360) + 360) % 360;
+  const c = (1 - Math.abs(2 * l - 1)) * s, x = c * (1 - Math.abs((h / 60) % 2 - 1)), m = l - c / 2;
+  const [r, g, b] = h < 60 ? [c, x, 0] : h < 120 ? [x, c, 0] : h < 180 ? [0, c, x] : h < 240 ? [0, x, c] : h < 300 ? [x, 0, c] : [c, 0, x];
+  return "#" + [r, g, b].map(v => Math.round((v + m) * 255).toString(16).padStart(2, "0")).join("");
+}
+function turned(hex, by) { const [h, s, l] = hexToHsl(hex); return hsl(h + by, s, l); }
+function setTint(i) {
+  tint = ((i % TINT_COUNT) + TINT_COUNT) % TINT_COUNT;
+  const by = tint * TINT_STEP, root = document.documentElement.style, [vh] = hexToHsl(PALETTE.view);
+  root.setProperty("--view", turned(PALETTE.view, by));
+  root.setProperty("--sel", turned(PALETTE.sel, by));
+  root.setProperty("--gen", turned(PALETTE.gen, by));
+  root.setProperty("--other", tint ? hsl(vh + by + 180, 0.6, 0.72) : PALETTE.other);
+  $("tint").textContent = "Tint " + (tint + 1);
+  $("tint").title = `Colors of the boxes and route: palette ${tint + 1} of ${TINT_COUNT}, for parks where one is hard to see`;
+  try { localStorage.setItem("rctss-draw-tint", String(tint)); } catch (e) { /* no storage */ }
+  if (cur >= 0) draw();
+}
+/** A view's colour on the picture (its box, marker and the arrow leaving it). */
+function viewColour(v, i) { return cssVar(i === sel ? "var(--sel)" : v.manual ? "var(--view)" : "var(--other)"); }
+
+// --- the list's width ---
+function splitter() {
+  const bar = $("split"), set = w => {
+    w = Math.max(320, Math.min(window.innerWidth - 320, Math.round(w)));
+    document.body.style.setProperty("--aside", w + "px");
+    return w;
+  };
+  try { const w = +localStorage.getItem("rctss-draw-aside"); if (w) set(w); } catch (e) { /* no storage */ }
+  bar.addEventListener("mousedown", e => {
+    e.preventDefault(); bar.classList.add("on");
+    let w = 0;
+    const move = ev => { w = set(window.innerWidth - ev.clientX - 3); draw(); };
+    const up = () => {
+      bar.classList.remove("on");
+      window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up);
+      try { if (w) localStorage.setItem("rctss-draw-aside", w); } catch (e) { /* no storage */ }
+    };
+    window.addEventListener("mousemove", move); window.addEventListener("mouseup", up);
+  });
+}
+
+/** Builds the open playlist (or follows the build running now), showing its progress. True once built. */
+async function buildFirst(running) {
+  let job = running;
+  if (!job) {
+    const r = await post("/api/build", {}).catch(e => ({ error: String(e) }));
+    if (r.error) { overlay("Can't draw views yet: the playlist needs a build, which failed to start:\n" + r.error); return false; }
+    job = r.job;
+  }
+  const t0 = Date.now();
+  let since = 0, last = "";
+  for (;;) {
+    const r = await fetch(`/api/job?id=${job}&since=${since}&t=${encodeURIComponent(TOKEN)}`, { headers: { "X-Token": TOKEN } }).then(x => x.json()).catch(() => null);
+    if (r && !r.error) {
+      since = r.next;
+      if (r.lines.length) last = r.lines[r.lines.length - 1];
+      if (r.done) {
+        if (r.code === 0) { overlay(""); return true; }
+        overlay(`The build failed (exit code ${r.code}): its log is in ${r.log}`);
+        return false;
+      }
+    }
+    overlay(`Building the playlist first, so its parks can be drawn… ${Math.round((Date.now() - t0) / 1000)} s\n${last}\n\nEach angle is rendered the first time it is shown.`);
+    await new Promise(ok => setTimeout(ok, 500));
+  }
+}
+
+// --- start ---
+(async () => {
+  if (GEN) {
+    // The generator's theme, and its server's lifetime: each open page pings it
+    if (localStorage.getItem("rctss-theme") === "light") document.body.classList.add("light");
+    const page = Math.random().toString(36).slice(2);
+    const ping = () => fetch(`/api/ping?page=${page}`, { headers: { "X-Token": TOKEN } }).catch(() => {});
+    setInterval(ping, 10000); ping();
+    window.addEventListener("pagehide", () => navigator.sendBeacon(`/api/bye?page=${page}&t=${TOKEN}`));
+  }
+  splitter();
+  try { tint = +localStorage.getItem("rctss-draw-tint") || 0; } catch (e) { tint = 0; }
+  setTint(tint);
+  $("tint").onclick = () => setTint(tint + 1);
+  state = await (await fetch(apiUrl("state"))).json();
+  // Opened before a build, for a park the last build lacks, or while one runs: build (or wait for the
+  // build), then draw; renders are made as each angle is first shown (owner's question, 2026-11-02)
+  const wanted = QUERY.get("park");
+  if (GEN && (state.building || state.needsBuild || (!state.error && wanted && !state.parks.some(p => p.key === wanted)))) {
+    if (!(await buildFirst(state.building))) return;
+    state = await (await fetch(apiUrl("state"))).json();
+  }
+  if (state.error) { overlay("Can't draw views yet:\n" + state.error); return; }
+  screen = state.screen;
+  document.title = "Draw views: " + state.sequence;
+  const select = $("parks");
+  state.parks.forEach((p, i) => { const o = document.createElement("option"); o.value = i; o.textContent = (i + 1) + ". " + p.name; select.appendChild(o); });
+  select.onchange = () => { setPark(+select.value); select.blur(); };
+  // Clicked buttons and boxes give the keys back to the picture.
+  document.addEventListener("click", e => { if (e.target.tagName === "BUTTON") e.target.blur(); });
+  $("prev").onclick = () => setPark(cur - 1);
+  $("next").onclick = () => setPark(cur + 1);
+  $("gen").onclick = () => { showGen = !showGen; refresh(); };
+  $("undo").onclick = () => undo(false);
+  $("redo").onclick = () => undo(true);
+  $("reset").onclick = reset;
+  $("copy").onclick = copyViews;
+  $("paste").onclick = pasteViews;
+  $("pasteCancel").onclick = () => { $("pasteBox").hidden = true; };
+  $("pasteOk").onclick = () => { $("pasteBox").hidden = true; loadPasted($("pasteText").value); };
+  const t = state.timing, n = x => String(+x);
+  $("notes").innerHTML = `<p><b>How it plays</b></p><ul>
+    <li>Boxes show a ${screen.width}×${screen.height} screen (${state.screenSource}; <code>--screen</code> changes it). On another screen size a view shows more or less around the same middle.</li>
+    <li>Views play top to bottom, each from its own angle, then the next park.</li>
+    <li>"% pan" is the share of a view's hold spent panning to the next view (0: held still, then a cut); solid lines with an arrow show the pans, dashed ones the cuts, as on the renders page. Each line has the color of the view it leaves. Tint cycles the whole palette through three hues, for parks where one is hard to see. Align "start"/"end": the angle and zoom change as the pan sets off or as it arrives. How pans speed up and slow down (linear or inertia) is the playlist's setting, on the generator's main page.</li>
+    <li>Numbered circles are views seen from another angle, at the spot they look at: click one to turn the picture to it.</li>
+    <li>A park gets ${n(t.park_time)} s for up to ${n(t.base_views)} views, plus ${n(t.view_time)} s per extra view. Holds you haven't typed share that time equally (at least ${n(t.view_time)} s each), and the overview gets ${n(t.overview_lead)} s more than the longest close-up. Typed holds stay as set (🔒) and add to the total.</li>
+    <li>Once you change a park, all its views (the "auto" ones too) play exactly as listed: they are not moved, merged or re-zoomed to fit the window as generated views are.</li>
+    <li>${GEN ? `Changes are saved as you make them to <code>${state.viewsFile}</code>. The park list flags the park, and the next Build redoes that park alone; its event views (animation spots, cut-ins, shows) are added to your views there, as set under Events.`
+      : `Changes are saved as you make them to <code>${state.viewsFile}</code> and play after the next <code>mksequence.py --install</code>.`} Changes to the same park in the in-game editor (E) replace these at that install.</li>
+  </ul>`;
+  const start = state.parks.findIndex(p => p.key === QUERY.get("park"));
+  setPark(Math.max(0, start));
+})();
+</script>
+</body>
+</html>

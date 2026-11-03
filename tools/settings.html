@@ -1,0 +1,907 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>RCT Screensaver · Playlist generator</title>
+<style>
+:root, body.dark {
+  --bg:#161b1f; --bar:#1d2429; --card:#1f272c; --line:#2c363d; --line2:#2a3338; --well:#192024; --field:#12171a;
+  --btn:#232b31; --btnline:#3a464e; --text:#e8ecef; --text2:#b4bfc6; --muted:#9aa7b0; --faint:#8b979f; --dim:#6f7c85;
+  --accent:#e0a43a; --onaccent:#1b1406; --selbg:#3a2e17; --seltext:#ffd27f; --link:#f0b54a; --linkhover:#ffd27f;
+  --scroll:#4a5760; --band:#2b4652; --bandtext:#e8ecef; --pillbg:#2a2214; --pillline:#5a4723; --error:#ff8a7a; --alt:#2e6f80; --onalt:#e6f3f6;
+  --bevel:inset 1px 1px 0 rgba(255,255,255,0.09), inset -1px -1px 0 rgba(0,0,0,0.5);
+  --sunk:inset 1px 1px 0 rgba(0,0,0,0.5), inset -1px -1px 0 rgba(255,255,255,0.06);
+}
+body.light {
+  --bg:#e6d8b8; --bar:#d9c7a0; --card:#f2e9d3; --line:#c4ad82; --line2:#d8c7a0; --well:#e9dcbd; --field:#fffaf0;
+  --btn:#ece0c2; --btnline:#a8916a; --text:#1f1a10; --text2:#463b26; --muted:#56492f; --faint:#5f5137; --dim:#6b5c40;
+  --accent:#2f5d3a; --onaccent:#f6f0e0; --selbg:#d5e4d0; --seltext:#1d4428; --link:#2f5d3a; --linkhover:#1d4428;
+  --scroll:#a8916a; --band:#2f5d3a; --bandtext:#f6f0e0; --pillbg:#d5e4d0; --pillline:#2f5d3a; --error:#9b2414; --alt:#8a5a24; --onalt:#f6f0e0;
+  --bevel:inset 1px 1px 0 rgba(255,255,255,0.65), inset -1px -1px 0 rgba(60,40,10,0.25);
+  --sunk:inset 1px 1px 0 rgba(60,40,10,0.25), inset -1px -1px 0 rgba(255,255,255,0.65);
+}
+* { box-sizing: border-box; }
+/* Styled WebKit scrollbars are classic ones, which never auto-hide (Chrome and Edge's overlay
+   scrollbars do); scrollbar-color would switch Chrome back to its own, so only Firefox gets it */
+::-webkit-scrollbar { width: 14px; height: 14px; }
+::-webkit-scrollbar-track { background: var(--well); }
+::-webkit-scrollbar-thumb { background: var(--scroll); border: 3px solid var(--well); }
+::-webkit-scrollbar-corner { background: var(--well); }
+@supports (-moz-appearance: none) { * { scrollbar-color: var(--scroll) var(--well); } }
+html { overflow-y: scroll; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 15px "IBM Plex Sans", "Segoe UI", system-ui, sans-serif; }
+a { color: var(--link); } a:hover { color: var(--linkhover); }
+.mono { font-family: "IBM Plex Mono", Consolas, monospace; }
+button { font: inherit; color: var(--text); background: var(--btn); border: 1px solid var(--btnline); border-radius: 0;
+  box-shadow: var(--bevel); height: 40px; padding: 0 14px; cursor: pointer; }
+button:disabled { opacity: 0.5; cursor: default; }
+button.primary { background: var(--accent); color: var(--onaccent); border: none; font-weight: 600; }
+button.alt { background: var(--alt); color: var(--onalt); border: none; font-weight: 600; }
+button.seg { background: var(--well); color: var(--text2); height: 38px; padding: 0 8px; }
+button.seg[aria-pressed="true"] { border-color: var(--accent); background: var(--selbg); color: var(--seltext); font-weight: 600; box-shadow: var(--sunk); }
+button.big { height: 44px; }
+input[type=text], input[type=number], select { height: 38px; padding: 0 10px; border: 1px solid var(--btnline); border-radius: 0;
+  background: var(--field); color: var(--text); font: inherit; box-shadow: var(--sunk); }
+input[type=checkbox] { accent-color: var(--accent); width: 18px; height: 18px; margin: 0; }
+input[type=range] { accent-color: var(--accent); }
+.bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 32px; border-bottom: 1px solid var(--line); background: var(--bar); flex-wrap: wrap; }
+.bar h1 { font-size: 22px; font-weight: 600; margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* The title and the playlist's path (which grows with " · changed") stack and shrink; the buttons keep their row */
+.bar .titles { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 0 1 auto; }
+/* What the page is waiting for, or what the last step did */
+.bar .status { flex: 1 1 auto; min-width: 0; text-align: center; color: var(--text2); font-size: 14px; padding: 0 12px; }
+.bar .status.warn { color: var(--error); font-weight: 600; }
+.bar .titles .sub2 { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.bar .titles select { height: 28px; font-size: 13px; max-width: 100%; min-width: 0; }
+.bar .titles .sub2 button { height: 28px; padding: 0 12px; font-size: 13px; }
+.bar .titles .changed { font-size: 12px; white-space: nowrap; }
+/* The page's footer: the user folder's tools and the project's links */
+.pagefoot { display: flex; align-items: center; gap: 16px; padding: 14px 32px; border-top: 1px solid var(--line); background: var(--bar); flex-wrap: wrap; }
+.pagefoot a { color: var(--link); }
+#offline { position: fixed; inset: 0; background: rgba(0,0,0,0.75); color: #fff; display: flex; align-items: center; justify-content: center; text-align: center; z-index: 9; padding: 24px; font-size: 17px; line-height: 1.5; }
+.bar .actions-bar { flex: 0 0 auto; flex-wrap: nowrap; }
+#main > .bar { flex-wrap: nowrap; }
+.row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.spread { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.wrap { padding: 24px 32px; display: flex; flex-direction: column; gap: 20px; max-width: 1280px; margin: 0 auto; }
+.grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; align-items: start; }
+@media (max-width: 980px) { .grid2 { grid-template-columns: 1fr; } }
+.col { display: flex; flex-direction: column; gap: 20px; }
+section.card { display: flex; flex-direction: column; gap: 14px; background: var(--card); border: 1px solid var(--line); padding: 20px; box-shadow: var(--bevel); }
+section.card > h2 { margin: -20px -20px 0; padding: 8px 0; font-size: 16px; font-weight: 600; text-align: center; color: var(--bandtext); background: var(--band); letter-spacing: 0.04em; box-shadow: var(--bevel); }
+section.card.off { opacity: 0.5; }
+.legend { color: var(--text2); font-size: 13px; }
+.segs { display: grid; gap: 6px; }
+.well { padding: 12px 14px; background: var(--well); }
+.muted { color: var(--muted); font-size: 13px; }
+.error { color: var(--error); }
+/* Parks the playlist names but neither its bundle nor the park folder holds */
+section.card.missing { border: 3px solid var(--error); box-shadow: 0 0 0 2px var(--error), 0 0 22px var(--error); }
+section.card.missing > h2 { background: var(--error); color: var(--bg); }
+.missingcount { color: var(--error); font-weight: 700; }
+tr.missing td { color: var(--error); background: color-mix(in srgb, var(--error) 14%, transparent); }
+button:disabled { opacity: 0.45; cursor: default; }
+.failbox:not([hidden]) { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; padding: 10px 14px; border: 1px solid var(--error); color: var(--error); background: var(--card); }
+.failbox span { flex: 1; user-select: all; }
+label.inline { display: flex; align-items: center; gap: 10px; min-height: 34px; }
+.holds { display: flex; flex-wrap: wrap; gap: 16px; }
+.holds label { display: flex; align-items: center; gap: 8px; color: var(--text2); font-size: 14px; }
+.holds input { width: 72px; }
+.dual { position: relative; flex-grow: 1; max-width: 360px; height: 52px; }
+.dual input[type=range] { position: absolute; left: 0; right: 0; top: 24px; width: 100%; margin: 0; pointer-events: none; background: none; -webkit-appearance: none; appearance: none; }
+.dual input[type=range]::-webkit-slider-thumb { pointer-events: auto; -webkit-appearance: none; width: 16px; height: 16px; background: var(--accent); box-shadow: var(--bevel); cursor: pointer; }
+.dual input[type=range]::-moz-range-thumb { pointer-events: auto; width: 16px; height: 16px; border-radius: 0; background: var(--accent); border: none; cursor: pointer; }
+.dual .track { position: absolute; left: 9px; right: 9px; top: 33px; height: 4px; background: var(--btnline); }
+.dual .fill { position: absolute; top: 33px; height: 4px; background: var(--accent); }
+.dual .tag { position: absolute; top: 0; transform: translateX(-50%); font: 13px "IBM Plex Mono", Consolas, monospace; white-space: nowrap; }
+.strip { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 10px; }
+.strip figure { flex: 0 0 360px; margin: 0; display: flex; flex-direction: column; gap: 6px; }
+.strip .img { position: relative; aspect-ratio: 16 / 9; background: var(--field); border: 1px solid var(--line); display: flex; align-items: center; justify-content: center; color: var(--dim); font-size: 12px; overflow: hidden; }
+.strip img { width: 100%; height: 100%; object-fit: contain; background: #000; }
+/* A park's "total" render carries its route (renderviews.py route_overlay), drawn bolder at this size */
+.strip svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.strip svg line { stroke: #ffd23f; stroke-width: 5; }
+.strip svg line.cut { stroke: #5fd4ff; stroke-dasharray: 12 8; }
+.strip svg marker path { fill: #ffd23f; }
+.strip svg marker.cut path { fill: #5fd4ff; }
+.strip svg rect.num { fill: #ffd23f; stroke: #000; stroke-width: 2; }
+.strip svg g.lab { transform: scale(1.7); }
+.strip svg text.num { fill: #000; font: bold 11px sans-serif; text-anchor: middle; dominant-baseline: central; }
+.strip figcaption { font-size: 13px; color: var(--text2); }
+.strip .img.changed { color: var(--text2); text-align: center; padding: 0 20px; }
+.strip .img.rebuild { border: 2px solid var(--alt); }
+/* Hand-set parks (views drawn on the drawing page or in the game's editor): the same badge as the renders page */
+.hand { display: inline-block; margin-left: 8px; padding: 1px 7px; font-size: 12px; font-weight: 600; background: #c2185b; color: #fff; vertical-align: middle; }
+.strip .img .hand { position: absolute; top: 6px; left: 6px; margin: 0; z-index: 1; }
+.stalenote { background: #c62828; color: #fff; padding: 1px 8px; font-weight: 600; margin-left: 6px; }
+table.parks tr.rebuild td { background: color-mix(in srgb, var(--alt) 16%, transparent); }
+.bandhead > span:first-child { display: flex; align-items: center; gap: 12px; }
+.bandtime { color: var(--bandtext); opacity: 0.85; font-size: 13px; white-space: nowrap; }
+.bandhead { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; margin: -20px -20px 0; padding: 6px 12px; background: var(--band); box-shadow: var(--bevel); }
+.bandhead h2 { margin: 0; font-size: 16px; font-weight: 600; color: var(--bandtext); letter-spacing: 0.04em; }
+/* Parks screen */
+.filters { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 14px 32px; border-bottom: 1px solid var(--line); }
+.chip { height: 40px; padding: 0 16px; background: var(--well); color: var(--text2); }
+.chip[aria-pressed="true"] { border-color: var(--accent); background: var(--selbg); color: var(--seltext); font-weight: 600; box-shadow: var(--sunk); }
+table.parks { width: 100%; border-collapse: collapse; }
+table.parks th { text-align: left; color: var(--muted); font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; font-weight: 500; padding: 10px 8px; border-bottom: 1px solid var(--line); }
+table.parks td { padding: 8px; border-bottom: 1px solid var(--btn); vertical-align: middle; }
+table.parks tr.drop td { border-top: 2px solid var(--accent); }
+.updown { display: inline-flex; flex-direction: column; gap: 1px; vertical-align: middle; }
+.updown button { width: 20px; height: 15px; padding: 0; font-size: 8px; line-height: 1; color: var(--text2); }
+.grip { color: var(--dim); cursor: grab; }
+.switch { position: relative; width: 52px; height: 30px; padding: 0; background: var(--btn); }
+.switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 22px; height: 22px; background: var(--muted); }
+.switch[aria-checked="true"] { background: var(--accent); border-color: var(--accent); }
+.switch[aria-checked="true"]::after { left: 25px; background: var(--onaccent); }
+.pill { display: flex; align-items: center; gap: 14px; padding: 6px 10px 6px 18px; border: 1px solid var(--pillline); background: var(--pillbg); }
+.flagpill { display: inline-block; margin-left: 8px; padding: 1px 7px; font-size: 12px; font-weight: 600; background: var(--alt); color: var(--onalt); vertical-align: middle; }
+.pill span { font-size: 18px; font-weight: 600; color: var(--seltext); }
+.foot { display: flex; justify-content: space-between; align-items: center; padding: 14px 32px; border-top: 1px solid var(--line); background: var(--bar); gap: 12px; flex-wrap: wrap; }
+/* dialogs */
+dialog { background: var(--card); color: var(--text); border: 1px solid var(--btnline); padding: 0; width: min(680px, 96vw); max-height: 92vh; }
+dialog::backdrop { background: rgba(0,0,0,0.5); }
+dialog .head { padding: 20px 26px; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 4px; }
+dialog .head .kicker { font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+dialog .head .title { font-size: 20px; font-weight: 600; }
+dialog .body { padding: 6px 26px 12px; overflow: auto; max-height: 62vh; }
+dialog .actions { display: flex; justify-content: flex-end; align-items: center; gap: 10px; padding: 16px 26px; border-top: 1px solid var(--line); }
+.note { flex: 1; font-size: 13px; color: var(--error); line-height: 1.35; }
+.note button { white-space: nowrap; }
+.foot .note:not([hidden]) { display: flex; align-items: center; gap: 10px; flex-basis: 100%; }
+.prow { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1.2fr) 90px; align-items: center; gap: 12px; min-height: 56px; border-bottom: 1px solid var(--line2); }
+.prow .k { font: 14px "IBM Plex Mono", Consolas, monospace; }
+.prow .h { font-size: 12px; color: var(--muted); }
+.prow input.set { border-color: var(--accent); color: var(--seltext); }
+.prow input.inh { color: var(--muted); }
+.srow { display: grid; grid-template-columns: 64px minmax(0, 1fr) 90px; gap: 12px; align-items: center; min-height: 56px; border-bottom: 1px solid var(--line2); }
+.sub { font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--link); padding: 14px 0 6px; }
+#log { position: fixed; right: 16px; bottom: 16px; width: min(720px, 94vw); background: var(--card); border: 1px solid var(--btnline); box-shadow: 0 8px 30px rgba(0,0,0,0.4); display: none; flex-direction: column; z-index: 5; }
+#log.open { display: flex; }
+#log pre { margin: 0; padding: 10px 14px; max-height: 40vh; overflow: auto; font: 12px "IBM Plex Mono", Consolas, monospace; white-space: pre-wrap; background: var(--field); }
+#log .spread { padding: 8px 14px; }
+#log .spread strong { display: flex; align-items: center; gap: 10px; }
+/* The popup's state: running (pulsing amber), done (green), failed (red) */
+#logIcon { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 50%; font-size: 13px; font-weight: 700; color: #111; flex: 0 0 auto; }
+#logIcon.run { background: #e0a43a; animation: pulse 1s ease-in-out infinite; }
+#logIcon.ok { background: #4caf6a; }
+#logIcon.bad { background: var(--error); }
+@keyframes pulse { 50% { opacity: 0.35; } }
+button.icon { width: 42px; padding: 0; font-size: 20px; }
+a.button { display: inline-flex; align-items: center; height: 34px; padding: 0 14px; text-decoration: none; font-weight: 600; justify-self: start; }
+a.button.primary { background: var(--accent); color: var(--onaccent); }
+/* On the Previews band, which is the accent's own green in light mode */
+body.light .bandhead a.button.primary { background: var(--alt); color: var(--onalt); }
+#toast { position: fixed; left: 50%; top: 14px; transform: translateX(-50%); padding: 10px 16px; background: var(--selbg); color: var(--seltext); border: 1px solid var(--accent); display: none; z-index: 6; }
+[hidden] { display: none !important; }
+</style>
+</head>
+<body class="dark">
+
+<!-- Main screen -->
+<div id="main">
+  <div class="bar">
+    <div class="titles"><h1>RCT Screensaver · Playlist generator</h1>
+      <div class="sub2"><select id="openList" title="The open playlist; pick another to open it. Defaults come with the screensaver; saving one keeps your copy in your user folder."></select>
+        <button id="newList" title="Start a new, empty playlist (it is named when first saved).">New</button>
+        <button id="importBtn" title="Open a playlist bundle (.zip): its playlist, views and changed profiles go into your user folder; parks it doesn't carry are looked for in the park folder.">Import</button></div></div>
+    <div class="status" id="status" role="status"></div>
+    <div class="row actions-bar">
+      <button class="big primary" id="buildBtn" title="Save the playlist if the page changed it, then build it. Render, Install and Export use the build.">Build</button>
+      <button class="big" id="renderBtn" title="Render each park's views of the build as they play (needs OpenRCT2).">Render</button>
+      <button class="big" id="installBtn" title="Install the build into OpenRCT2 (close the game first).">Install</button>
+      <button class="big" id="exportBtn" title="Save the playlist as a bundle (.zip) for another computer, with or without the park files.">Export</button>
+    </div>
+  </div>
+  <div class="wrap">
+    <div class="error" id="banner" hidden></div>
+    <div class="failbox" id="failBox" hidden><span id="failText"></span><button id="failClose">Dismiss</button></div>
+    <div class="grid2">
+      <div class="col">
+        <section class="card" id="sourceCard">
+          <h2>Source parks</h2>
+          <label class="legend" title="Folder of parks (.park, .zip; RCT2 saves are converted through importparks.py).">Directory
+            <div class="row" style="margin-top:6px">
+              <input type="text" id="folder" class="mono" style="flex-grow:1">
+              <button id="browse">Browse…</button>
+              <button id="scan" class="icon" title="Scan: replace the park list with the parks in this folder (a new playlist)." aria-label="Scan the folder">↻</button>
+            </div>
+          </label>
+          <div class="spread well">
+            <div style="display:flex;flex-direction:column;gap:2px"><span style="font-weight:500"><span id="parkCount">Reading parks…</span><span class="missingcount" id="missingCount"></span></span><span class="muted" id="adjCount"></span></div>
+            <a href="#" id="toParks" style="font-weight:500;text-decoration:none;padding:10px 4px">Parks →</a>
+          </div>
+          <label class="legend" title="Used for previews and to convert RCT2 saves.">OpenRCT2 (openrct2.com on Windows)
+            <input type="text" id="openrct2" class="mono" style="width:100%;margin-top:6px" placeholder="C:\…\openrct2.com">
+          </label>
+        </section>
+
+        <section class="card">
+          <h2>Views</h2>
+          <div><div class="legend" style="margin-bottom:8px">Motion</div>
+            <div class="segs" style="grid-template-columns:1fr 1fr" data-seg="motion">
+              <button class="seg big" data-v="static" title="Hold each view, then cut.">Static views</button>
+              <button class="seg big" data-v="pans" title="Glide from view to view.">Pans</button>
+            </div></div>
+          <div><div class="legend" style="margin-bottom:8px">View order</div>
+            <div class="segs" style="grid-template-columns:1fr 1fr" data-seg="route">
+              <button class="seg big" data-v="circuit" title="Loop around the park.">Circuit</button>
+              <button class="seg big" data-v="random" title="The generator's pick order, varying angle and zoom. No set route.">Random</button>
+            </div></div>
+          <div class="row" style="gap:24px">
+            <label class="inline" title="Max. orders per park, one per visit. Circuit only.">Variants
+              <input type="number" id="variants" min="1" max="10" style="width:70px"></label>
+            <label class="inline"><input type="checkbox" id="reverse">Include reverse</label>
+          </div>
+        </section>
+
+        <section class="card" id="panCard">
+          <h2>Pan options</h2>
+          <div class="spread"><span>Inertia</span>
+            <div class="segs" style="grid-template-columns:1fr 1fr;width:240px" data-seg="inertia">
+              <button class="seg" data-v="false" title="Steady speed.">Linear</button>
+              <button class="seg" data-v="true" title="Eases in and out.">Cubic</button></div></div>
+          <div class="spread"><span>Ride-following pans</span>
+            <div class="segs" style="grid-template-columns:1fr 1fr 1fr;width:300px" data-seg="ride">
+              <button class="seg" data-v="include" title="Adds a pan along a ride's track.">Include</button>
+              <button class="seg" data-v="exclude" title="No ride pans.">Exclude</button>
+              <button class="seg" data-v="only" title="Overview and ride pans only.">Only</button></div></div>
+          <div class="spread"><span>Angle and zoom change</span>
+            <div class="segs" style="grid-template-columns:1fr 1fr;width:240px" data-seg="pan_changes">
+              <button class="seg" data-v="end" title="Move, then turn or zoom.">At end</button>
+              <button class="seg" data-v="start" title="Turn or zoom, then move.">At start</button></div></div>
+          <div class="holds">
+            <label title="Still time after a turn or zoom (s).">Change hold<input type="number" step="0.5" min="0" data-num="change_hold"></label>
+            <label title="Rest before a turn or zoom (s).">Arrival hold<input type="number" step="0.5" min="0" data-num="arrive_hold"></label>
+            <label title="Hold at the first view after the return pan, before the next park (s).">Return hold<input type="number" step="0.5" min="0" data-num="return_hold"></label>
+          </div>
+        </section>
+      </div>
+
+      <div class="col">
+        <section class="card">
+          <h2>Time</h2>
+          <div class="row" title="Shortest and longest time per park. Lowest-scoring views drop to fit the longest." style="gap:16px;color:var(--text2);font-size:14px">
+            <span>Park duration</span>
+            <div class="dual">
+              <div class="track"></div><div class="fill" id="durFill"></div>
+              <span class="tag" id="minTag"></span><span class="tag" id="maxTag"></span>
+              <input type="range" id="parkMin" min="0" max="300" step="5" aria-label="Shortest park time, s">
+              <input type="range" id="parkMax" min="10" max="300" step="5" aria-label="Longest park time, s">
+            </div>
+          </div>
+          <label class="row" title="Multiplies all holds and pans. Above 1 is slower." style="gap:12px;color:var(--text2);font-size:14px">Time scaling
+            <input type="range" id="scale" min="50" max="300" step="5" style="width:180px">
+            <span class="mono" style="color:var(--text)" id="scaleText"></span>
+          </label>
+        </section>
+
+        <section class="card">
+          <h2>Enhancements</h2>
+          <div class="spread well">
+            <div style="display:flex;flex-direction:column">
+              <label class="inline" title="Run the parks' own scripts (companion plugins) on the title screen."><input type="checkbox" id="scripts">Park plugin support</label>
+              <label class="inline" title="Views on scripted animations and shows, e.g. Constellations' eclipse."><input type="checkbox" id="pdv">Plugin-driven views <span class="muted">(exempt from time budget)</span></label>
+            </div>
+            <a href="#" id="toParks2" title="Parks list; filter by plugin-driven views." style="font-weight:500;text-decoration:none;padding:10px 4px">Parks →</a>
+          </div>
+          <label class="inline" title="Patched engine only. Install sets OpenRCT2's title music."><input type="checkbox" id="music">Ride music as title music</label>
+          <div class="spread" title="Park name captions in the screensaver mode (patched engine). Set here, it overrides the viewer's own choice each time playback starts, until the viewer picks on the bar's Titles button.">
+            <span>Show titles</span>
+            <div class="segs" style="grid-template-columns:1fr 1fr 1fr 1fr;width:400px" data-seg="titles">
+              <button class="seg" data-v="keep" title="The viewer's own choice on the bar.">Viewer's</button>
+              <button class="seg" data-v="overview" title="On each park's first view (its overview).">Overview</button>
+              <button class="seg" data-v="on" title="On every view.">On</button>
+              <button class="seg" data-v="off" title="No captions.">Off</button></div>
+          </div>
+        </section>
+      </div>
+    </div>
+
+    <section class="card">
+      <div class="bandhead"><span><a class="button primary" id="openRenders" target="_blank" hidden title="Every rendered view, park by park, with the build's facts (and the previous render to compare).">Open renders ↗</a><span class="bandtime" id="setTime"></span></span><h2 title="In play order.">Previews</h2>
+        <div class="row" style="justify-self:end"><button aria-label="Scroll previews left" id="left">‹</button><button aria-label="Scroll previews right" id="right">›</button></div></div>
+      <div class="strip" id="strip"></div>
+    </section>
+  </div>
+  <div class="pagefoot">
+    <button id="backupsBtn" title="Open the folder with the backups of every playlist and profile the page has overwritten (the last 100 copies of each).">Backups</button>
+    <a href="https://github.com/Ogrueb/RCT-screensaver" target="_blank" rel="noopener">RCT Screensaver on GitHub</a>
+    <span style="flex-grow:1"></span>
+    <button id="theme" title="Switch between dark and light mode" aria-label="Switch between dark and light mode">◐</button>
+  </div>
+</div>
+
+<!-- Parks screen -->
+<div id="parks" hidden>
+  <div class="bar">
+    <div class="row" style="gap:20px"><a href="#" id="back" style="text-decoration:none;font-weight:500">← Settings</a>
+      <h1>Parks</h1><span class="muted mono" id="parksFolder"></span></div>
+    <div class="pill"><span id="adjLabel">Adjustments</span><button class="switch" role="switch" id="adjSwitch" aria-labelledby="adjLabel" aria-checked="false"></button></div>
+  </div>
+  <div class="filters">
+    <span class="legend">Show</span>
+    <button class="chip" data-size="small" title="Map side < 100 tiles.">Small</button>
+    <button class="chip" data-size="large" title="Map side 100–199 tiles.">Large</button>
+    <button class="chip" data-size="very large" title="Map side ≥ 200 tiles.">Very Large</button>
+    <span style="width:1px;height:28px;margin:0 8px;background:var(--btnline)"></span>
+    <button class="chip" id="fScripts" title="Only parks with scripts.">Scripts</button>
+    <button class="chip" id="fSpecial" title="Only parks with plugin-driven views.">Special Views</button>
+    <span style="flex-grow:1"></span>
+    <button id="shuffle" title="Shuffle the park order once. Saved as the playlist's order.">Shuffle</button>
+    <button id="selShown">Select shown</button>
+    <button id="clrShown">Clear shown</button>
+  </div>
+  <div style="padding:8px 32px">
+    <table class="parks"><thead id="parksHead"></thead><tbody id="parksBody"></tbody></table>
+  </div>
+  <div class="foot"><span id="parksSummary"></span><span class="muted">Order is the playlist's park order · size by map side: small under 100 tiles, large 100–199, very large 200+ · adjustments are saved in the park's profile, for every playlist</span></div>
+</div>
+
+<dialog id="paramDlg">
+  <div class="head"><div class="kicker">Edit parameters</div><div class="title" id="paramTitle"></div>
+    <div class="muted">Values left as inherited follow the playlist's settings. Saved in the park's profile (every playlist that plays it).</div></div>
+  <div class="body" id="paramBody"></div>
+  <div class="actions"><button id="paramBackups" title="Open the folder with the backups of every playlist and profile the page has overwritten (the last 100 copies of each).">Backups</button><button id="paramReset" title="Remove your copy of the park's profile, so the screensaver's default (or none) applies again; a backup is kept.">Reset profile</button><span class="note" id="paramNote"></span><button id="paramCancel">Cancel</button><button class="primary" id="paramSave">Save</button></div>
+</dialog>
+
+<dialog id="exportDlg">
+  <div class="head"><div class="kicker">Export bundle</div><div class="title" id="exportTitle"></div>
+    <div class="muted">A bundle carries the playlist, its views from the editor and the park profiles you changed. Without the park files, the receiver needs the same parks in their park folder.</div></div>
+  <div class="body"><label class="inline"><input type="checkbox" id="exportParks"> <span>Include the park files and the build <span class="muted" id="exportSize"></span></span></label></div>
+  <div class="actions"><button id="exportCancel">Cancel</button><button class="primary" id="exportGo">Export…</button></div>
+</dialog>
+
+<div id="offline" hidden><div id="offlineText"></div></div>
+
+<div id="log"><div class="spread"><strong><span id="logIcon" aria-hidden="true"></span><span id="logTitle"></span></strong><button id="logClose">Close</button></div><pre id="logText"></pre></div>
+<div id="toast"></div>
+
+<script>
+"use strict";
+const TOKEN = new URLSearchParams(location.search).get("t") || "";
+let S = null;      // server state
+let P = null;      // the playlist being edited (S.data, changed in place until saved)
+let dirty = false;
+let busy = "";     // the tool running, for the status line
+const ui = { adj: false, sizes: { "small": true, "large": true, "very large": true }, scriptsOnly: false, specialOnly: false };
+const $ = id => document.getElementById(id);
+
+async function api(path, body) {
+  const opts = body === undefined ? { headers: { "X-Token": TOKEN } }
+    : { method: "POST", headers: { "X-Token": TOKEN, "Content-Type": "application/json" }, body: JSON.stringify(body) };
+  const r = await fetch(path, opts);
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.error || r.statusText);
+  return data;
+}
+function toast(text) { const t = $("toast"); t.textContent = text; t.style.display = "block"; clearTimeout(toast.timer); toast.timer = setTimeout(() => t.style.display = "none", 3500); }
+function fail(e) { const b = $("banner"); b.textContent = String(e.message || e); b.hidden = false; setTimeout(() => b.hidden = true, 12000); }
+
+// --- playlist values ---
+const views = () => (P.views = P.views || {});
+const opt = k => (P.views && k in P.views) ? P.views[k] : S.defaults[k];
+function setOpt(k, v) { views()[k] = v; changed(); }
+function changed() { dirty = true; render(); }
+
+async function load() {
+  S = await api("/api/state");
+  P = S.data;
+  dirty = false;
+  render();
+}
+
+// --- main screen ---
+function seg(name, value) {
+  document.querySelectorAll(`[data-seg="${name}"] button`).forEach(b => b.setAttribute("aria-pressed", String(b.dataset.v === value)));
+}
+function render() {
+  if (!S) return;
+  // Three stages: nothing loaded (New and Import lead), a playlist to build (Build leads), and a build
+  // of the saved playlist (Install leads, Export next); Render, Install and Export need the build
+  const all = P.park || [];
+  const empty = !S.path && !all.length && !busy, ready = S.built && !dirty;
+  const missing = S.parks.filter(f => f && f.missing);
+  const blocking = S.parks.filter((f, i) => f && f.missing && all[i] && all[i].use !== false);
+  for (const id of ["renderBtn", "installBtn", "exportBtn"]) $(id).disabled = !ready;
+  $("buildBtn").disabled = empty || !all.length || blocking.length > 0;
+  $("buildBtn").title = blocking.length ? "Some parks are missing: pick the folder that holds them (Source parks), or untick them."
+    : "Save the playlist if the page changed it, then build it. Render, Install and Export use the build.";
+  const lead = { newList: empty ? "primary" : "", importBtn: empty ? "alt" : "", buildBtn: !empty && !ready ? "primary" : "",
+                 installBtn: ready ? "primary" : "", exportBtn: ready ? "alt" : "" };
+  for (const [id, cls] of Object.entries(lead)) { $(id).classList.toggle("primary", cls === "primary"); $(id).classList.toggle("alt", cls === "alt"); }
+  $("sourceCard").classList.toggle("missing", blocking.length > 0);
+  $("missingCount").textContent = missing.length ? ` · ${missing.length} missing!` : "";
+  const status = busy ? [busy + "…", false]
+    : empty ? ["No playlist loaded: start a New one or Import a bundle", false]
+    : blocking.length ? [`${blocking.length} park${blocking.length === 1 ? " is" : "s are"} missing: pick the folder that holds ${blocking.length === 1 ? "it" : "them"}, or untick ${blocking.length === 1 ? "it" : "them"}`, true]
+    : !all.length ? ["No parks yet: pick a folder and scan it (↻)", false]
+    : dirty ? ["Unsaved changes: Build saves them", false]
+    : !S.built && (S.generatorUpdated || []).length ? [`Generator updated since the last build: Build redoes every park${(S.rebuild || []).length ? ` (${S.rebuild.length} also changed by you)` : ""}`, false]
+    : !S.built && (S.rebuild || []).length ? [`${S.rebuild.length} of ${all.filter(e => e.use !== false).length} parks changed`, false]
+    : !S.built ? ["Not built yet", false]
+    : S.installedAt ? [`Built ${S.builtAt} · installed ${S.installedAt}`, false]
+    : [`Built ${S.builtAt} · ready to render, install or export`, false];
+  $("status").textContent = status[0];
+  $("status").classList.toggle("warn", status[1]);
+  const open = $("openList"), list = (S.path ? [] : [{ path: "", label: S.label }]).concat(S.playlists);
+  const html = list.map(p => `<option value="${esc(p.path)}" title="${esc(p.path)}"${p.path === (S.path || "") ? " selected" : ""}>${esc(p.label)}</option>`).join("");
+  if (open.dataset.html !== html) { open.innerHTML = html; open.dataset.html = html; }
+  open.value = S.path || "";
+  if (document.activeElement !== $("folder")) $("folder").value = S.config.folder || "";
+  if (document.activeElement !== $("openrct2")) $("openrct2").value = S.config.openrct2 || "";
+  const parks = P.park || [];
+  const used = parks.filter(e => e.use !== false).length;
+  $("parkCount").textContent = `${used} of ${parks.length} parks selected`;
+  const adjusted = S.parks.filter(isAdjusted).length;
+  const manual = (S.handSet || []).length;
+  $("adjCount").textContent = `${adjusted} park${adjusted === 1 ? "" : "s"} adjusted · ${manual} manual`;
+  // Pans only when something pans: pan = 0 (the generator's default) holds every view still too
+  const pans = opt("motion") !== "static" && opt("pan") !== 0 && opt("pan") !== "0";
+  seg("motion", pans ? "pans" : "static");
+  seg("route", opt("route") === "random" ? "random" : "circuit");
+  $("variants").value = opt("circuit_variants");
+  $("variants").disabled = opt("route") === "random";
+  $("reverse").checked = !!opt("circuit_reverse");
+  $("panCard").classList.toggle("off", !pans);
+  $("panCard").querySelectorAll("button, input").forEach(el => el.disabled = !pans);
+  seg("inertia", String(!!opt("inertia")));
+  seg("ride", opt("only") === "rides" ? "only" : Number(opt("ride_pans")) > 0 ? "include" : "exclude");
+  seg("pan_changes", opt("pan_changes"));
+  document.querySelectorAll("[data-num]").forEach(el => { if (document.activeElement !== el) el.value = opt(el.dataset.num); });
+  const lo = Number(opt("park_min")), hi = Number(opt("park_cap"));
+  $("parkMin").value = lo; $("parkMax").value = hi;
+  const at = v => `calc(9px + ${(v - 0) / 300} * (100% - 18px))`;
+  $("minTag").style.left = at(lo); $("maxTag").style.left = at(hi);
+  $("minTag").textContent = lo ? `${lo} s` : "no min"; $("maxTag").textContent = `${hi} s`;
+  $("durFill").style.left = at(lo); $("durFill").style.width = `calc(${(hi - lo) / 300} * (100% - 18px))`;
+  $("scale").value = Math.round(Number(opt("time_scale")) * 100);
+  $("scaleText").textContent = "× " + Number(opt("time_scale")).toFixed(2);
+  $("scripts").checked = P.park_scripts !== false;
+  $("pdv").checked = P.park_plugins === true;
+  $("pdv").disabled = P.park_scripts === false;
+  $("music").checked = P.title_music === "ride";
+  seg("titles", P.titles || "keep");
+  renderStrip();
+  if (!$("parks").hidden) renderParks();
+}
+// The latest renders (the contact sheet switches to the set before them, for comparing)
+function renderStrip() {
+  const folder = "renders", shots = S.previews, time = S.renderTimes[0];
+  $("setTime").innerHTML = time ? "Rendered " + esc(time) + (S.rendersStale ? ` <span class="stalenote">before the last build</span>` : "") : "";
+  $("setTime").title = S.rendersStale ? "A build came after these renders: parks whose map is unchanged show their overview without the old route; render again for the new views." : "";
+  $("openRenders").hidden = !time;
+  $("openRenders").href = `/${folder}/index.html?t=${TOKEN}`;
+  const parks = (P.park || []).filter(e => e.use !== false);
+  $("strip").innerHTML = parks.map(e => {
+    const key = parkKey(e), f = S.parks.find(x => x.key === key), shot = shots[key];
+    const hand = (S.handSet || []).includes(key) ? `<span class="hand" title="Views set by hand: they play as drawn">manual</span>` : "";
+    const name = esc(f ? f.name : e.name || e.file);
+    // Views changed since the last build (drawn, or its profile): the old preview no longer shows them
+    if (!S.built && (S.rebuild || []).includes(key) && (shot || time))
+      return `<figure><div class="img rebuild">${hand}views changed: build and render again</div><figcaption>${name}</figcaption></figure>`;
+    // After a new build (rendersStale): unchanged maps show their overview without lines, changed ones a placeholder
+    if (shot && shot.changed) return `<figure><div class="img changed">${hand}map changed since the last render: render again</div><figcaption>${name}</figcaption></figure>`;
+    return shot
+      ? `<figure><a class="img" href="/${folder}/index.html?t=${TOKEN}#${shot.anchor}" target="_blank" title="Open every rendered view of ${name}">${hand}<img alt="" src="/${folder}/${shot.file}&t=${TOKEN}">${shot.overlay || ""}</a><figcaption>${name}</figcaption></figure>`
+      : `<figure><div class="img">${hand}not rendered</div><figcaption>${name}</figcaption></figure>`;
+  }).join("") || `<span class="muted">No parks yet: pick a folder and scan it (↻).</span>`;
+}
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+document.querySelectorAll("[data-seg] button").forEach(b => b.addEventListener("click", () => {
+  const name = b.parentElement.dataset.seg, v = b.dataset.v;
+  if (name === "inertia") setOpt("inertia", v === "true");
+  else if (name === "titles") {
+    if (v === "keep") delete P.titles; else P.titles = v;
+    changed();
+  }
+  else if (name === "motion") {
+    views().motion = v;
+    if (v === "pans" && Number(opt("pan")) === 0) views().pan = "auto";  // timed from each pan's length
+    changed();
+  }
+  else if (name === "ride") {
+    views().only = v === "only" ? "rides" : "all";
+    views().ride_pans = v === "exclude" ? 0 : Math.max(1, Number(opt("ride_pans")) || 1);
+    changed();
+  } else setOpt(name, v);
+}));
+$("variants").addEventListener("change", e => setOpt("circuit_variants", Math.max(1, Math.min(10, parseInt(e.target.value) || 1))));
+$("reverse").addEventListener("change", e => setOpt("circuit_reverse", e.target.checked));
+document.querySelectorAll("[data-num]").forEach(el => el.addEventListener("change", () => setOpt(el.dataset.num, Math.max(0, Number(el.value) || 0))));
+$("parkMin").addEventListener("input", e => { setOpt("park_min", Math.min(Number(e.target.value), Number(opt("park_cap")) - 5)); });
+$("parkMax").addEventListener("input", e => { setOpt("park_cap", Math.max(Number(e.target.value), Number(opt("park_min")) + 5)); });
+$("scale").addEventListener("input", e => setOpt("time_scale", Number(e.target.value) / 100));
+$("scripts").addEventListener("change", e => { P.park_scripts = e.target.checked; changed(); });
+$("pdv").addEventListener("change", e => { P.park_plugins = e.target.checked; changed(); });
+$("music").addEventListener("change", e => { P.title_music = e.target.checked ? "ride" : "theme"; changed(); });
+$("left").addEventListener("click", () => $("strip").scrollBy({ left: -1110, behavior: "smooth" }));
+$("right").addEventListener("click", () => $("strip").scrollBy({ left: 1110, behavior: "smooth" }));
+$("theme").addEventListener("click", () => {
+  const light = !document.body.classList.contains("light");
+  document.body.className = light ? "light" : "dark";
+  localStorage.setItem("rctss-theme", light ? "light" : "dark");
+});
+if (localStorage.getItem("rctss-theme") === "light") document.body.className = "light";
+$("openrct2").addEventListener("change", e => api("/api/config", { openrct2: e.target.value.trim() }).then(load).catch(fail));
+// With parks missing, a new park folder is searched for them (by file name) right away
+async function relink() {
+  if (!S.parks.some(f => f.missing) || !$("folder").value.trim()) return;
+  try {
+    const r = await api("/api/relink", { folder: $("folder").value.trim() });
+    await reloadKeeping();
+    toast(r.found ? `Found ${r.found} missing park${r.found === 1 ? "" : "s"}` : "None of the missing parks are in that folder");
+  } catch (e) { fail(e); }
+}
+$("browse").addEventListener("click", async () => {
+  try { const r = await api("/api/browse", { start: $("folder").value }); if (r.folder) { $("folder").value = r.folder; await relink(); } } catch (e) { fail(e); }
+});
+$("folder").addEventListener("change", relink);
+$("scan").addEventListener("click", async () => {
+  if (dirty && !confirm("Scanning starts a new playlist from the folder; unsaved changes to this one are lost. Go on?")) return;
+  try {
+    const r = await api("/api/scan", { folder: $("folder").value.trim() });
+    if (r.imported) {
+      toast("Importing through importparks.py: " + r.reasons[0] + (r.reasons.length > 1 ? ` (+${r.reasons.length - 1} more)` : ""));
+      await follow(r.job, "Import");
+    }
+    await load();
+    dirty = true; render();
+  } catch (e) { fail(e); }
+});
+$("newList").addEventListener("click", async () => {
+  if (dirty && !confirm("Start a new playlist? Unsaved changes are lost.")) return;
+  try { await api("/api/new", {}); await load(); } catch (e) { fail(e); }
+});
+$("importBtn").addEventListener("click", async () => {
+  if (dirty && !confirm("Import a bundle? Unsaved changes to this playlist are lost.")) return;
+  try {
+    const r = await api("/api/import", {});
+    if (r.cancelled) return;
+    if (!(await follow(r.job, "Import bundle"))) return;
+    await load();
+    const missing = S.parks.filter(f => f.missing).length;
+    toast(missing ? `Imported; ${missing} park${missing === 1 ? " is" : "s are"} missing` : S.built ? "Imported with its build" : "Imported");
+  } catch (e) { fail(e); }
+});
+$("openList").addEventListener("change", async e => {
+  const target = e.target.value;
+  if (!target || target === S.path) return;
+  if (dirty && !confirm("Open another playlist? Unsaved changes are lost.")) { e.target.value = S.path || ""; return; }
+  // The New/Import highlight goes as soon as a playlist is picked, not once its parks are read
+  busy = "Opening " + e.target.selectedOptions[0].textContent; render();
+  try { await api("/api/open", { playlist: target }); await load(); } catch (err) { fail(err); }
+  busy = ""; render();
+});
+
+// --- saving, building, rendering ---
+async function save() {
+  const asNew = !S.path;
+  if (asNew || !P.name) {
+    const name = prompt("Name the playlist (its title sequence name):", P.name || "RCT Screensaver");
+    if (!name) return false;
+    P.name = name.trim();
+  }
+  const r = await api("/api/playlist", { data: P, asNew });
+  await load();
+  toast("Saved " + r.path);
+  return true;
+}
+// Before a build: changes in the page are saved (in place where possible, a backup kept); an unchanged
+// playlist builds from its file as it is
+async function build() {
+  try {
+    if ((dirty || !S.path) && !(await save())) return false;
+    const r = await api("/api/build", {});
+    const ok = await follow(r.job, "Build");
+    await reloadKeeping();
+    return ok;
+  } catch (e) { fail(e); return false; }
+}
+$("buildBtn").addEventListener("click", () => build());
+$("installBtn").addEventListener("click", async () => {
+  try {
+    const r = await api("/api/install", {});
+    const ok = await follow(r.job, "Install");
+    await load();
+    if (ok) toast("Installed into OpenRCT2");
+  } catch (e) { fail(e); }
+});
+function mb(bytes) { return bytes >= 1e9 ? (bytes / 1e9).toFixed(1) + " GB" : Math.max(1, Math.round(bytes / 1e6)) + " MB"; }
+$("exportBtn").addEventListener("click", () => {
+  $("exportTitle").textContent = P.name || "";
+  $("exportSize").textContent = `(${mb(S.parkBytes || 0)} of parks)`;
+  $("exportDlg").showModal();
+});
+$("exportCancel").addEventListener("click", () => $("exportDlg").close());
+$("exportGo").addEventListener("click", async () => {
+  $("exportDlg").close();
+  try {
+    const r = await api("/api/export", { includeParks: $("exportParks").checked });
+    if (r.cancelled) return;
+    if (await follow(r.job, "Export bundle")) toast("Saved " + r.path);
+  } catch (e) { fail(e); }
+});
+
+// --- server lifetime: each open page pings; the server stops once none is left ---
+const PAGE_ID = Math.random().toString(36).slice(2);
+let stopped = false;
+function offline(text) {
+  $("offlineText").textContent = text;
+  $("offline").hidden = !text;
+}
+async function ping() {
+  try {
+    const r = await fetch(`/api/ping?page=${PAGE_ID}`, { headers: { "X-Token": TOKEN } });
+    if (!r.ok) throw new Error(r.statusText);
+    if (!stopped && !$("offline").hidden) { offline(""); await load(); }
+  } catch (e) {
+    if (!stopped) offline("The settings server isn't running. Start it again with Settings.cmd (or python tools/settings.py); this page reconnects by itself.");
+  }
+}
+setInterval(ping, 10000);
+ping();
+window.addEventListener("pagehide", () => navigator.sendBeacon(`/api/bye?page=${PAGE_ID}&t=${TOKEN}`));
+$("renderBtn").addEventListener("click", async () => {
+  try { const r = await api("/api/render", {}); await follow(r.job, "Render previews"); await load(); } catch (e) { fail(e); }
+});
+async function openBackups() {
+  try { const r = await api("/api/backups", {}); toast("Opened " + r.path); } catch (e) { fail(e); }
+}
+$("backupsBtn").addEventListener("click", openBackups);
+$("paramBackups").addEventListener("click", openBackups);
+$("failClose").addEventListener("click", () => $("failBox").hidden = true);
+$("logClose").addEventListener("click", () => $("log").classList.remove("open"));
+function follow(job, title) {
+  busy = title; render();
+  $("failBox").hidden = true;
+  $("log").classList.add("open");
+  $("logTitle").textContent = title + "…";
+  $("logIcon").className = "run"; $("logIcon").textContent = "";
+  $("logText").textContent = "";
+  let since = 0;
+  const t0 = Date.now();
+  const clock = setInterval(() => { $("logTitle").textContent = `${title}… ${Math.round((Date.now() - t0) / 1000)} s`; }, 1000);
+  return new Promise(resolve => {
+    const tick = async () => {
+      try {
+        const r = await api(`/api/job?id=${job}&since=${since}`);
+        since = r.next;
+        if (r.lines.length) { $("logText").textContent += r.lines.join("\n") + "\n"; $("logText").scrollTop = 1e9; }
+        if (r.done) {
+          clearInterval(clock);
+          busy = ""; render();
+          $("logTitle").textContent = `${title}: ${r.code === 0 ? "done" : "failed (" + r.code + ")"}`;
+          $("logIcon").className = r.code === 0 ? "ok" : "bad"; $("logIcon").textContent = r.code === 0 ? "✓" : "✕";
+          if (r.code !== 0) {  // stays until dismissed, with where the whole output went
+            $("failText").textContent = `${title} failed (exit code ${r.code}). Its log is in ${r.log}`;
+            $("failBox").hidden = false;
+          }
+          resolve(r.code === 0); return;
+        }
+      } catch (e) { clearInterval(clock); busy = ""; render(); $("logIcon").className = "bad"; $("logIcon").textContent = "✕"; $("logTitle").textContent = title + ": " + e.message; resolve(false); return; }
+      setTimeout(tick, 400);
+    };
+    tick();
+  });
+}
+
+// --- parks screen ---
+// A park's id, as mksequence.park_key makes it (file name, plus member)
+function parkKey(e) { const base = e.file.split(/[\\/]/).pop(); return e.member ? base + "|" + e.member : base; }
+function isAdjusted(f) {
+  const d = (f && f.profileData) || {};
+  return d.companions === false || ["views", "extras", "animation"].some(k => d[k] && Object.keys(d[k]).length);
+}
+function adjustmentNote(f) {
+  const d = f.profileData || {}, notes = [];
+  if (d.companions === false) notes.push("scripts off");
+  const n = Object.keys(d.views || {}).length + Object.keys(d.extras || {}).length + Object.keys(d.animation || {}).length;
+  if (n) notes.push(`${n} parameter${n === 1 ? "" : "s"} set`);
+  return notes.join(" · ");
+}
+const special = f => f && (f.animations.length || f.shows.length);
+function shownRows() {
+  return (P.park || []).map((e, i) => ({ e, f: S.parks[i], i })).filter(({ f }) =>
+    f && (f.missing || ui.sizes[f.size]) && (!ui.scriptsOnly || f.scripts.length) && (!ui.specialOnly || special(f)));
+}
+function move(from, to) {
+  to = Math.max(0, Math.min(to, P.park.length - 1));
+  if (from === to) return;
+  const [e] = P.park.splice(from, 1); P.park.splice(to, 0, e);
+  const [f] = S.parks.splice(from, 1); S.parks.splice(to, 0, f);
+  changed();
+}
+function profileValue(f, section, key) { const t = (f.profileData || {})[section]; return t && key in t ? t[key] : undefined; }
+function renderParks() {
+  $("parksFolder").textContent = S.config.folder || "";
+  $("adjSwitch").setAttribute("aria-checked", String(ui.adj));
+  document.querySelectorAll("[data-size]").forEach(b => b.setAttribute("aria-pressed", String(!!ui.sizes[b.dataset.size])));
+  $("fScripts").setAttribute("aria-pressed", String(ui.scriptsOnly));
+  $("fSpecial").setAttribute("aria-pressed", String(ui.specialOnly));
+  $("parksHead").innerHTML = ui.adj
+    ? `<tr><th title="Play order. Drag a row or use the arrows.">Order</th><th title="Include in the playlist.">Use</th><th>Park</th><th>Scripts</th><th title="Views on scripted animations and shows.">Plugin views</th><th>Towers</th><th>Ride pans</th><th></th><th></th></tr>`
+    : `<tr><th title="Play order. Drag a row or use the arrows.">Order</th><th title="Include in the playlist.">Use</th><th>Park</th><th title="In tiles.">Map</th><th>Size</th><th>Scripts</th></tr>`;
+  const rows = shownRows();
+  $("parksBody").innerHTML = rows.map(({ e, f, i }) => {
+    const order = `<span class="grip" title="Drag to reorder">⠿</span> <span class="mono muted">${i + 1}</span>
+      <span class="updown"><button data-up="${i}" aria-label="Move ${esc(f.name)} up">▲</button><button data-down="${i}" aria-label="Move ${esc(f.name)} down">▼</button></span>`;
+    const use = `<input type="checkbox" data-use="${i}" ${e.use !== false ? "checked" : ""} aria-label="Use ${esc(f.name)}">`;
+    if (f.missing)  // ordered and ticked like any park, but nothing to read or adjust until the file is found
+      return `<tr class="missing" draggable="true" data-row="${i}"><td>${order}</td><td>${use}</td>
+        <td><div style="font-weight:700">${esc(f.name)}</div><div style="font-size:13px">missing: not in the bundle or the park folder</div></td>
+        <td colspan="${ui.adj ? 6 : 3}"></td></tr>`;
+    const note = isAdjusted(f) ? `<div style="font-size:13px;color:var(--link)">${ui.adj ? esc(adjustmentNote(f)) : "adjusted"}</div>` : "";
+    // Changed since its last build: the next Build redoes this park (the others come from the park cache)
+    const rebuild = !S.built && (S.rebuild || []).includes(f.key) && e.use !== false;
+    const flag = (rebuild ? ` <span class="flagpill" title="Changed since the last build: Build redoes this park.">rebuild</span>` : "")
+      + ((S.handSet || []).includes(f.key) ? ` <span class="hand" title="Views set by hand (drawing page or the game's editor): they play as drawn">manual</span>` : "");
+    const err = f.error ? `<div class="error" style="font-size:13px">${esc(f.error)}</div>` : "";
+    const name = `<div style="font-weight:500">${esc(f.name)}${flag}</div>${note}${err}`;
+    const cls = rebuild ? ` class="rebuild"` : "";
+    if (!ui.adj) return `<tr draggable="true" data-row="${i}"${cls}><td>${order}</td><td>${use}</td><td>${name}</td>
+      <td class="mono">${f.mapSize[0]} × ${f.mapSize[1]}</td><td>${f.size[0].toUpperCase() + f.size.slice(1)}</td><td>${esc(f.scripts.join(", ") || "—")}</td></tr>`;
+    const sw = (key, on, na) => na ? `<span class="muted">none</span>` : `<button class="switch" role="switch" data-toggle="${key}" data-i="${i}" aria-checked="${on}" aria-label="${key}, ${esc(f.name)}"></button>`;
+    const towersOn = Number(profileValue(f, "views", "tower_views") ?? opt("tower_views")) > 0;
+    const ridesOn = Number(profileValue(f, "views", "ride_pans") ?? opt("ride_pans")) > 0;
+    const eventsOn = profileValue(f, "views", "events") !== false;
+    return `<tr draggable="true" data-row="${i}"${cls}><td>${order}</td><td>${use}</td><td>${name}</td>
+      <td>${sw("scripts", (f.profileData || {}).companions !== false, !f.scripts.length)}</td>
+      <td>${sw("events", eventsOn, !special(f))}</td><td>${sw("towers", towersOn)}</td><td>${sw("rides", ridesOn)}</td>
+      <td><button data-draw="${esc(f.key)}" title="Draw this park's views on renders of it, and set its event views (animation spots, show), in a new tab.${S.drawable ? "" : " The playlist is built first (the page shows the parks of its last build)."}">Edit views ↗</button></td>
+      <td><button data-param="${i}">Edit parameters…</button></td></tr>`;
+  }).join("");
+  const parks = P.park || [];
+  $("parksSummary").textContent = `${parks.filter(e => e.use !== false).length} of ${parks.length} parks selected · ${rows.length} shown · ${S.parks.filter(isAdjusted).length} adjusted · ${(S.handSet || []).length} manual`;
+}
+function showParks(on) { $("main").hidden = on; $("parks").hidden = !on; render(); window.scrollTo(0, 0); }
+$("toParks").addEventListener("click", e => { e.preventDefault(); showParks(true); });
+$("toParks2").addEventListener("click", e => { e.preventDefault(); ui.specialOnly = true; showParks(true); });
+$("back").addEventListener("click", e => { e.preventDefault(); showParks(false); });
+$("adjSwitch").addEventListener("click", () => { ui.adj = !ui.adj; renderParks(); });
+document.querySelectorAll("[data-size]").forEach(b => b.addEventListener("click", () => { ui.sizes[b.dataset.size] = !ui.sizes[b.dataset.size]; renderParks(); }));
+$("fScripts").addEventListener("click", () => { ui.scriptsOnly = !ui.scriptsOnly; renderParks(); });
+$("fSpecial").addEventListener("click", () => { ui.specialOnly = !ui.specialOnly; renderParks(); });
+$("shuffle").addEventListener("click", () => {
+  const idx = P.park.map((_, i) => i);
+  for (let i = idx.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [idx[i], idx[j]] = [idx[j], idx[i]]; }
+  P.park = idx.map(i => P.park[i]); S.parks = idx.map(i => S.parks[i]); changed();
+});
+function setShown(v) { shownRows().forEach(({ e }) => { if (v) delete e.use; else e.use = false; }); changed(); }
+$("selShown").addEventListener("click", () => setShown(true));
+$("clrShown").addEventListener("click", () => setShown(false));
+let dragFrom = null;
+$("parksBody").addEventListener("dragstart", e => { const tr = e.target.closest("tr"); dragFrom = Number(tr.dataset.row); e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", tr.dataset.row); });
+$("parksBody").addEventListener("dragover", e => { e.preventDefault(); document.querySelectorAll("tr.drop").forEach(t => t.classList.remove("drop")); const tr = e.target.closest("tr"); if (tr) tr.classList.add("drop"); });
+$("parksBody").addEventListener("drop", e => { e.preventDefault(); const tr = e.target.closest("tr"); if (tr && dragFrom !== null) move(dragFrom, Number(tr.dataset.row)); dragFrom = null; });
+$("parksBody").addEventListener("click", async e => {
+  const t = e.target;
+  if (t.dataset.up !== undefined) move(Number(t.dataset.up), Number(t.dataset.up) - 1);
+  else if (t.dataset.down !== undefined) move(Number(t.dataset.down), Number(t.dataset.down) + 1);
+  else if (t.dataset.use !== undefined) { const entry = P.park[Number(t.dataset.use)]; if (t.checked) delete entry.use; else entry.use = false; changed(); }
+  else if (t.dataset.toggle) {
+    const f = S.parks[Number(t.dataset.i)], on = t.getAttribute("aria-checked") === "true";
+    const changes = {
+      scripts: { companions: on ? false : null },
+      events: { views: { events: on ? false : null } },
+      towers: { views: { tower_views: on ? 0 : (Number(opt("tower_views")) > 0 ? null : 2) } },
+      rides: { views: { ride_pans: on ? 0 : (Number(opt("ride_pans")) > 0 ? null : 1) } },
+    }[t.dataset.toggle];
+    await saveProfile(f, changes);
+  }
+  else if (t.dataset.param !== undefined) openParams(Number(t.dataset.param));
+  else if (t.dataset.draw !== undefined) {
+    // (the tab opens now, while the click allows it; unsaved changes are saved first, and the drawing
+    // page builds the playlist itself when there is no build yet or it lacks the park)
+    const url = `/draw?t=${encodeURIComponent(TOKEN)}&park=${encodeURIComponent(t.dataset.draw)}`;
+    if (!dirty && S.path) { window.open(url, "_blank"); return; }
+    const tab = window.open("about:blank", "_blank");
+    if (await save()) { if (tab) tab.location = url; } else if (tab) tab.close();
+  }
+});
+// Reloads the state (profiles changed) and keeps unsaved playlist edits, the parks' facts in their order
+// Edits on the drawing page (another tab or window) show here: state is fetched again when this page
+// comes back into view, and every few seconds while another window has the focus
+async function refreshState() {
+  if (!S || busy || document.visibilityState !== "visible") return;
+  try { await reloadKeeping(); } catch (e) { /* the server may be gone; the next action says so */ }
+}
+window.addEventListener("focus", refreshState);
+document.addEventListener("visibilitychange", refreshState);
+setInterval(() => { if (!document.hasFocus()) refreshState(); }, 4000);
+async function reloadKeeping() {
+  const keep = P, wasDirty = dirty;
+  await load();
+  if (wasDirty) {
+    const byKey = Object.fromEntries(S.parks.map(f => [f.key, f]));
+    P = keep; S.data = keep; S.parks = P.park.map(e => byKey[parkKey(e)]); dirty = true; render();
+  }
+}
+// Saves profile changes (a backup of the old file is kept). Returns true, or false on an error.
+async function saveProfile(f, changes) {
+  try {
+    await api("/api/profile", { key: f.key, changes });
+    await reloadKeeping();
+    return true;
+  } catch (e) { fail(e); return false; }
+}
+
+// --- Edit parameters ---
+const PARAMS = [
+  ["views", "tower_views", "Tower views per park", "Max. tower views. 0 = off."],
+  ["views", "companion_pans", "Companion script while panning", "run or pause."],
+  ["views", "return_pan", "Pan back to the overview at the end", "true or false."],
+  ["views", "park_cap", "Longest park time, s", ""],
+  ["views", "count", "Most views", "Overview included."],
+  ["views", "zoom_min", "Closest close-up zoom", "−2 = closest."],
+  ["views", "zoom_max", "Widest close-up zoom", "1 = widest."],
+  ["views", "pan_tolerance", "Adjusts how quickly pans are allowed to move. Lower values are smoother but drop views.", "Px/s at zoom −2, 100 less per level out."],
+  ["views", "ride_pans", "Ride-following pan pairs", "0 = none."],
+  ["views", "pan", "Pan share of each hold", "auto = from pan length; 0 = static."],
+  ["extras", "animations", "Views on animation spots", "Only with plugin-driven views on."],
+  ["extras", "show", "Scripted show as last view", "none = no show."],
+];
+let paramPark = null, paramVals = null;
+function inherited(section, key) {
+  if (section === "extras") return key === "animations" ? false : "none";
+  return opt(key);
+}
+function parseValue(text, key) {
+  text = text.trim();
+  if (key === "show" && (text === "none" || text === "")) return "";
+  if (text === "true" || text === "false") return text === "true";
+  if (/^-?\d+$/.test(text)) return parseInt(text, 10);
+  if (/^-?\d*\.\d+$/.test(text)) return parseFloat(text);
+  return text;
+}
+const show = v => v === "" ? "none" : String(v);
+function openParams(i) {
+  const f = S.parks[i];
+  paramPark = f; paramVals = {};
+  for (const [section, key] of PARAMS) { const v = profileValue(f, section, key); if (v !== undefined) paramVals[section + "." + key] = v; }
+  $("paramTitle").textContent = f.name;
+  $("paramReset").hidden = f.profileSource !== "user";  // only the user's copy can be reset
+  renderParams();
+  $("paramDlg").showModal();
+}
+function renderParams() {
+  $("paramBody").innerHTML = PARAMS.map(([section, key, hint, tip], n) => {
+    const id = section + "." + key, has = id in paramVals;
+    return `<div class="prow"><label for="p${n}" title="${esc(tip)}"><div class="k">${key}</div><div class="h">${esc(hint)}</div></label>
+      <input type="text" id="p${n}" data-pid="${id}" class="mono ${has ? "set" : "inh"}" value="${esc(show(has ? paramVals[id] : inherited(section, key)))}">
+      ${has ? `<button data-reset="${id}">Reset</button>` : `<span class="muted" style="text-align:center">inherited</span>`}</div>`;
+  }).join("");
+}
+$("paramBody").addEventListener("change", e => { const id = e.target.dataset.pid; if (id) { paramVals[id] = parseValue(e.target.value, id.split(".")[1]); renderParams(); } });
+$("paramBody").addEventListener("click", e => { const id = e.target.dataset.reset; if (id) { delete paramVals[id]; renderParams(); } });
+$("paramCancel").addEventListener("click", () => $("paramDlg").close());
+async function dialogSave(name, f, changes) {
+  if (await saveProfile(f, changes)) $(name + "Dlg").close();
+}
+$("paramReset").addEventListener("click", async () => {
+  try {
+    const r = await api("/api/profile/reset", { key: paramPark.key });
+    $("paramDlg").close();
+    await reloadKeeping();
+    toast((r.action === "restore" ? "Profile back to the screensaver's default" : "Profile removed") + "; the old copy is in Backups");
+  } catch (e) { $("paramNote").textContent = String(e.message || e); }
+});
+for (const name of ["param"]) $(name + "Dlg").addEventListener("close", () => {
+  $(name + "Note").textContent = "";
+});
+$("paramSave").addEventListener("click", async () => {
+  const changes = { views: {}, extras: {} };
+  for (const [section, key] of PARAMS) {
+    const id = section + "." + key, before = profileValue(paramPark, section, key);
+    const after = id in paramVals ? paramVals[id] : undefined;
+    if (JSON.stringify(before) !== JSON.stringify(after)) changes[section][key] = after === undefined ? null : after;
+  }
+  dialogSave("param", paramPark, changes);
+});
+
+window.addEventListener("beforeunload", e => { if (dirty) { e.preventDefault(); e.returnValue = ""; } });
+load().catch(fail);
+</script>
+</body>
+</html>

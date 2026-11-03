@@ -1,0 +1,27 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: RCT Screensaver <noreply@example.invalid>
+Date: Tue, 27 Oct 2026 01:00:02 +0000
+Subject: [PATCH] Title screen: a backward seek keeps background loading
+
+Seek() resets the player when seeking backward, which also re-armed the
+synchronous first load, so a sequence wrapping to its first park always
+loaded it on the main thread.
+---
+ src/openrct2-ui/title/TitleSequencePlayer.cpp | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/src/openrct2-ui/title/TitleSequencePlayer.cpp b/src/openrct2-ui/title/TitleSequencePlayer.cpp
+index a828c94..cc8587a 100644
+--- a/src/openrct2-ui/title/TitleSequencePlayer.cpp
++++ b/src/openrct2-ui/title/TitleSequencePlayer.cpp
+@@ -281,7 +281,10 @@ namespace OpenRCT2::Title
+             }
+             if (_position >= targetPosition)
+             {
++                // Keep the "first load" state; only Begin() starts a fresh sequence.
++                const bool initialLoadCommand = _initialLoadCommand;
+                 Reset();
++                _initialLoadCommand = initialLoadCommand;
+             }
+ 
+             if (std::holds_alternative<RestartCommand>(_sequence->Commands[targetPosition]))

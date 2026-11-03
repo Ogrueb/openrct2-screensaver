@@ -1,0 +1,21 @@
+# Library survey: 20 parks spread over simulation size, an overview and four still close-ups each
+# (zoom -2 to 1, 15 s apiece). Make the sample once from your park library:
+#   python tools/perfrun.py sample "<park folder>" --count 20 --survey-views --out perf/local/survey.toml
+# then run (about 45 min; set the renderer to the one the renderers suite recommends):
+#   python tools/perfrun.py run perf/survey.toml --exe <path to openrct2.exe>
+# The report's park table and "simulation against size" line say which count a size filter needs.
+name = "survey"
+playlist = "local/survey.toml"
+seconds = 1800       # 20 parks x 75 s, plus loads
+repeats = 1
+warmup = 20
+cooldown = 10
+
+[base]
+profiler = true
+
+[base.settings]
+speed = 1
+
+[[cell]]
+name = "survey"

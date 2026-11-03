@@ -1,0 +1,51 @@
+# What each screensaver feature costs: every cell turns one thing off (or changes one thing)
+# against the base, 15 min each (8 cells: about 2 h 20 min). The report compares each with the
+# base (pairs, at its end); add --repeats 2 for a spread to judge small differences by.
+#   python tools/perfrun.py run perf/features.toml --exe <path to openrct2.exe>
+name = "features"
+playlist = "../playlists/example.toml"
+seconds = 900
+repeats = 1
+warmup = 30
+cooldown = 10
+pairs = [
+  ["base", "no-background-loading"], ["base", "no-plugin"], ["base", "no-companions"],
+  ["base", "no-ride-music"], ["base", "no-sound"], ["base", "speed-4x"], ["base", "window-1080p"],
+]
+
+[base.settings]
+speed = 1
+titleMusic = "ride"
+
+[[cell]]
+name = "base"
+
+[[cell]]
+name = "no-background-loading"          # patches 0003-0008 off: parks load on the main thread
+flags = ["--no-background-loading"]
+
+[[cell]]
+name = "no-plugin"                      # the stock title player plays the same views (no pans)
+build = { layout = "stock" }
+config = { interface = { current_title_sequence = "RCT Screensaver Examples" } }
+
+[[cell]]
+name = "no-companions"                  # parks' bundled scripts not installed
+companions = false
+
+[[cell]]
+name = "no-ride-music"                  # patch 0002's ride music off (the fades still run)
+settings = { titleMusic = "off" }
+
+[[cell]]
+name = "no-sound"                       # all sound off: ride music, effects and the fades of patch 0009
+config = { sound = { master_sound = false } }
+
+[[cell]]
+name = "speed-4x"                       # four simulation ticks per frame: the simulation's share
+settings = { speed = 4 }
+
+[[cell]]
+name = "window-1080p"                   # a 1920x1080 window at scale 1.0 instead of the 4K screen at 2.0
+settings = { window = "windowed" }
+config = { general = { window_width = 1920, window_height = 1080, window_scale = 1.0 } }

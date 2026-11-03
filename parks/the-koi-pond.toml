@@ -1,0 +1,10 @@
+# The Koi Pond (Xtreme97): a cube-shaped diorama in a pink backdrop, saved under its working
+# title. The general heuristics send its close-ups to the floating pond and the building
+# cutaways, as each street-level spot's own floors count against it from every angle
+# (notes/koi-pond-analysis.md in the project files). From the saved angle the street rides show.
+[match]
+name = "Xtreme97 Workbench 2021"
+map = [252, 252]
+
+[views]
+rotation = "keep"   # every view from the saved angle (tested: street, pond and facades)

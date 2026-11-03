@@ -1,0 +1,396 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: RCT Screensaver <noreply@example.invalid>
+Date: Mon, 2 Nov 2026 20:13:40 +0000
+Subject: [PATCH] Screensaver mode: renderer, volumes, weather and time of day
+ settings
+
+The mode's settings gain the drawing engine (switched live as Options does, by
+recreating the window) and multithreaded rendering, master/sound/music volumes,
+weather effects, a flag that lets the title screen run the climate
+(gTitleRunsWeather; a park's Freeze weather cheat does not stop it there), and
+its time of day (gTitleTimeOfDay: stock daylight, full night, or the day/night
+cycle as in play), which the stock game runs only in play. Light effects are
+applied only with the software engine, and in the mode they leave daylight as
+it is (gTitleNeutralDaylight: no brightening in hot weather). The window size is
+kept out of config.ini too, like the other values the mode overrides.
+---
+ src/openrct2-ui/screensaver/Screensaver.cpp | 70 +++++++++++++++++++--
+ src/openrct2-ui/screensaver/Screensaver.h   | 12 +++-
+ src/openrct2-ui/scripting/ScScreensaver.hpp | 49 +++++++++++++++
+ src/openrct2/drawing/LightFX.cpp            |  7 ++-
+ src/openrct2/scenario/Scenario.cpp          |  9 ++-
+ src/openrct2/scenes/title/TitleScene.cpp    |  3 +
+ src/openrct2/scenes/title/TitleScene.h      | 13 ++++
+ src/openrct2/world/Weather.cpp              |  9 ++-
+ 8 files changed, 162 insertions(+), 10 deletions(-)
+
+diff --git a/src/openrct2-ui/screensaver/Screensaver.cpp b/src/openrct2-ui/screensaver/Screensaver.cpp
+index 70e5ddb..548808c 100644
+--- a/src/openrct2-ui/screensaver/Screensaver.cpp
++++ b/src/openrct2-ui/screensaver/Screensaver.cpp
+@@ -13,6 +13,7 @@
+ #include "Overlay.h"
+ 
+ #include <SDL.h>
++#include <algorithm>
+ #include <openrct2/Context.h>
+ #include <openrct2/Diagnostic.h>
+ #include <openrct2/Game.h>
+@@ -21,6 +22,7 @@
+ #include <openrct2/audio/Audio.h>
+ #include <openrct2/config/Config.h>
+ #include <openrct2/drawing/Drawing.Screen.h>
++#include <openrct2/drawing/IDrawingEngine.h>
+ #include <openrct2/interface/Window.h>
+ #include <openrct2/interface/WindowBase.h>
+ #include <openrct2/scenes/title/TitleScene.h>
+@@ -38,11 +40,20 @@ namespace OpenRCT2::Ui::Screensaver
+     struct ConfigValues
+     {
+         int32_t fullscreenMode{};
++        DrawingEngine drawingEngine{};
++        int32_t windowWidth{}; // a window resized in the mode is saved by the stock code (UiContext)
++        int32_t windowHeight{};
+         bool uncapFPS{};
++        bool multiThreading{};
++        bool dayNightCycle{};
+         bool enableLightFx{};
+         bool enableLightFxForVehicles{};
+         bool renderWeatherGloom{};
++        bool renderWeatherEffects{};
+         TitleMusicKind titleMusic{};
++        uint8_t masterVolume{};
++        uint8_t soundVolume{};
++        uint8_t rideMusicVolume{};
+     };
+ 
+     struct HiddenWindow
+@@ -68,11 +79,20 @@ namespace OpenRCT2::Ui::Screensaver
+         auto& config = Config::Get();
+         ConfigValues values;
+         values.fullscreenMode = config.general.fullscreenMode;
++        values.drawingEngine = config.general.drawingEngine;
++        values.windowWidth = config.general.windowWidth;
++        values.windowHeight = config.general.windowHeight;
+         values.uncapFPS = config.general.uncapFPS;
++        values.multiThreading = config.general.multiThreading != 0;
++        values.dayNightCycle = config.general.dayNightCycle;
+         values.enableLightFx = config.general.enableLightFx;
+         values.enableLightFxForVehicles = config.general.enableLightFxForVehicles;
+         values.renderWeatherGloom = config.general.renderWeatherGloom;
++        values.renderWeatherEffects = config.general.renderWeatherEffects;
+         values.titleMusic = config.sound.titleMusic;
++        values.masterVolume = config.sound.masterVolume;
++        values.soundVolume = config.sound.soundVolume;
++        values.rideMusicVolume = config.sound.rideMusicVolume;
+         return values;
+     }
+ 
+@@ -80,11 +100,20 @@ namespace OpenRCT2::Ui::Screensaver
+     {
+         auto& config = Config::Get();
+         config.general.fullscreenMode = values.fullscreenMode;
++        config.general.drawingEngine = values.drawingEngine;
++        config.general.windowWidth = values.windowWidth;
++        config.general.windowHeight = values.windowHeight;
+         config.general.uncapFPS = values.uncapFPS;
++        config.general.multiThreading = values.multiThreading;
++        config.general.dayNightCycle = values.dayNightCycle;
+         config.general.enableLightFx = values.enableLightFx;
+         config.general.enableLightFxForVehicles = values.enableLightFxForVehicles;
+         config.general.renderWeatherGloom = values.renderWeatherGloom;
++        config.general.renderWeatherEffects = values.renderWeatherEffects;
+         config.sound.titleMusic = values.titleMusic;
++        config.sound.masterVolume = values.masterVolume;
++        config.sound.soundVolume = values.soundVolume;
++        config.sound.rideMusicVolume = values.rideMusicVolume;
+     }
+ 
+     // Config::Save while the mode is on writes the user's own values, never the mode's.
+@@ -137,9 +166,31 @@ namespace OpenRCT2::Ui::Screensaver
+         config.general.fullscreenMode = FullscreenModeFor(_settings.windowStyle, _saved.fullscreenMode);
+         // 40 fps: one frame per game tick, as the camera moves once per tick.
+         config.general.uncapFPS = false;
+-        config.general.enableLightFx = _settings.lightEffects;
+-        config.general.enableLightFxForVehicles = _settings.lightEffects && _saved.enableLightFxForVehicles;
++        config.general.drawingEngine = _settings.drawingEngine
++                && *_settings.drawingEngine >= 0 && *_settings.drawingEngine < EnumValue(DrawingEngine::count)
++            ? static_cast<DrawingEngine>(*_settings.drawingEngine)
++            : _saved.drawingEngine;
++        config.general.multiThreading = _settings.multiThreading.value_or(_saved.multiThreading);
++        // Light effects exist only in the software engine (as Config::Load enforces).
++        const bool lightFx = _settings.lightEffects
++            && config.general.drawingEngine == DrawingEngine::softwareWithHardwareDisplay;
++        config.general.enableLightFx = lightFx;
++        config.general.enableLightFxForVehicles = lightFx && _saved.enableLightFxForVehicles;
++        // Weather as the stock Options checkbox sets it: rain and snow drawn, and the gloom with them.
+         config.general.renderWeatherGloom = _settings.weatherGloom;
++        config.general.renderWeatherEffects = _settings.weatherGloom;
++        // The title screen runs the climate and sets its time of day only when asked (TitleScene.h).
++        const auto timeOfDay = static_cast<TitleTimeOfDay>(std::clamp(_settings.timeOfDay, 0, 2));
++        config.general.dayNightCycle = timeOfDay != TitleTimeOfDay::day;
++        gTitleTimeOfDay = timeOfDay;
++        gTitleRunsWeather = _settings.weather;
++        gTitleNeutralDaylight = true;
++        auto volume = [](const std::optional<int32_t>& v, uint8_t own) {
++            return v ? static_cast<uint8_t>(std::clamp(*v, 0, 100)) : own;
++        };
++        config.sound.masterVolume = volume(_settings.masterVolume, _saved.masterVolume);
++        config.sound.soundVolume = volume(_settings.soundVolume, _saved.soundVolume);
++        config.sound.rideMusicVolume = volume(_settings.musicVolume, _saved.rideMusicVolume);
+         config.sound.titleMusic = _settings.titleMusic ? static_cast<TitleMusicKind>(*_settings.titleMusic)
+                                                        : _saved.titleMusic;
+         if (_settings.gameSpeed && *_settings.gameSpeed >= 1 && *_settings.gameSpeed <= 4)
+@@ -147,7 +198,11 @@ namespace OpenRCT2::Ui::Screensaver
+             gGameSpeed = static_cast<uint8_t>(*_settings.gameSpeed);
+         }
+ 
+-        if (config.general.fullscreenMode != previous.fullscreenMode)
++        if (config.general.drawingEngine != previous.drawingEngine)
++        {
++            Drawing::RefreshVideo(); // as Options does: recreates the window with the other engine
++        }
++        else if (config.general.fullscreenMode != previous.fullscreenMode)
+         {
+             SetWindowMode(config.general.fullscreenMode);
+         }
+@@ -163,8 +218,15 @@ namespace OpenRCT2::Ui::Screensaver
+         auto current = ReadConfig();
+         WriteConfig(_saved);
+         Config::SetSaveHook(nullptr);
++        gTitleTimeOfDay = TitleTimeOfDay::day;
++        gTitleNeutralDaylight = false;
++        gTitleRunsWeather = false;
+         gGameSpeed = _savedGameSpeed;
+-        if (current.fullscreenMode != _saved.fullscreenMode)
++        if (current.drawingEngine != _saved.drawingEngine)
++        {
++            Drawing::RefreshVideo();
++        }
++        else if (current.fullscreenMode != _saved.fullscreenMode)
+         {
+             SetWindowMode(_saved.fullscreenMode);
+         }
+diff --git a/src/openrct2-ui/screensaver/Screensaver.h b/src/openrct2-ui/screensaver/Screensaver.h
+index f19a441..8e75836 100644
+--- a/src/openrct2-ui/screensaver/Screensaver.h
++++ b/src/openrct2-ui/screensaver/Screensaver.h
+@@ -45,7 +45,17 @@ namespace OpenRCT2::Ui::Screensaver
+         std::optional<int32_t> titleMusic; // TitleMusicKind
+         std::optional<int32_t> gameSpeed;  // 1-4
+         bool lightEffects = false;
+-        bool weatherGloom = false;
++        bool weatherGloom = false; // weather effects: rain and snow drawn, and the gloom of bad weather
++        bool weather = false;      // the climate runs: parks' weather changes as in play
++        int32_t timeOfDay = 0;     // TitleTimeOfDay: 0 day (stock), 1 night, 2 the day/night cycle
++        // Volumes, 0-100 (unset: the user's own, from Options).
++        std::optional<int32_t> masterVolume;
++        std::optional<int32_t> soundVolume;
++        std::optional<int32_t> musicVolume;
++        // DrawingEngine: 0 software (hardware display), 1 OpenGL (unset: the user's own).
++        std::optional<int32_t> drawingEngine;
++        // Multithreaded viewport rendering, as Options' checkbox (unset: the user's own).
++        std::optional<bool> multiThreading;
+     };
+ 
+     enum class MouseEventKind : uint8_t
+diff --git a/src/openrct2-ui/scripting/ScScreensaver.hpp b/src/openrct2-ui/scripting/ScScreensaver.hpp
+index fa2cb52..636d990 100644
+--- a/src/openrct2-ui/scripting/ScScreensaver.hpp
++++ b/src/openrct2-ui/scripting/ScScreensaver.hpp
+@@ -18,6 +18,7 @@
+ 
+     #include <openrct2/Context.h>
+     #include <openrct2/scripting/ScriptEngine.h>
++    #include <algorithm>
+     #include <vector>
+ 
+ namespace OpenRCT2::Scripting
+@@ -211,6 +212,39 @@ namespace OpenRCT2::Scripting
+                 settings.lightEffects = *v;
+             if (auto v = GetBool(ctx, obj, "weatherGloom"))
+                 settings.weatherGloom = *v;
++            if (auto v = GetBool(ctx, obj, "weather"))
++                settings.weather = *v;
++            if (auto v = GetString(ctx, obj, "timeOfDay"))
++                settings.timeOfDay = *v == "night" ? 1 : *v == "cycle" ? 2 : 0;
++            // Volumes 0-100; null or absent leaves the user's own.
++            auto volume = [&](const char* name, std::optional<int32_t>& out) {
++                JSValue value = JS_GetPropertyStr(ctx, obj, name);
++                if (JS_IsNull(value) || JS_IsUndefined(value))
++                    out.reset();
++                else if (auto v = GetNumber(ctx, obj, name))
++                    out = static_cast<int32_t>(*v);
++                JS_FreeValue(ctx, value);
++            };
++            volume("masterVolume", settings.masterVolume);
++            volume("soundVolume", settings.soundVolume);
++            volume("musicVolume", settings.musicVolume);
++            // "software", "opengl", or null/absent: the user's own engine.
++            JSValue engine = JS_GetPropertyStr(ctx, obj, "drawingEngine");
++            if (JS_IsString(engine))
++            {
++                auto name = GetString(ctx, obj, "drawingEngine");
++                if (name && *name == "software")
++                    settings.drawingEngine = 0;
++                else if (name && *name == "opengl")
++                    settings.drawingEngine = 1;
++                else
++                    settings.drawingEngine.reset();
++            }
++            else
++                settings.drawingEngine.reset();
++            JS_FreeValue(ctx, engine);
++            // true, false, or null/absent: the user's own.
++            settings.multiThreading = GetBool(ctx, obj, "multiThreading");
+             return settings;
+         }
+ 
+@@ -225,6 +259,21 @@ namespace OpenRCT2::Scripting
+             JS_SetPropertyStr(ctx, obj, "gameSpeed", settings.gameSpeed ? JS_NewInt32(ctx, *settings.gameSpeed) : JS_NULL);
+             JS_SetPropertyStr(ctx, obj, "lightEffects", JS_NewBool(ctx, settings.lightEffects));
+             JS_SetPropertyStr(ctx, obj, "weatherGloom", JS_NewBool(ctx, settings.weatherGloom));
++            JS_SetPropertyStr(ctx, obj, "weather", JS_NewBool(ctx, settings.weather));
++            static constexpr const char* kTimesOfDay[] = { "day", "night", "cycle" };
++            JS_SetPropertyStr(
++                ctx, obj, "timeOfDay", JS_NewString(ctx, kTimesOfDay[std::clamp(settings.timeOfDay, 0, 2)]));
++            auto volume = [&](const char* name, const std::optional<int32_t>& v) {
++                JS_SetPropertyStr(ctx, obj, name, v ? JS_NewInt32(ctx, *v) : JS_NULL);
++            };
++            volume("masterVolume", settings.masterVolume);
++            volume("soundVolume", settings.soundVolume);
++            volume("musicVolume", settings.musicVolume);
++            JS_SetPropertyStr(
++                ctx, obj, "drawingEngine",
++                settings.drawingEngine ? JS_NewString(ctx, *settings.drawingEngine == 1 ? "opengl" : "software") : JS_NULL);
++            JS_SetPropertyStr(
++                ctx, obj, "multiThreading", settings.multiThreading ? JS_NewBool(ctx, *settings.multiThreading) : JS_NULL);
+             return obj;
+         }
+ 
+diff --git a/src/openrct2/drawing/LightFX.cpp b/src/openrct2/drawing/LightFX.cpp
+index 08e1a52..202fc24 100644
+--- a/src/openrct2/drawing/LightFX.cpp
++++ b/src/openrct2/drawing/LightFX.cpp
+@@ -11,6 +11,7 @@
+ 
+ #include "../Game.h"
+ #include "../GameState.h"
++#include "../OpenRCT2.h"
+ #include "../config/Config.h"
+ #include "../entity/EntityRegistry.h"
+ #include "../interface/Viewport.h"
+@@ -18,6 +19,7 @@
+ #include "../ride/Ride.h"
+ #include "../ride/RideData.h"
+ #include "../ride/Vehicle.h"
++#include "../scenes/title/TitleScene.h"
+ #include "../util/Util.h"
+ #include "../world/tile_element/TileElement.h"
+ 
+@@ -868,7 +870,10 @@ namespace OpenRCT2::Drawing::LightFx
+ 
+         //  overExpose += ((lightMax - lightAvg) / lightMax) * 0.01f;
+ 
+-        if (gameState.weatherCurrent.temperature > 20)
++        // Hot weather brightens daylight by 4% per degree over 20 (up to half again in the hottest
++        // parks); the screensaver mode keeps the park's own colors.
++        const bool neutralDaylight = gLegacyScene == LegacyScene::titleSequence && gTitleNeutralDaylight;
++        if (gameState.weatherCurrent.temperature > 20 && !neutralDaylight)
+         {
+             float offset = (static_cast<float>(gameState.weatherCurrent.temperature - 20)) * 0.04f;
+             offset *= 1.0f - night;
+diff --git a/src/openrct2/scenario/Scenario.cpp b/src/openrct2/scenario/Scenario.cpp
+index d79e607..4e912ff 100644
+--- a/src/openrct2/scenario/Scenario.cpp
++++ b/src/openrct2/scenario/Scenario.cpp
+@@ -14,6 +14,7 @@
+ #include "../Game.h"
+ #include "../GameState.h"
+ #include "../OpenRCT2.h"
++#include "../scenes/title/TitleScene.h"
+ #include "../PlatformEnvironment.h"
+ #include "../actions/ResultWithMessage.h"
+ #include "../config/Config.h"
+@@ -369,7 +370,13 @@ static void ScenarioUpdateDayNightCycle()
+     float currentDayNightCycle = gDayNightCycle;
+     gDayNightCycle = 0;
+ 
+-    if (gLegacyScene == LegacyScene::playing && Config::Get().general.dayNightCycle)
++    const bool title = gLegacyScene == LegacyScene::titleSequence;
++    const bool scene = gLegacyScene == LegacyScene::playing || (title && gTitleTimeOfDay == TitleTimeOfDay::cycle);
++    if (title && gTitleTimeOfDay == TitleTimeOfDay::night)
++    {
++        gDayNightCycle = 1.0f;
++    }
++    else if (scene && Config::Get().general.dayNightCycle)
+     {
+         float monthFraction = GetDate().GetMonthTicks() / static_cast<float>(kTicksPerMonth);
+         if (monthFraction < (1 / 8.0f))
+diff --git a/src/openrct2/scenes/title/TitleScene.cpp b/src/openrct2/scenes/title/TitleScene.cpp
+index 8820369..78273d3 100644
+--- a/src/openrct2/scenes/title/TitleScene.cpp
++++ b/src/openrct2/scenes/title/TitleScene.cpp
+@@ -36,6 +36,9 @@ using namespace OpenRCT2;
+ 
+ // TODO Remove when no longer required.
+ bool gPreviewingTitleSequenceInGame;
++bool gTitleRunsWeather;
++TitleTimeOfDay gTitleTimeOfDay = TitleTimeOfDay::day;
++bool gTitleNeutralDaylight;
+ 
+ ITitleSequencePlayer* TitleScene::GetSequencePlayer()
+ {
+diff --git a/src/openrct2/scenes/title/TitleScene.h b/src/openrct2/scenes/title/TitleScene.h
+index 10fed6a..fa6547c 100644
+--- a/src/openrct2/scenes/title/TitleScene.h
++++ b/src/openrct2/scenes/title/TitleScene.h
+@@ -48,6 +48,19 @@ namespace OpenRCT2
+ // When testing title sequences within a normal game
+ extern bool gPreviewingTitleSequenceInGame;
+ 
++// The screensaver mode lets the title screen run the climate as normal play does, and set its time
++// of day (the stock title screen keeps each park's saved weather, always in daylight).
++enum class TitleTimeOfDay : uint8_t
++{
++    day,   // stock
++    night, // full night throughout
++    cycle, // the day/night cycle as in play, from each park's date
++};
++extern bool gTitleRunsWeather;
++extern TitleTimeOfDay gTitleTimeOfDay;
++// The mode's light effects leave daylight as it is: no brightening in hot weather (LightFX).
++extern bool gTitleNeutralDaylight;
++
+ void TitleCreateWindows();
+ void* TitleGetSequencePlayer();
+ void TitleSequenceChangePreset(size_t preset);
+diff --git a/src/openrct2/world/Weather.cpp b/src/openrct2/world/Weather.cpp
+index 03e4b95..46a4093 100644
+--- a/src/openrct2/world/Weather.cpp
++++ b/src/openrct2/world/Weather.cpp
+@@ -13,6 +13,7 @@
+ #include "../Game.h"
+ #include "../GameState.h"
+ #include "../OpenRCT2.h"
++#include "../scenes/title/TitleScene.h"
+ #include "../SpriteIds.h"
+ #include "../audio/Audio.h"
+ #include "../audio/AudioChannel.h"
+@@ -146,11 +147,13 @@ namespace OpenRCT2::Weather
+ 
+         auto& gameState = getGameState();
+ 
+-        // Only do climate logic if playing (not in scenario editor or title screen)
+-        if (gLegacyScene != LegacyScene::playing)
++        // Only do climate logic if playing (not in scenario editor or title screen), or on the title
++        // screen when the screensaver mode asks for it.
++        if (gLegacyScene != LegacyScene::playing && !(gLegacyScene == LegacyScene::titleSequence && gTitleRunsWeather))
+             return;
+ 
+-        if (!getGameState().cheats.freezeWeather)
++        // Most custom parks are saved with the weather frozen; the mode's changing weather overrides it.
++        if (!getGameState().cheats.freezeWeather || gLegacyScene == LegacyScene::titleSequence)
+         {
+             if (gameState.weatherUpdateTimer)
+             {

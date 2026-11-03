@@ -1,0 +1,482 @@
+# RCT Screensaver
+
+A live-rendered, wallpaper-style backdrop built on [OpenRCT2](https://github.com/OpenRCT2/OpenRCT2)'s
+title screen: it plays a list of parks, moving the camera between views of each one, with a
+minimal interface for holding a view, stepping between views and parks, speed, shuffle, park name
+captions and a few display settings.
+
+Three parts, all in this repository, none of them a fork of OpenRCT2:
+
+- **Engine patches** (`engine/`): a small series against the OpenRCT2 v0.5.6 release that adds a
+  screensaver mode to the title screen (borderless window, the stock menus hidden, an overlay for
+  the interface, a `--screensaver` launch flag), loads the next park in the background so switches
+  cost about a frame, plays the parks' ride music, and keeps the interface readable in parks with
+  a custom palette. GitHub Actions builds them into a replacement `openrct2.exe`.
+- **The plugin** (`plugin/`): an OpenRCT2 plugin that plays the playlist, drives the camera,
+  draws the controls bar, captions, settings panel and view editor, and runs the parks' own
+  companion plugins.
+- **The generator** (`tools/`, Python): picks the views for each park (an overview, then close-ups
+  of its busiest spots, towers and rides, joined by pans), builds the title sequence and installs
+  it, with a settings page in the browser and a tool for drawing views by hand.
+
+Running it requires OpenRCT2 v0.5.6 and the original RollerCoaster Tycoon 2 (or RCT Classic)
+game files, which are not included; neither are any parks (see `ExampleParks/README.md`).
+
+## Support
+
+| | |
+|---|---|
+| Operating system | Windows 10/11. The engine build is Windows x64; the mode's captions use the Segoe UI and Georgia system fonts; `Settings.cmd` and `.sv6` conversion use `openrct2.com`. The Python tools also run on Linux and macOS for building playlists. |
+| OpenRCT2 | v0.5.6 (`engine/VERSION`), the portable or installed release, with the two patched executables in place of the stock ones. On an unpatched v0.5.6 the plugin falls back to playing on the stock title screen, without the screensaver mode (below). |
+| Python | 3.11 or later, on PATH (`pythonw` for `Settings.cmd`). No third-party packages. |
+| Node | Only to rebuild the plugin (22 or later); the built plugin is committed. |
+
+## Installing
+
+1. **Patched engine.** Download the engine build (`openrct2.exe` and `openrct2.com`) from the
+   project's releases, or build it yourself with the "Engine build" workflow (`engine/README.md`).
+   Keep a copy of the stock pair, then replace both files in your OpenRCT2 v0.5.6 install. The
+   data files are unchanged by the patches, and nothing else in the install is touched.
+2. **Parks.** Put park downloads (zips as published on New Element Designs, loose `.park` files,
+   or RCT2 `.sv6` saves) in a folder. The ten example parks that the shipped playlists use are
+   listed with their download pages in `ExampleParks/README.md`.
+3. **Settings page.** Run `Settings.cmd` (or `python tools/settings.py`). It opens the generator's
+   page in your browser: point Source parks at your folder and Scan, set the options you want,
+   Build, then Install (OpenRCT2 must be closed). The page writes everything under
+   `Documents\OpenRCT2\screensaver\`; Install puts the title sequence in
+   `Documents\OpenRCT2\sequence\`, the plugin in `Documents\OpenRCT2\plugin\` (with its icons under
+   `plugin\rct-screensaver\icons\` and one `rct-screensaver-companion-*.js` per park script), and
+   the playlist and settings in `plugin.store.json` (other plugins' data is left alone; a `.bak`
+   copy is kept).
+
+   The command-line equivalent, for a playlist written by hand, is
+
+   ```sh
+   python tools/mksequence.py playlists/example.toml --install
+   ```
+
+   Pass `--user-dir` if your OpenRCT2 user folder is not `Documents\OpenRCT2`.
+4. **Run it.** Start OpenRCT2 and click the Screensaver button on the main menu (the fifth button,
+   a monitor with a park), or start `openrct2.exe --screensaver` to go straight into the mode. Esc
+   returns to the menu, or quits when the game was started with the flag.
+
+Upgrading: replace the two executables again and run Install again (the plugin, its icons and the
+companion scripts are replaced; views you set in the editor are kept, see "Setting views by hand").
+
+### The stock engine
+
+On an unpatched OpenRCT2 the plugin still works, as it did before the screensaver mode: it plays
+the installed playlist on the title screen as soon as the game starts, with the same keys, cuts
+between parks (the screen freezes while a park loads), opens its view editor as a
+window (E, or the toolbox menu's "RCT Screensaver: edit views"), and has "restart playlist" and
+"toggle debug log" in the toolbox menu. There are no captions, no controls bar and no settings
+panel, and selecting the sequence under Options → Miscellaneous → Title sequence avoids loading
+OpenRCT2's default sequence first. A park that recolors the palette's black through its water
+object (Gardens of Light) washes out the stock interface there; the patched engine keeps the
+interface black on its own (see "Palette" below).
+
+## Running it
+
+The screensaver mode shows only the park. Moving the mouse shows the cursor and the controls bar
+at the bottom (and the stock exit button bottom right, which does what Esc does); both hide again
+2.5 s after the mouse stops.
+
+| Key | Bar | Action |
+|---|---|---|
+| Right / Left | ⏭ ⏮ | Next / previous view (continues into the next / previous park) |
+| Shift+Right / Shift+Left | ⏭ ⏮ (outer) | Next / previous park |
+| Space | Hold | Hold / release the current view (pauses a pan where it is) |
+| Up / Down | Speed | Speed 1×–8×; wraps on the bar (right click or wheel to slow down); kept across parks and restarts |
+| S | Shuffle | Shuffle parks on / off (the next park at random, each once per round; views keep their order) |
+| | Titles | Park name captions on the overview only, on every view, or off |
+| | Music | The parks' ride music on / off (ride music follows the view and cross-fades between parks) |
+| | Time of day | Day (the stock title screen), full night, or the day/night cycle as in play |
+| E | Edit views | The view editor (below) |
+| | Settings | Window style, renderer, multithreading, changing weather, weather effects, light effects, volumes, caption placement, and the Title frame (gold, silver and wood portrait frames, Minimal dark and light, Aero, Canvas, each with an accent color) |
+| Esc | Exit | Back to the main menu, or quit after `--screensaver` |
+
+Everything the mode changes (window style, music, effects, volumes, speed, captions) is applied in
+memory and stored in the plugin's settings (`RCTScreensaver.settings` in `plugin.store.json`); the
+game's own `config.ini` is never edited, and the stock title screen comes back exactly as it was.
+Keys can be rebound in OpenRCT2's shortcut settings.
+
+Park changes dip through black (the next park is already loaded in the background; set
+`"fadeMs": 0` in the settings to cut instead). Captions fade in with each park: the park's name and
+its builders, from the playlist (`name`, `author`), the park's profile or the New Element Designs
+catalog.
+
+### Wallpaper and screensaver hosting
+
+The mode is a normal borderless window; the project does not put it behind the desktop icons or
+run as a Windows `.scr` itself. Tools such as Lively Wallpaper or Wallpaper Engine can run any
+program as a wallpaper: give them `openrct2.exe --screensaver` (with `--user-data-path <folder>`
+if you also play OpenRCT2 normally at the same time, as both instances would otherwise share
+`plugin.store.json`). A window behind the desktop icons gets no keyboard or mouse input, so the
+keys and the bar work only when the game window itself has the focus. Multiple monitors are out
+of scope.
+
+## Playlists and views
+
+A playlist is a TOML file (`playlists/example.toml` is commented) naming the parks to play and the
+options for generating their views; the settings page writes one for you. `tools/mksequence.py`
+builds a title sequence from it. What follows describes the options in detail; the defaults suit
+most parks.
+
+Each view is held still, then the camera cuts to the next, unless the view has a `pan` share:
+then it spends that share of its hold (at the end) panning slowly to the next view, arriving as
+that view's hold starts (`pan = 0`, the default, holds still and cuts; `1` keeps moving). Angle and
+zoom change only as a pan arrives (`pan_changes = "end"`, the default) or as it sets off
+(`"start"`), never mid-pan; opposite angles and zooms two or more levels apart change half at each
+end, the camera rests 1 s at the next view's spot before a change on arrival (`"arriveHold"`) and
+stays still at least 2 s after each change (`"changeHold"`), both added to the view's time. `inertia = true` makes a pan start and stop slowly instead of moving at one speed. A pan
+faster than the speed tolerance at the zoom it runs at (`pan_tolerance`, 500 screen pixels a second
+at zoom -2, `pan_tolerance_step` 100 less per level out) travels a zoom level out (between views at
+different zooms, at most at the wider one), and the build gives a generated pan still over it more
+time, in 100 ms steps, until it is not. A generated overview always pans 10% of its hold
+to the first close-up, changing angle and zoom on arrival (`overview_pan`).
+`playlists/pan-compare.toml` plays four of the example parks with every close-up panning 60% of its hold;
+`playlists/speed-ladder.toml` pans one length at each zoom and speed, for judging pan speed. The
+build reports pans faster than `pan_tolerance` (500 px/s at zoom -2, `pan_tolerance_step` 100 less
+per level out). Set these in
+`[views]`, a park's views or on a listed view, in the view editor, or in the browser tool. Key presses and the editor cut. A park's last view pans back to its first, zooming out as it goes
+when the first view is wider (one level as it sets off, moving at once, further levels during the pan, any turn
+on arrival): a park playing alone (a one-park playlist, or the editor's Play) carries on
+from there, and otherwise the camera holds at the first view for 2 s (`returnHold`) before the
+next park. Design notes:
+`docs/view-panning.md`.
+
+Views and pan speeds were judged in one game window, `[views] window` (1920x1080 game pixels: a 4K
+monitor at OpenRCT2's scale factor 2.0), which the playlist carries. OpenRCT2's zoom levels are fixed
+scales, so in a smaller window (in game pixels, after the scale factor) the same zoom shows less of
+the park; the plugin moves views out by whole zoom levels until the window shows at least the frame
+they were set for, both its width and its height (one level at 960x540 or 960x600, that is 1080p or
+1200p at scale 2.0), and holds pans to a speed tolerance that shrinks with the window. The scale
+factor needs no setting of its own: the plugin sees the window in game pixels, which already count it. Views set in the editor or the browser
+tool keep the window they were set in and are scaled the same way. The plugin setting
+`scaleToWindow = false` plays every zoom as set.
+
+Generated views (method `spots`, the default) start with an overview of the whole park, which
+the plugin zooms out until all of it fits the window (small parks, whose footprint fits at zoom
+0, no further than zoom 0), centered as near to where the elements are on average as keeps all
+of the content on screen. Then come close-ups of the park's busiest spots. A park's view
+budget grows with the ground its content covers, on a log scale: 4 views (`base_views`) up to
+about one screen of built tiles (`budget_tiles`), one more per doubling, at most 8 (`count`);
+fewer if it runs out of spots worth showing. Close-ups take turns between zoom levels (`zoom_min` to
+`zoom_max`, -2 to 1 by default, always closer than the overview; on parks wider than a screen,
+none whose cell is wider than half the content, `wide_limit`, so no close-up is a second overview). Spots come from two grids
+offset by half a cell; a spot whose elements leave a tall empty band (a scene under a
+suspended lid) is split into a spot per layer; a tile counts at most as many elements as 90%
+of tiles have, so one stacked tower can't drown out the rest; and spots with more rides, track
+and paths score higher than static scenery: those elements carry half of a park's scoring
+weight however few there are (`activity`), and each view aims where that weight is. A spot
+taller than a screen is offered one screen of height at a time. Every spot is a candidate
+from each angle, scored by how busy it is times how much of it is not hidden behind taller
+things in front (`rotation = "auto"`; the overview keeps the park's saved angle), times the
+square of its frame fill: the share of a window `fill_window` (2) times the screen (`screen`, 1920x1080
+game pixels, the window judged in; the fill counts the surroundings too) that shows built
+content when the map is painted from that angle (bare land and water count `fill_land`, 0.3;
+the void, the black backdrop many parks fake with a flat lowland or a sheet of scenery, and
+cliff walls count nothing), so a spot at the park's edge is seen from inside the park rather
+than with the void or a wall filling half the screen, and a close-up that would show the
+whole park again scores low (`fill_min` 0.5 drops it outright). The same
+spot from another angle counts as a new view at up to half its score, so small parks get
+their content from several sides and large parks mostly distinct spots, by the same rule.
+Views from the same angle are kept apart by half the larger view's size; a spot dropped for
+being too close adds its score to the nearest close-up, so busy areas get longer holds.
+The close-ups are then grouped into districts (`districts = true`; the grouping is
+`tools/districts.py`'s watershed of the element density): each district gets a home angle
+(the angle showing most of its spots) and a home zoom (where its spots score most), and a
+close-up keeps them unless a change earns its place: it turns away when the home angle shows
+under `home_seen` (0.7) of its spot and its own angle `home_gain` (25%) more, and keeps its
+own zoom when its spot scores that much more there than at the home zoom; at most
+`change_budget` (half) of the close-ups change, and a spot shown again from another angle
+keeps that angle. The circuit then visits each district once (`route_district`, 6 s per
+return to a district left earlier). Towers (structures rising `tower_rise` steps above the built
+tops around them, found by `tools/districts.py`) that no close-up shows whole near the middle of
+its screen (the middle third of its width) at the tower's own zoom or closer get a view of their
+own (`tower_views`, up to 2 per park, tallest first, within `count`): centered on the tower at
+mid-height (its top found through gaps up to `tower_crown` steps, for a spire set above a
+hollow), zoomed so its height fills `tower_fit` (80%) of the window and then `tower_close` (1) level
+closer, a tower taller than the window framed from its top (`tower_top` 0.15 under the frame's top), from the nearest close-up's
+angle unless another angle's frame fill is a quarter better, so the camera pans up the tower. The plugin shows tower views as
+placed (`fixed`), since fitting would center a window wider than the park on the park instead.
+A park's `[park.views]` table can set `tower_views = 0` where the tallest structures are
+scenery mountains rather than towers. With the circuit in order, each close-up may move within
+a quarter of its cell (`nudge`, 0 leaves the picks alone) to where the pans into and out of it
+sweep the most content (the mean frame fill of `path_samples` windows along each pan, at the
+zoom the pan runs at), as long as its own frame fill keeps `nudge_keep` (95%) of what it had;
+pans shorter than a quarter screen do not count. A pan between close-ups longer than
+`bead_seconds` (8) of travel at `route_speed` of the tolerance gets a bead (`beads`): a
+pass-through view on the way from the spots the picker left unchosen (same angle, between a
+quarter and three quarters of the way along, within `bead_band` (a quarter of the screen's
+height) of the line, a quarter screen clear of either end), resting `bead_still` (1 s) and
+panning on (`bead_pan`, 80%), on top of the park's time. With panning on (any `pan` > 0),
+each generated view's time is then its still time plus the moving time of its pan to the next
+view (`pan_timing`): the pan's length at the zoom it runs at over `route_speed` (60%) of the
+tolerance there, at least `move_min` (2 s), so the pan share differs per view. The park's time
+grows with the moving time up to `park_cap` (150 s); over it beads go first, then the
+lowest-scoring close-ups. A ride whose vehicles move and whose track has `ride_tiles` (24)
+tiles or more can give a pair of views whose pan follows it (`ride_pans`, up to 1 per park): the
+two ends of the longest straight run of its track inside the park's content (`ride_run` 20 tiles
+at least, one connected stretch of track staying within `ride_band` 4 tiles of the line between
+them and at most `ride_detour` 1.5 times as long), in the direction its trains run (a train on
+the run, else the track's build direction), at `ride_zoom` (-1) and the track's height, from the
+angle where the run is longest on screen and over the most content (`ride_fill` 0.8 at least, so
+not along the park's edge) and shows enough of the track (`ride_visible` 0.2, so no dark rides);
+the pair stays together in the circuit and counts as one point of interest. The run scoring most
+(length × fill) wins. Only open rides count (`ride_status`), and the end view is pulled back by
+`ride_overshoot` (20% of the window) so the pan stops on the track. Over `park_cap` (150 s) beads go first, then the lowest close-ups.
+`circuit_variants` (1) asks for that many orders of the circuit per park, the cheapest first and
+the rest within `variant_margin` (10%) of it (`circuit_reverse` adds each order's reverse); the
+plugin plays the next order on each visit to the park (the visit count persists across runs).
+`only = "rides"` keeps only the overview and the ride pans, for test playlists. The still time is the park's time by today's rule: a park plays for 30 s (`park_time`) with up to 4 views; each further view adds 5 s
+(`view_time`), 1 s of it to the overview (`overview_time`). Every view gets at least 5 s, and
+the rest goes to the close-ups by score, but the overview always holds at least 2 s longer
+than any close-up. Method `grid` is the older one: the busiest 32-tile
+cells, all at one zoom, each held for `hold`. The build warns about listed or editor views
+that look outside a park's content.
+
+### Palette
+
+Some parks recolor palette entry 10 through their water object (Gardens of Light's pale sky).
+Stock OpenRCT2 uses that entry both for the space outside the map and for the interface's black,
+so the menus wash out there. The patched engine (`engine/`, patch 0001) keeps the interface's
+black separate from the void color, so the park's own backdrop shows and the interface stays
+readable; the generator leaves the park's palette alone.
+
+### Fitting
+
+The plugin keeps views on each park's content for the current window size and zoom: a view
+that would show empty space past the park is moved inwards, and views that end up on the same
+spot are merged. When that leaves fewer views than `count`, a park that fits on one screen gets
+a view from each angle centered on what is built (measured from the loaded park), and a park taller than the screen gets views spread from its
+base to its top, turning the angle each time. Set
+`fit = false` in a playlist's `[views]` (or a park's) to show views exactly as listed.
+
+### Parks' own plugins
+
+Some parks ship a plugin in their zip (Animator on Sambhava's Rest, Object Animator on
+Constellations). `--install` turns each one into a title-screen plugin,
+`plugin/rct-screensaver-companion-<name>.js` in OpenRCT2's user directory, that runs only while
+its park is showing and replaces the ones from the previous install. Its windows stay hidden and
+the camera stays the screensaver's; per park, `companions = []` turns them off,
+`companions = ["file.js"]` picks files (in the zip or next to the playlist), and
+`companion_camera = true` lets them move the camera. `companion_debug = true` at the top of the
+playlist logs what they were stopped from doing. Many parks hold data for a plugin they don't
+ship (most often AdvancedTrack, which authors expect installed): a park gets the newest version
+of such a plugin that any park in the same playlist ships, and every park runs that newest
+version. Details: `docs/companion-plugins.md`.
+
+Views can follow the animations too. `animations = true` on a park adds a view on each of its
+companions' animations after its other views (`animation_hold` seconds each, default `hold`):
+Animator's, AdvancedTrack's lifts, AnimationService's and RCTAnimator's are read from the park's
+own data, Object Animator's come from a table in `tools/companions.py`; at most `animation_views`
+(4) per park. `show = "eclipse"` (Constellations), `"travel"` (Bene Volantes) or `"invasion"`
+(Yucca Desert Park) ends the park's visit with the companion's scripted show: a view on it, held
+until the show is over (at most `show_hold`; 120 s, 240 s for the invasion). A view in a park's `view` list can be flagged by hand with
+`animation = "<name>"` or `show = "<name>"`. Flagged views are played as placed, not moved or
+merged by fitting, and add their own time to the park's.
+
+## Settings page
+
+```
+python tools/settings.py [playlist] [--openrct2 "<OpenRCT2 folder>/openrct2.com"]
+```
+
+opens the generator's settings in the browser (a local server on 127.0.0.1:8766; `--port`,
+`--no-browser`). Pick a folder of park downloads and Scan to start a playlist, or open one from
+`playlists/`; set the views, timing and enhancements, order and pick parks on the Parks screen,
+then Build, and Render, Install or Export a bundle (Import opens one). Per-park adjustments and the two editors write
+the park's profile (`parks/<slug>.toml`), so they apply in every playlist that plays the park.
+The page writes without asking (comments kept where it edits a file in place) and keeps the last
+100 copies of each file it overwrote in the user folder's `backups/` (`Documents\OpenRCT2\screensaver\`
+on Windows). What each control sets:
+`docs/settings-ui.md`.
+
+## Importing park downloads
+
+`tools/importparks.py` turns a folder of park downloads (as zipped by New Element Designs and
+others) into a park library and a playlist for it:
+
+```sh
+python tools/importparks.py "<downloads folder>" -o "<library folder>" --openrct2 "<OpenRCT2 folder>/openrct2.com" --skip-known ExampleParks
+python tools/mksequence.py "<library folder>/RCT_Screensaver_Imported.toml" --install
+```
+
+Per download it picks one park (the most recently saved version, then the largest), installs
+loose object files that ship beside it (`.parkobj`, `.DAT`; some parks don't open without them)
+into `Documents\OpenRCT2\object\rct-screensaver\` (once per object, and not when an object with the
+same identifier is already installed, which OpenRCT2 would report as a conflict), converts RCT2 saves (`.sv6`) with
+`openrct2 convert`, and stores the park gzip-compressed (OpenRCT2 v0.5.x saves with zstd, which
+Python reads natively only from 3.14; `tools/unzstd.py` decodes it in plain Python, a few seconds
+per park). Parks' plugins are copied beside them for the companion host. Names follow the rule
+above, and a saved name two imported parks share counts as a working title too. The playlist
+notes each park's source, other versions, installed objects and warnings (objects a park uses
+but neither packs nor ships); it is rewritten by each import, so copy it before editing. Parks
+already in the library are reused unless their download changed (`--force` redoes them).
+
+Parks larger than 256 tiles across play like any other: OpenRCT2 handles maps up to 1001 tiles,
+and the plugin moves the camera itself. Only the title script's own `LOCATION` command stops at
+tile 255, so the plugin layout leaves it out there.
+
+## Setting views by hand
+
+Press E in the screensaver mode (or the bar's Edit views button; on the stock engine, E on the title
+screen or toolbox menu → "RCT Screensaver: edit views") to open the view editor. Playback pauses while it is open, unless you press "Play": then the park's views play
+with their pans, looping in that park (it never moves on to the next park), and each change you
+make plays on again from the selected view a second later (a further change restarts the wait).
+Moving the camera by hand turns Play off. Pick a park from the list at the top to load it; the
+list below shows its views, and clicking one moves the camera there. The arrow keys pan the
+camera (Shift pans faster), and the buttons rotate and zoom it. "Add view" adds the camera as a
+new view after the selected one, "Set to camera" replaces the selected view, and the spinner
+changes how long the selected view is held. "Pan" sets how much of the hold the view spends panning
+to the next view, "Turn" whether angle and zoom change as the pan starts or ends, and "Inertia"
+whether it starts and stops slowly (turn on Play to watch).
+"Use playlist views" drops your changes for that park.
+The "Set by" column marks the views you placed ("you") apart from those carried over from the
+generated ones ("auto"). Zoom in goes two levels closer than OpenRCT2's usual limit.
+
+The first change to a park starts from the views it was playing. From then on the park plays
+your views exactly as set: they are not moved or merged by fitting. Selecting views saves
+nothing. At install, a park's views are kept only if you placed one of them or rearranged the
+list (moved, deleted, or changed a hold); otherwise they are generated afresh.
+`--ignore-edits` builds from the playlist alone (edits are still moved into the views file). Changes are saved as you
+make them (in `plugin.store.json`) and play straight away. The next
+`tools/mksequence.py --install` moves them into a file next to the playlist
+(`playlists/example.views.json`), so they survive rebuilds and can be kept with the playlist.
+"Use playlist views" still works for those parks: the next install drops them from that file
+and keeps them in `playlists/example.views.bak.json`.
+
+### Drawing views in the browser
+
+A quicker way to set many views: draw them as boxes on pictures of each park. The settings page
+opens this as its view-drawing page (Edit views in the park list or on the renders page), on its last
+build; the command below runs it on its own.
+
+```sh
+python tools/drawviews.py playlists/example.toml --openrct2 "<OpenRCT2 folder>/openrct2.com"
+```
+
+This builds the playlist, has OpenRCT2 render every park from all four angles (in the background,
+a few seconds each, cached in `build/drawviews/renders`), and opens a page in the browser.
+OpenRCT2 itself does not need to be running. Each box is exactly what the screen will show: drag
+on the picture to draw one, and its size snaps to the nearest zoom level with the screen's shape.
+Drag a box by its edge or label to move it; `+`/`-` (or Shift+wheel) zoom it, Delete removes it,
+`[`/`]` (or `,`/`.`) reorder. Hold times are shared out automatically as views are added or
+removed (the playlist's `park_time` for up to `base_views` views, plus `view_time` per further
+view, with the overview `overview_lead` seconds longer than the longest close-up), except holds
+you type in the list, which stay as set (🔒 releases one). `O` marks the selected view as the
+park's overview. `Q`/`E` turn the
+picture to another angle, looking at the same spot at the same zoom (with Shift they turn the
+selected view). Ctrl+Z undoes. "Generated"
+shows the playlist's own views as dashed boxes for reference.
+
+Changes are saved as you make them into the same `playlists/example.views.json` the editor's views
+go to, and a park you change there plays exactly as drawn after the next `mksequence.py --install`
+("Use playlist views", or deleting all of a park's views, drops them again). Boxes are drawn for the screen size in OpenRCT2's
+`config.ini` (window or fullscreen size, over the UI scale); pass `--screen 2560x1440` to choose
+another. Changes made in the in-game editor for the same park replace the drawn ones at the next
+install, so use one or the other per park.
+
+Playlist parks can also set `name =` (shown name, when the park file carries another) and
+`author =` (a credit, kept as data for now). Without `name`, a park saved under a working title
+("Six Frags Workbench 2023", a blank name, color codes only) is named after a logo or icon image
+in its zip, else after the zip's file name. A zip with several parks plays the most recently
+saved one (then the largest) unless `member =` picks one; `__MACOSX` and `._*` files are ignored.
+
+The plugin setting `debug` logs its state to the console every second (`openrct2.com` shows it); the
+stock engine's toolbox menu toggles it.
+
+`--layout stock` builds a sequence that plays every view without the plugin (views jump,
+coordinates must be within tile 255, views are not fitted, playback always loops).
+
+## Performance
+
+Measured on the owner's PC (AMD laptop, integrated Radeon, 4K monitor) with the scripted suites in
+`perf/` (`tools/perfrun.py`, `tools/perfreport.py`, PresentMon alongside; method in
+`docs/performance-testing.md`; the reports are kept in the project files, not the repository). The mode draws at 40 fps (25 ms a frame).
+What the numbers say:
+
+- **Window size is the one thing that limits frame rate.** OpenRCT2 draws at window ÷ scale factor,
+  so a 4K monitor at scale 2.0 draws 1080p game pixels: 38.8 fps with no missed frames on the example
+  parks, every feature on. A 4K window at scale 1.0 draws four times the pixels and runs at 18-23 fps
+  on either renderer. Keep scale 2.0 on 4K.
+- **Software renderer with multithreading is the right default.** At 1920x1200 the software and OpenGL
+  renderers both sit at the 40 fps cap; OpenGL is only faster at full 4K. Software is also what the
+  palette patch and light effects need. Multithreading doubles the software renderer's frame rate and
+  must stay on.
+- **Simulation size is the other cost: 1-2 ms per 1,000 entities per tick.** A park with 20,000
+  entities still plays normally; one with 29,000 vehicles (Ol' Smokey's Showboat) ticks at 35-47 ms and
+  plays in slow motion on any renderer and window. Such parks are the park's problem, not the
+  screensaver's; a build-time warning is planned. Game speed above 2x multiplies that cost.
+- **Pans, the plugin, companions, ride music, sound and background loading cost nothing worth
+  turning off.** Pans run at the cap at 1080p and are smoother than the frames around a cut.
+  Background loading cuts a park switch from 240 ms to 25 ms of main-thread time; the rest is masked
+  by the dip through black.
+- **Vsync and the present path need no work.** On OpenGL the "present" time is the main thread
+  blocked for the GPU's frame (it tracks PresentMon's GPU busy within 1-2 ms), not a vsync wait
+  (`Present` returns in 0.3 ms, Independent Flip). It only matters at full 4K.
+- **Memory does not leak in an hour**, settling at about 1 MB per park switch once parks repeat. The
+  first visit to a park costs 25-65 MB on OpenGL and 1-15 MB on software, so a very large library
+  favors the software renderer on a long run. QuickJS, handles and GDI objects stay flat.
+
+## Developing
+
+### Layout
+
+| Path | Contents |
+|---|---|
+| `ExampleParks/` | Where the example parks go (`README.md` there lists their downloads) |
+| `playlists/` | Playlist files (TOML); `parks/` holds per-park profiles (`tools/profiles.py`) |
+| `plugin/` | OpenRCT2 plugin (TypeScript) that plays an installed playlist on the title screen |
+| `tools/mksequence.py` | Builds a title sequence from a playlist and installs it |
+| `tools/bundle.py` | Packs a playlist (optionally with its parks and build) into a bundle for another computer, and unpacks one |
+| `tools/parkinfo.py` | Inspects `.park` files without the game (map size, objects, plugins, …) |
+| `tools/importparks.py` | Imports park downloads (zips, `.sv6` saves) into a park library with a playlist |
+| `tools/nedesigns.py` | Park names and builders from the New Element Designs catalog (`tools/data/nedesigns.json`), matched to downloads by name |
+| `tools/unzstd.py` | Reads the zstd compression of parks saved by OpenRCT2 v0.5.x, in plain Python |
+| `tools/settings.py` | The generator's settings page in the browser: edits a playlist and the park profiles, builds, installs and renders |
+| `tools/tomlwrite.py` | Writes TOML (playlists, profiles) for the settings page |
+| `tools/drawviews.py` | Draw views by hand in the browser, on renders of each park from all four angles |
+| `tools/renderviews.py` | Renders every view of a built playlist to PNG (OpenRCT2 headless screenshots) with a contact sheet |
+| `tools/ridesurvey.py` | Surveys a park library for rides the generator can pan along, with each park's size, to pick test parks |
+| `tools/cameralog.py` | Per-view camera timings (stills, pans, speeds, the pauses around angle/zoom changes) from a game log written after `mksequence.py --install --camera-log` |
+| `engine/` | The engine patches, their README and the version they apply to |
+| `perf/`, `tools/perfrun.py`, `tools/perfreport.py` | Performance test suites and tools (`docs/performance-testing.md`) |
+| `docs/` | Notes, analysis, planned work (`roadmap.md`) and the local test checklist |
+
+### Building the plugin
+
+The built plugin is committed, so installing needs only Python. To change it (Node 22+):
+
+```sh
+cd plugin
+npm ci
+npm run build   # type-check against OpenRCT2's API, then bundle to dist/rct-screensaver.js
+npm test        # unit tests, then the mock title screen (skipped unless playlists/example.toml is built)
+node test/companion-mock.mjs <companion.js> <park name> <w> <h> [storage.json] [--show <name>]  # check a companion plugin
+```
+
+### Engine patches
+
+`engine/README.md` lists the series and how to work on it; `docs/engine-patches.md` holds the
+design and measurements. The "Engine build" workflow builds Windows x64 executables on every push to
+`main` that touches `engine/`, and by hand for any branch ("Release build" leaves out the
+diagnostics patch).
+
+### Tests
+
+`python -m unittest discover -s tools/tests` (Python, no game needed) and `npm test` in `plugin/`.
+`docs/testing.md` is the checklist for runs in the real game.
+
+## License
+
+GPLv3 (`LICENSE`). The engine patches are derived from OpenRCT2, which is GPLv3, and the repository
+includes OpenRCT2's plugin API declarations (`plugin/types/openrct2.d.ts`). Park files and their
+builders' scripts are not part of the repository; `tools/data/nedesigns.json` holds park names,
+release dates and builder names from the New Element Designs catalog (crawled from the site's
+public API, 2026-10-30).
+
+The caption frame's marble mat (`plugin/icons/marble-*.png`, made by `tools/mkframe.py`) is a
+transformative crop of a marble texture photo by Hosking Industries, blurred, tinted and
+lightened; the original is credited to them.

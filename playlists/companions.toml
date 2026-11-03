@@ -1,0 +1,16 @@
+# Test playlist for parks' companion plugins (docs/companion-plugins.md): the two example parks
+# that ship one. Build and install it (close OpenRCT2 first) with:
+#   python3 tools/mksequence.py playlists/companions.toml --install --ignore-edits
+name = "RCT Screensaver Companions"
+order = "playlist"
+layout = "plugin"
+companion_debug = true  # log ignored windows, menu items and camera moves to the console
+park_plugins = true     # each park's extras from its profile (parks/*.toml): animation views, the eclipse
+
+[[park]]
+file = "../ExampleParks/240512-rct2-jens_j-fkcoastermind-hex-sambhavas_rest.zip"
+author = "Jens_J, FKCoastermind, Hex (The Lonely Hearts Club)"
+
+[[park]]
+file = "../ExampleParks/240502-rct2tt-collabo-constellations.zip"
+author = "The Lonely Hearts Club (team)"
