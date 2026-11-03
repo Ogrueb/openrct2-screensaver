@@ -116,9 +116,10 @@ Done when: the owner sets a park's views from scratch in the mode (add, drag, zo
 delete), installs with `mksequence.py --install`, and the next run plays them as set; the boxes stay on
 their spots at every angle and zoom. Estimate: two to three days, the projection and dragging most of it.
 
-Decisions for the owner: drag on the ground plane at the view's height (a view over a tower keeps its
-height) or at the ground's height under the cursor; whether the boxes also show while the editor is
-closed but Play is on (a review mode).
+Decided (owner, 2026-11-03): dragging moves the view on a flat plane at its current height (the box
+follows the cursor exactly, a view over a tower keeps its height), with Set to camera and a Fit button
+to set the height afterward; boxes during Play with the editor closed (a review mode) are left out of
+the first version.
 
 ## 3. Weather and day/night in the generator (low priority)
 
