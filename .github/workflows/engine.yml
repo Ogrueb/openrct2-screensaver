@@ -129,7 +129,11 @@ jobs:
           name=openrct2-${{ steps.version.outputs.ref }}-openrct2-screensaver-linux-x64${{ inputs.release == true && '-release' || '' }}
           echo "name=$name" >> "$GITHUB_OUTPUT"
           . scripts/setenv -q && build-portable "artifacts/$name.tar.gz" bin/install/usr
-          tar -tzf "artifacts/$name.tar.gz" | head -n 20
+          # The tree the tarball must hold (a listing piped into head would end the step with SIGPIPE)
+          tar -tzf "artifacts/$name.tar.gz" > contents.txt
+          for f in OpenRCT2/openrct2 OpenRCT2/openrct2-cli OpenRCT2/libopenrct2.so OpenRCT2/data/g2.dat; do
+            grep -qx "$f" contents.txt || { echo "missing from the tarball: $f"; exit 1; }
+          done
           ./bin/openrct2-cli --version || true
       - name: Upload the tarball
         uses: actions/upload-artifact@v4
