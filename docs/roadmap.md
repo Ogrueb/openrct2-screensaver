@@ -19,7 +19,7 @@ to the settings UI started 2026-10-31, ahead of the wrapper). Last rebuilt 2026-
 | 5 | Configurable generator (final version) | Done (2026-10-31 to 11-02): the settings page, renders and drawing pages in daily use on the PC; Show titles wired 2026-11-03 |
 | 2 | Wallpaper wrapper | Done (2026-10-31 to 11-03; PRs up to #158): screensaver mode, overlay, controls bar, settings panel, view editor, park name captions with frame styles; live-tested by the owner |
 | 3 | Performance testing with logging, and optimizations | Now (framework built 2026-11-02; first runs done 2026-11-03; PresentMon next; overnight soaks moved to potential enhancements) |
-| 6 | Release | Last |
+| 6 | Release | v0.1.0 published 2026-11-03 (github.com/Ogrueb/openrct2-screensaver); the frozen tool builds remain |
 
 ## Now
 
@@ -60,14 +60,18 @@ fragility (deferred object unload, sliced finish).
 Check for memory leaks (owner, 2026-10-30): the 1 h short-park soak found no leak worth chasing;
 the overnight runs are a potential enhancement now (see "Overnight memory soaks" there).
 
-### 6. Release (last)
+### 6. Release
+
+v0.1.0 was published on 2026-11-03 from the public repository `Ogrueb/openrct2-screensaver`, with
+the release engine build (0001-0015) and the source archive. What remains here is packaging the
+tools without a Python install.
 
 - License: GPLv3 (owner, 2026-11-03; `LICENSE`, the plugin's `package.json`).
 - The example parks left the repository (owner, 2026-11-03): `ExampleParks/README.md` lists their
   downloads; the public repository starts from a fresh history without them.
 - Package the patched OpenRCT2 builds without the diagnostics patch (0016: load timings, perf log):
-  the Engine build workflow's "Release build" input (2026-11-03). Still to do: a tagged GitHub
-  Release carrying the two executables, so users need no Actions login.
+  the Engine build workflow's "Release build" input (2026-11-03); v0.1.0 carries the two
+  executables, so users need no Actions login.
 - Package `tools/drawviews.py` (with its page) as a standalone Windows `.exe` (PyInstaller or
   similar, built in CI) so drawing views needs no Python install (owner, 2026-10-27).
 - Package the settings UI server (`tools/settings.py`, see `docs/settings-ui-wiring.md`) the same
