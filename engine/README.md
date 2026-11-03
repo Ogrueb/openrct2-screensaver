@@ -8,6 +8,10 @@ and plan: `docs/engine-patches.md`.
   OpenRCT2's own CI, 25 to 40 minutes) and uploads `openrct2.exe` and `openrct2.com` as an
   artifact. Installing a build means replacing those two files in a stock install of the same
   release; the data files are unchanged by the patches.
+  Its `Linux x64` job (OpenRCT2's Ubuntu 24.04 portable recipe) uploads a whole portable build
+  instead, `openrct2-<tag>-openrct2-screensaver-linux-x64.tar.gz` (an `OpenRCT2/` folder with the
+  `openrct2` binary, `libopenrct2.so` and `data/`): untar it and run `./openrct2` from the folder.
+  Untested on a desktop yet (`docs/enhancements.md`, Linux item).
 
 A release build leaves out 0016 (diagnostics): run the workflow by hand with "Release build" ticked,
 which applies 0001-0015 only.
