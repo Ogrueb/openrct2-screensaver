@@ -70,9 +70,12 @@ Requirements, each shippable alone:
 Order: 2 and 3 can be built in cloud sessions now (2 is checked by the workflow run itself); 1 is the
 owner's; 4-7 follow 1. Estimate: 2-3 a day; 4-7 a day on the machine plus fixes.
 
-Decisions for the owner: distribution (Ubuntu versus Fedora decides the CI container and the package
-names in the README); tarball or AppImage; whether macOS gets a CI build at all (OpenRCT2's macOS CI job
-could be copied the same way, but no one would test it).
+Decided (owner, 2026-11-03): the test machine is the owner's existing Fedora VM in VirtualBox (enough
+for the functional tests; limits: Fedora's GNOME session is Wayland, so X11 is likely only XWayland,
+and OpenGL needs the VM's 3D acceleration on, else only the software renderer is testable there). The
+build is the tarball first; if Fedora's library versions do not match the Ubuntu-built binary, the
+fallback is OpenRCT2's own AppImage recipe, which bundles them. Still open: whether macOS gets a CI
+build at all (OpenRCT2's macOS CI job could be copied the same way, but no one would test it).
 
 ## 2. Live view editor in the screensaver mode
 
@@ -258,5 +261,6 @@ Done when: a candidate default set gives more "better" than "worse" on the owner
 examples and a 20-park library batch, with stability (±5%) no worse than 15% moved; then the defaults
 change in one PR with the before/after sheet attached. Estimate: three days spread over rounds.
 
-Decisions for the owner: which of 2-4 to try first (recommended: 1 then 2, as the near-ties are the
-recurring complaint); whether 5 is wanted before the random order has a user.
+Skipped for now (owner, 2026-11-03). When it is taken up: which of 2-4 to try first (recommended: 1
+then 2, as the near-ties are the recurring complaint); whether 5 is wanted before the random order has
+a user.
