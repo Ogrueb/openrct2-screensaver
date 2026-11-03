@@ -456,6 +456,9 @@ Constellations coaster ring, Sambhava bazaar, Ghillie Dhu v4).
 
 ## Potential enhancements
 
+Each item's requirements, acceptance checks and open decisions are worked out in `docs/enhancements.md`
+(2026-11-03); this section keeps the items as the owner raised them.
+
 ### Linux and macOS support (owner, 2026-11-03: the highest-priority enhancement)
 
 OpenRCT2 ships official Linux and macOS builds, and most of this project is already portable:
