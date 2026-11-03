@@ -530,6 +530,8 @@ See README.md for usage.
   2026-10-31: added `motion`, `park_min`, `time_scale`, `change_hold`/`arrive_hold`/`return_hold` in the
   playlist, `return_pan`, `companion_pans`, `pan = "auto"`, top-level `park_scripts` and `title_music`
   (`--install` puts it in the plugin's settings and the screensaver mode applies it in memory, 2026-11-01; it used to set `config.ini` `title_theme`), `[[park]] use = false`; `events = false` drops shows too).
+- `docs/view-generation.md`: the generator's stages and every `[views]` option, for users (the README
+  keeps a nine-line summary; owner, 2026-11-03: the full text there was a wall).
 - `docs/testing.md`: what local test runs need to check.
 - `docs/roadmap.md`: planned work, and what was done with the decisions made on the way.
 - `docs/known-issues.md`: problems in parks or third-party content that the project does not fix.
