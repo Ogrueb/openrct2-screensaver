@@ -26,7 +26,7 @@ game files, which are not included; neither are any parks (see `ExampleParks/REA
 
 | | |
 |---|---|
-| Operating system | Windows 10/11. The engine build is Windows x64; the mode's captions use the Segoe UI and Georgia system fonts; `Settings.cmd` and `.sv6` conversion use `openrct2.com`. The Python tools also run on Linux and macOS for building playlists. |
+| Operating system | Windows 10/11. The engine build is Windows x64; the mode's captions use the Segoe UI and Georgia system fonts; `Settings.cmd` and `.sv6` conversion use `openrct2.com`. The Python tools also run on Linux and macOS for building playlists (`settings.sh` starts the settings page there); a Linux engine build is being prepared and is untested. |
 | OpenRCT2 | v0.5.6 (`engine/VERSION`), the portable or installed release, with the two patched executables in place of the stock ones. On an unpatched v0.5.6 the plugin falls back to playing on the stock title screen, without the screensaver mode (below). |
 | Python | 3.11 or later, on PATH (`pythonw` for `Settings.cmd`). No third-party packages. |
 | Node | Only to rebuild the plugin (22 or later); the built plugin is committed. |
@@ -40,7 +40,8 @@ game files, which are not included; neither are any parks (see `ExampleParks/REA
 2. **Parks.** Put park downloads (zips as published on New Element Designs, loose `.park` files,
    or RCT2 `.sv6` saves) in a folder. The ten example parks that the shipped playlists use are
    listed with their download pages in `ExampleParks/README.md`.
-3. **Settings page.** Run `Settings.cmd` (or `python tools/settings.py`). It opens the generator's
+3. **Settings page.** Run `Settings.cmd` on Windows or `./settings.sh` on Linux and macOS (or
+   `python tools/settings.py` anywhere). It opens the generator's
    page in your browser: point Source parks at your folder and Scan, set the options you want,
    Build, then Install (OpenRCT2 must be closed). The page writes everything under
    `Documents\OpenRCT2\screensaver\`; Install puts the title sequence in

@@ -509,7 +509,7 @@ See README.md for usage.
   tuned defaults), backups, the last build (removed when the server quits; importing a bundle clears it and the renders) and the latest and
   previous renders (the contact sheet is one column of parks with build facts; a Compare box in its top bar shows the previous set as a second, separately scrolling column with its own headers). The server stops once no page is open
   (pings), keeps its token across restarts, and `Settings.cmd`
-  starts it without a console,
+  starts it without a console (`settings.sh` in the background on Linux and macOS),
   scans a folder (direct, or importparks.py when it holds `.sv6` or loose objects), runs builds,
   installs and renders as jobs (each logged to `build/logs/settings-*.log`; a failure's path stays on
   screen). Reset profile removes the user's copy. Profiles take a top-level `companions = false` (its Scripts switch) and
