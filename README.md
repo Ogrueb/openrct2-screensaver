@@ -117,47 +117,69 @@ of scope.
 
 ## Playlists and views
 
-A playlist is a TOML file (`playlists/example.toml` is commented) naming the parks to play and the
-options for generating their views; the settings page writes one for you. `tools/mksequence.py`
-builds a title sequence from it. What follows describes the options in detail; the defaults suit
-most parks.
+A playlist is a TOML file naming the parks to play and the options for generating their views.
+`playlists/example.toml` is commented, and the settings page writes one for you;
+`tools/mksequence.py` builds a title sequence from it. The defaults suit most parks.
 
-Each view is held still, then the camera cuts to the next, unless the view has a `pan` share:
-then it spends that share of its hold (at the end) panning slowly to the next view, arriving as
-that view's hold starts (`pan = 0`, the default, holds still and cuts; `1` keeps moving). Angle and
-zoom change only as a pan arrives (`pan_changes = "end"`, the default) or as it sets off
-(`"start"`), never mid-pan; opposite angles and zooms two or more levels apart change half at each
-end, the camera rests 1 s at the next view's spot before a change on arrival (`"arriveHold"`) and
-stays still at least 2 s after each change (`"changeHold"`), both added to the view's time. `inertia = true` makes a pan start and stop slowly instead of moving at one speed. A pan
-faster than the speed tolerance at the zoom it runs at (`pan_tolerance`, 500 screen pixels a second
-at zoom -2, `pan_tolerance_step` 100 less per level out) travels a zoom level out (between views at
-different zooms, at most at the wider one), and the build gives a generated pan still over it more
-time, in 100 ms steps, until it is not. A generated overview always pans 10% of its hold
-to the first close-up, changing angle and zoom on arrival (`overview_pan`).
-`playlists/pan-compare.toml` plays four of the example parks with every close-up panning 60% of its hold;
-`playlists/speed-ladder.toml` pans one length at each zoom and speed, for judging pan speed. The
-build reports pans faster than `pan_tolerance` (500 px/s at zoom -2, `pan_tolerance_step` 100 less
-per level out). Set these in
-`[views]`, a park's views or on a listed view, in the view editor, or in the browser tool. Key presses and the editor cut. A park's last view pans back to its first, zooming out as it goes
-when the first view is wider (one level as it sets off, moving at once, further levels during the pan, any turn
-on arrival): a park playing alone (a one-park playlist, or the editor's Play) carries on
-from there, and otherwise the camera holds at the first view for 2 s (`returnHold`) before the
-next park. Design notes:
-`docs/view-panning.md`.
+### The playlist file
 
-Views and pan speeds were judged in one game window, `[views] window` (1920x1080 game pixels: a 4K
-monitor at OpenRCT2's scale factor 2.0), which the playlist carries. OpenRCT2's zoom levels are fixed
-scales, so in a smaller window (in game pixels, after the scale factor) the same zoom shows less of
-the park; the plugin moves views out by whole zoom levels until the window shows at least the frame
-they were set for, both its width and its height (one level at 960x540 or 960x600, that is 1080p or
-1200p at scale 2.0), and holds pans to a speed tolerance that shrinks with the window. The scale
-factor needs no setting of its own: the plugin sees the window in game pixels, which already count it. Views set in the editor or the browser
-tool keep the window they were set in and are scaled the same way. The plugin setting
-`scaleToWindow = false` plays every zoom as set.
+- **Top level:** `name` (the title sequence's name), `order` (`"playlist"` or `"shuffle"`, shuffled
+  once at build time), `layout` (`"plugin"`, or `"stock"` to play without the plugin),
+  `park_scripts` (run the parks' bundled plugins), `park_plugins` (add each park's extras from its
+  profile) and `title_music` (`"ride"` plays the parks' own ride music instead of a title theme).
+- **`[views]`:** the generation and panning options described below and in
+  `docs/view-generation.md`. A park's `[park.views]` table, its profile in `parks/`, or a listed
+  view can override any of them.
+- **`[[park]]` entries:** `file` (a `.park`, a zip or a folder; `member` picks a park inside a zip),
+  `name` and `author` for the captions (filled from the New Element Designs catalog when left out),
+  `use = false` to skip a park, and the park's own options: a `view` list to play fixed views,
+  `companions`, `animations`, `show` (see "Parks' own plugins").
+
+### Panning
+
+- **Pan share.** Each view is held still, then the camera cuts to the next, unless the view has a
+  `pan` share: then it spends that share of its hold (at the end) panning slowly to the next view,
+  arriving as that view's hold starts (`pan = 0`, the default, holds still and cuts; `1` keeps
+  moving). `motion = "static"` holds every view still, with no ride pans, beads or nudges.
+- **Angle and zoom changes** happen only as a pan arrives (`pan_changes = "end"`, the default) or
+  as it sets off (`"start"`), never mid-pan; opposite angles and zooms two or more levels apart
+  change half at each end. The camera rests `arrive_hold` (1 s) at the next view's spot before a
+  change on arrival and stays still `change_hold` (2 s) after each change, both added to the
+  view's time. `inertia = true` makes a pan start and stop slowly instead of moving at one speed.
+- **Speed.** A pan faster than the speed tolerance at the zoom it runs at (`pan_tolerance`, 500
+  screen pixels a second at zoom -2, `pan_tolerance_step` 100 less per level out) travels a zoom
+  level out (between views at different zooms, at most at the wider one), and the build gives a
+  generated pan still over it more time, in 100 ms steps, until it is not. The build reports pans
+  over the tolerance.
+- **The overview** always pans 10% of its hold to the first close-up, changing angle and zoom on
+  arrival (`overview_pan`).
+- **The return.** A park's last view pans back to its first (`return_pan`), zooming out as it
+  goes when the first view is wider; a park playing alone (a one-park playlist, or the editor's
+  Play) carries on from there, and otherwise the camera holds at the first view for
+  `return_hold` (2 s) before the next park.
+- **Cuts.** Key presses and the editor cut.
+
+Pan options can be set in `[views]`, on a park's views or on a listed view, in the view editor,
+or in the browser tool. `playlists/pan-compare.toml` plays four of the example parks with every
+close-up panning 60% of its hold, and `playlists/speed-ladder.toml` pans one length at each zoom
+and speed, for judging pan speed. Design notes: `docs/view-panning.md`.
+
+### Window size
+
+Views and pan speeds were judged in one game window, `[views] window` (1920x1080 game pixels: a
+4K monitor at OpenRCT2's scale factor 2.0), which the playlist carries. OpenRCT2's zoom levels are
+fixed scales, so in a smaller window the same zoom shows less of the park. The plugin moves views
+out by whole zoom levels until the window shows at least the frame they were set for, both its
+width and its height (one level at 960x540 or 960x600, that is 1080p or 1200p at scale 2.0), and
+holds pans to a speed tolerance that shrinks with the window. The scale factor needs no setting of
+its own: the plugin sees the window in game pixels, which already count it. Views set in the
+editor or the browser tool keep the window they were set in and are scaled the same way. The
+plugin setting `scaleToWindow = false` plays every zoom as set.
+
+### Generated views
 
 Generated views (method `spots`, the default) are made in stages, each with its own `[views]`
-options; `docs/view-generation.md` describes every stage and option, and the defaults suit most
-parks:
+options; `docs/view-generation.md` describes every stage and option:
 
 1. An **overview** of the whole park, zoomed by the plugin to fit the window.
 2. A **view budget** that grows with the park's built area: 4 to 8 views.
@@ -171,7 +193,8 @@ parks:
    pass-through view on any long pan.
 7. A **ride pan** along the longest straight run of a moving ride's track.
 8. **Timing**: 30 s per park for up to 4 views, 5 s per further view, plus the moving time of
-   the pans, capped at 150 s.
+   the pans, capped at `park_cap` (150 s); `park_min` stretches short parks and `time_scale`
+   slows or speeds everything.
 9. Optional **variants** of the circuit, played in turn on each visit.
 
 Every build writes `<sequence>.scores.json` with why each view was picked, and the build warns
@@ -200,23 +223,25 @@ Some parks ship a plugin in their zip (Animator on Sambhava's Rest, Object Anima
 Constellations). `--install` turns each one into a title-screen plugin,
 `plugin/rct-screensaver-companion-<name>.js` in OpenRCT2's user directory, that runs only while
 its park is showing and replaces the ones from the previous install. Its windows stay hidden and
-the camera stays the screensaver's; per park, `companions = []` turns them off,
-`companions = ["file.js"]` picks files (in the zip or next to the playlist), and
-`companion_camera = true` lets them move the camera. `companion_debug = true` at the top of the
-playlist logs what they were stopped from doing. Many parks hold data for a plugin they don't
-ship (most often AdvancedTrack, which authors expect installed): a park gets the newest version
-of such a plugin that any park in the same playlist ships, and every park runs that newest
-version. Details: `docs/companion-plugins.md`.
+the camera stays the screensaver's. Many parks hold data for a plugin they don't ship (most often
+AdvancedTrack, which authors expect installed): a park gets the newest version of such a plugin
+that any park in the same playlist ships. Details: `docs/companion-plugins.md`.
 
-Views can follow the animations too. `animations = true` on a park adds a view on each of its
-companions' animations after its other views (`animation_hold` seconds each, default `hold`):
-Animator's, AdvancedTrack's lifts, AnimationService's and RCTAnimator's are read from the park's
-own data, Object Animator's come from a table in `tools/companions.py`; at most `animation_views`
-(4) per park. `show = "eclipse"` (Constellations), `"travel"` (Bene Volantes) or `"invasion"`
-(Yucca Desert Park) ends the park's visit with the companion's scripted show: a view on it, held
-until the show is over (at most `show_hold`; 120 s, 240 s for the invasion). A view in a park's `view` list can be flagged by hand with
-`animation = "<name>"` or `show = "<name>"`. Flagged views are played as placed, not moved or
-merged by fitting, and add their own time to the park's.
+Per park:
+
+- `companions = []` turns them off; `companions = ["file.js"]` picks files (in the zip or next to
+  the playlist); `companion_camera = true` lets them move the camera. `companion_debug = true` at
+  the top of the playlist logs what they were stopped from doing.
+- `animations = true` adds a view on each of the companions' animations after the park's other
+  views (`animation_hold` seconds each, default `hold`; at most `animation_views`, 4, per park).
+  Animator's, AdvancedTrack's lifts, AnimationService's and RCTAnimator's are read from the park's
+  own data, Object Animator's from a table in `tools/companions.py`.
+- `show = "eclipse"` (Constellations), `"travel"` (Bene Volantes) or `"invasion"` (Yucca Desert
+  Park) ends the park's visit with the companion's scripted show: a view on it, held until the
+  show is over (at most `show_hold`; 120 s, 240 s for the invasion).
+- A view in a park's `view` list can be flagged by hand with `animation = "<name>"` or
+  `show = "<name>"`. Flagged views are played as placed, not moved or merged by fitting, and add
+  their own time to the park's.
 
 ## Settings page
 

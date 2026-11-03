@@ -452,6 +452,43 @@ Constellations coaster ring, Sambhava bazaar, Ghillie Dhu v4).
 
 ## Potential enhancements
 
+### Linux and macOS support (owner, 2026-11-03: the highest-priority enhancement)
+
+OpenRCT2 ships official Linux and macOS builds, and most of this project is already portable:
+the generator resolves the user folder on all three systems (`tools/userdata.py`: XDG config on
+Linux, Application Support on macOS), checks for a running game with `pgrep` off Windows, takes
+the executable's path as an option, and needs only Python and Node; the engine patches compile on
+Linux (the cloud sessions' CMake build is the compile check) and the overlay's font lookup has
+Linux and macOS paths (patches 0013 and 0015). Nothing has been run on Linux or macOS yet.
+
+Requirements, in order:
+
+1. **A Linux machine** (the obstacle: the owner has none set up). A VM or a second drive with a
+   desktop distribution is enough; the tests need a display (X11 and Wayland both), not
+   performance. Install OpenRCT2 v0.5.6 from the official release (the AppImage or the distro
+   package) and the RCT2 data files.
+2. **An engine build for Linux** in `.github/workflows/engine.yml`: a second job copied from
+   OpenRCT2's own Ubuntu CI job (CMake, the same patch application as the Windows job). The
+   patched engine ships as a whole build (an AppImage or a tarball of the build tree) rather than
+   two replaced executables, since Linux installs vary; the README's Installing section gets a
+   Linux variant.
+3. **A settings page launcher**: `Settings.cmd` is a Windows batch file; on Linux and macOS it
+   is `python3 tools/settings.py` (a one-line `settings.sh`, or the README says so).
+4. **A test pass of the screensaver mode** on the Linux build: the borderless window and the
+   `--screensaver` flag under X11 and Wayland, the overlay's fonts, mouse input for the controls
+   bar, ride music, the mode's window-style settings (patch 0014) and the engine's climate
+   changes. `docs/testing.md` is the checklist.
+5. **The tools with the Linux executable**: `renderviews.py`, `drawviews.py` and `importparks.py`
+   call `openrct2 screenshot` and `openrct2 convert` through `--openrct2`; `perfrun.py` launches
+   the game. Check each once.
+6. **Wallpaper hosting**: Linux has no Lively equivalent, so the screensaver mode itself (the
+   launch flag in a desktop entry, or XScreenSaver's program hook) is the documented way; macOS
+   would need a `.saver` wrapper, out of scope.
+7. **Docs**: README (Installing, Running it, Settings page) and `docs/testing.md` with the
+   per-system steps.
+
+Estimate: a day of work plus a test pass on the machine. Not a release blocker (owner).
+
 ### Live view editor in the screensaver mode (owner, 2026-11-02)
 
 The mode's UI is built in the order controls bar and load cover, captions, then the editor
