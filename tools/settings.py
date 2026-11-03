@@ -1292,7 +1292,7 @@ def make_handler(app, token, port):
                     return {"found": session.relink(folder)}
             elif path == "/api/render":
                 if not app.config.get("openrct2"):
-                    raise ValueError("set the OpenRCT2 path first (openrct2.com on Windows)")
+                    raise ValueError("set the OpenRCT2 path first (openrct2.com on Windows, the openrct2 binary elsewhere)")
                 result = session.built()
                 built = result and result[:-len(".result.json")] + ".playlist.json"
                 if not built or not os.path.exists(built):
@@ -1332,6 +1332,9 @@ def main():
         return
     if args.openrct2:
         config["openrct2"] = os.path.abspath(args.openrct2)
+    elif not config.get("openrct2") and sys.platform != "win32" and shutil.which("openrct2"):
+        # Linux and macOS: an installed OpenRCT2 is on PATH (a portable tarball is not: set its path)
+        config["openrct2"] = shutil.which("openrct2")
     try:
         app = App(config, args.playlist and os.path.abspath(args.playlist))
         save_config(config)

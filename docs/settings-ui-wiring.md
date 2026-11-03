@@ -45,7 +45,9 @@ for the first page after start), never while a tool runs. When it quits it remov
 stays for scripts). The token is kept in `settings.json`, so a restarted
 server takes the old tabs back; a page whose server is gone says so and reconnects by itself.
 `Settings.cmd` at the repository's root starts the server with `pythonw` (no console; its output goes
-to `build/logs/settings-<time>.log`), and starting it while it runs only opens the page. What this
+to `build/logs/settings-<time>.log`), and starting it while it runs only opens the page. `settings.sh`
+beside it does the same on Linux and macOS (`python3` in the background, `nohup`, output to the same
+log folder); there the OpenRCT2 path defaults to `openrct2` on `PATH` when none is set. What this
 means for the packaged `.exe` is for the release stage.
 
 ## Previews: latest and previous

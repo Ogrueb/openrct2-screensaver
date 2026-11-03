@@ -67,6 +67,10 @@ Requirements, each shippable alone:
    binary; the data files' location) and step 4; "Running it" and "Wallpaper and screensaver hosting"
    get the Linux paragraph from 6; `docs/testing.md` gets the per-system rows from 4 and 5.
 
+Progress: 3 done (2026-11-03: `settings.sh`, executable in git; the settings page defaults the OpenRCT2
+path to `openrct2` on `PATH` off Windows; the running check is `pgrep -ix openrct2` there, the binary's
+name in the tarball). 2 is in review.
+
 Order: 2 and 3 can be built in cloud sessions now (2 is checked by the workflow run itself); 1 is the
 owner's; 4-7 follow 1. Estimate: 2-3 a day; 4-7 a day on the machine plus fixes.
 
