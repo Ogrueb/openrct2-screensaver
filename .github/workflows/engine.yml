@@ -1,6 +1,10 @@
 # Builds OpenRCT2 at the release in engine/VERSION with the patches in engine/patches applied,
-# the same way OpenRCT2's own CI builds its Windows x64 binaries. Produces openrct2.exe and
-# openrct2.com, which replace the two files of the same name in a stock OpenRCT2 install.
+# the same way OpenRCT2's own CI builds its binaries.
+# - Windows x64: openrct2.exe and openrct2.com, which replace the two files of the same name in a
+#   stock OpenRCT2 install.
+# - Linux x64: a whole portable build (a tarball of the install tree: the binary, libopenrct2.so and
+#   the data folder), as OpenRCT2's "Ubuntu Linux (noble, x86_64, portable)" job makes it, since Linux
+#   installs vary too much to replace files in one.
 name: Engine build
 
 on:
@@ -67,4 +71,69 @@ jobs:
           path: |
             openrct2/bin/openrct2.exe
             openrct2/bin/openrct2.com
+          if-no-files-found: error
+
+  linux:
+    name: Linux x64
+    runs-on: ubuntu-24.04
+    # OpenRCT2's own build image for its Ubuntu 24.04 portable job at this release (its ci.yml)
+    container: ghcr.io/openrct2/openrct2-build:26-noble
+    steps:
+      - name: Checkout openrct2-screensaver
+        uses: actions/checkout@v4
+      - name: Read the OpenRCT2 version
+        id: version
+        shell: bash
+        run: |
+          ref=$(tr -d '[:space:]' < engine/VERSION)
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "OPENRCT2_VERSION=${ref#v}" >> "$GITHUB_ENV"
+      - name: Checkout OpenRCT2 ${{ steps.version.outputs.ref }}
+        uses: actions/checkout@v4
+        with:
+          repository: OpenRCT2/OpenRCT2
+          ref: ${{ steps.version.outputs.ref }}
+          path: openrct2
+      - name: Apply patches
+        shell: bash
+        working-directory: openrct2
+        run: |
+          # The container runs as root over a workspace owned by the runner's user
+          git config --global --add safe.directory '*'
+          for p in ../engine/patches/*.patch; do
+            if [ "${{ inputs.release }}" = "true" ] && [[ "$(basename "$p")" == 0016-* ]]; then
+              echo "== $p (left out of the release build)"
+              continue
+            fi
+            echo "== $p"
+            git apply --verbose "$p"
+          done
+          # CMake takes the version string's branch from git: "--version" then names this build
+          git checkout -b openrct2-screensaver
+      - name: Get pre-reqs
+        shell: bash
+        working-directory: openrct2
+        run: . scripts/setenv && get-discord-rpc
+      - name: Build OpenRCT2
+        shell: bash
+        working-directory: openrct2
+        run: |
+          export DISTANCE_FROM_TAG=0
+          . scripts/setenv -q && build -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON -DPORTABLE=ON \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=on -DWITH_TESTS=off
+      - name: Make the tarball
+        id: tarball
+        shell: bash
+        working-directory: openrct2
+        run: |
+          name=openrct2-${{ steps.version.outputs.ref }}-openrct2-screensaver-linux-x64${{ inputs.release == true && '-release' || '' }}
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          . scripts/setenv -q && build-portable "artifacts/$name.tar.gz" bin/install/usr
+          tar -tzf "artifacts/$name.tar.gz" | head -n 20
+          ./bin/openrct2-cli --version || true
+      - name: Upload the tarball
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.tarball.outputs.name }}
+          path: openrct2/artifacts/${{ steps.tarball.outputs.name }}.tar.gz
           if-no-files-found: error

@@ -69,7 +69,10 @@ Requirements, each shippable alone:
 
 Progress: 3 done (2026-11-03: `settings.sh`, executable in git; the settings page defaults the OpenRCT2
 path to `openrct2` on `PATH` off Windows; the running check is `pgrep -ix openrct2` there, the binary's
-name in the tarball). 2 is in review.
+name in the tarball). 2: the `Linux x64` job is written (OpenRCT2's noble portable recipe: its
+`openrct2-build:26-noble` image, `-DBUILD_SHARED_LIBS=ON -DPORTABLE=ON`, `build-portable` for the
+tarball; tests and their build left out; the checkout is put on a branch named `openrct2-screensaver` so
+`--version` reads `v0.5.6 (<sha> on openrct2-screensaver)`); waiting for its first run and the owner's OK.
 
 Order: 2 and 3 can be built in cloud sessions now (2 is checked by the workflow run itself); 1 is the
 owner's; 4-7 follow 1. Estimate: 2-3 a day; 4-7 a day on the machine plus fixes.
