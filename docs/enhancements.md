@@ -74,12 +74,14 @@ name in the tarball). 2: the `Linux x64` job is written (OpenRCT2's noble portab
 tarball; tests and their build left out; the checkout is put on a branch named `openrct2-screensaver` so
 `--version` reads `v0.5.6 (<sha> on openrct2-screensaver)`); green and merged (2026-11-03). 4 and 5: the test plan is `docs/testing-linux.md` (2026-11-04); expect the
 overlay's text to be missing on Fedora, whose DejaVu/Liberation paths patch 0013 doesn't know.
+5 passed headless on Ubuntu 24.04 (2026-11-04, `docs/testing-linux.md`); the tarball links ICU 74 and
+libzip 4, which Fedora 42 likely lacks (the AppImage question).
 
 Order: 2 and 3 can be built in cloud sessions now (2 is checked by the workflow run itself); 1 is the
 owner's; 4-7 follow 1. Estimate: 2-3 a day; 4-7 a day on the machine plus fixes.
 
 Decided (owner, 2026-11-03): the test machine is the owner's existing Fedora VM in VirtualBox (enough
-for the functional tests; limits: Fedora's GNOME session is Wayland, so X11 is likely only XWayland,
+for the functional tests; limits: Fedora's desktop session (KDE Plasma on the owner's VM) is Wayland, so X11 is likely only XWayland,
 and OpenGL needs the VM's 3D acceleration on, else only the software renderer is testable there). The
 build is the tarball first; if Fedora's library versions do not match the Ubuntu-built binary, the
 fallback is OpenRCT2's own AppImage recipe, which bundles them. Still open: whether macOS gets a CI

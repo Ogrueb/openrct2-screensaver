@@ -8,14 +8,41 @@ note to write. Anything that fails goes to `docs/known-issues.md` with the displ
 Record for every run: Fedora release (`cat /etc/fedora-release`), session type
 (`echo $XDG_SESSION_TYPE`), the engine run number the tarball came from, and the renderer.
 
+## Already checked headless (2026-11-04)
+
+Run in a cloud session on Ubuntu 24.04 (the build image's own release) with the tarball from engine run
+41734931011, the owner's RCT2 `Data`/`ObjData` and the ten example parks. These need no desktop, so the
+VM pass below leaves them out except where Fedora itself could change the result.
+- [x] `./openrct2-cli --version`: `OpenRCT2, v0.5.6 (82b3097 on openrct2-screensaver)`, plugin API 124.
+- [x] `mksequence.py playlists/example.toml --install --ignore-edits`: builds (48 s) and installs the
+      sequence, plugin, icons, two companions and `plugin.store.json`; the default user folder is
+      `~/.config/OpenRCT2`; `--install` refuses while a process named `openrct2` runs.
+- [x] `renderviews.py` with the Linux binary: all 101 renders of the example playlist (89 s), Gardens of
+      Light included; `openrct2 screenshot` works with no display.
+- [x] `importparks.py`: an `.sv6` download (Helios) converted with `openrct2 convert`; a download with a
+      loose `.parkobj` (Concrete Jungle) installed it under `object/rct-screensaver/` and the park renders
+      with it.
+- [x] `drawviews.py`: renders all ten parks from four angles (40 pictures) and serves its page.
+- [x] `settings.sh`: starts the server in the background, a second start only reopens the page
+      (2026-11-03).
+
+What the binary links against (`readelf -d`), the libraries Fedora may lack: `libopenrct2.so` needs
+`libicuuc.so.74` (ICU 74; Fedora 42 ships ICU 76, so `.so.76`) and `libzip.so.4` (Fedora's libzip is
+`.so.5`); `openrct2` needs `libFLAC.so.12`. If `ldd` in part 1 lists any of these as missing, the tarball
+does not fit Fedora and the AppImage (which bundles them) is the fallback, as decided.
+
 ## 0. Prepare the VM (once)
 
 **VirtualBox settings** (VM powered off):
 - Display → Screen: Graphics Controller **VMSVGA**, Video Memory 128 MB or more, **Enable 3D
   Acceleration** on (without it only the software renderer can be tested; note which you had).
-- Guest Additions installed in Fedora (`sudo dnf install virtualbox-guest-additions`, then reboot), so
-  the VM window resizes the desktop and the mouse integrates.
-- A shared folder or drag-and-drop to copy files in from the Windows PC.
+- Guest Additions: Fedora's own package only (`sudo dnf install virtualbox-guest-additions`,
+  `sudo systemctl enable --now vboxservice`, reboot). Oracle's installer from the VirtualBox CD builds
+  kernel modules that fail on current Fedora kernels; remove it first if it was run
+  (`sudo /opt/VBoxGuestAdditions-*/uninstall.sh`). They are a convenience only: with VMSVGA the
+  desktop resizes without them.
+- A way to copy files in: a shared folder (needs the Guest Additions), a network share, or a USB
+  stick; the engine zip can also be downloaded inside the VM.
 
 **Packages** in a terminal:
 ```sh
@@ -52,10 +79,13 @@ cd ~/openrct2-ss/OpenRCT2
 ldd ./openrct2 | grep "not found"
 ```
 - [ ] `--version` prints `v0.5.6 (… on openrct2-screensaver)`.
-- [ ] `ldd` prints nothing (no missing libraries). If it lists any, write them down; try
+- [ ] `ldd` prints nothing (no missing libraries). Expect `libicuuc.so.74`, `libicudata.so.74` and
+      `libzip.so.4` here (see above). If it lists any, write them down; try
       `sudo dnf install <the library's package>` (e.g. `dnf provides '*/libzip.so.5'`). If a library is
       missing in a version Fedora doesn't ship (a `.so.N` number Fedora lacks), the tarball fails on
       Fedora and the AppImage fallback is next: stop here and report the list.
+      Only if part 1 passes does the rest of this plan apply to the tarball; otherwise it waits for an
+      AppImage build.
 - [ ] `./openrct2` opens the game, asks for the RCT2 folder (give `~/RCT2`), and reaches the stock
       title screen with music. Close it.
 
@@ -66,12 +96,9 @@ cd ~/openrct2-screensaver
 python3 tools/mksequence.py playlists/example.toml --install --ignore-edits
 ls ~/.config/OpenRCT2/sequence ~/.config/OpenRCT2/plugin
 ```
-- [ ] The build runs without errors and installs into `~/.config/OpenRCT2/` (sequence folder, plugin,
-      `plugin.store.json`).
-- [ ] With the game running, `--install` refuses ("OpenRCT2 appears to be running"); with it closed,
-      it installs. (This checks the Linux running check, `pgrep`.)
+- [ ] The install lands in `~/.config/OpenRCT2/` (checked headless; here only to set up the VM).
 
-## 3. Screensaver mode, first under Wayland (Fedora's default GNOME session)
+## 3. Screensaver mode, first under Wayland (Fedora KDE's Plasma session)
 
 Start from the terminal so its output shows: `cd ~/openrct2-ss/OpenRCT2 && ./openrct2`.
 
@@ -119,7 +146,7 @@ Mode settings (the settings panel, patch 0014):
 
 ## 4. The same under X11 (XWayland)
 
-Fedora's GNOME session has no X11 login any more; force the game onto XWayland instead:
+Fedora KDE has no X11 login any more; force the game onto XWayland instead:
 ```sh
 SDL_VIDEODRIVER=x11 ./openrct2
 ```
@@ -127,23 +154,15 @@ SDL_VIDEODRIVER=x11 ./openrct2
 `echo $XDG_SESSION_TYPE` says and which driver the run used.) Repeat in part 3: the borderless
 window and its size, the mouse rows, scale 2, the renderers and the window styles.
 
-## 5. Tools with the Linux binary
+## 5. Tools on the desktop
 
-Set `E=~/openrct2-ss/OpenRCT2/openrct2` first. Each tool once; on failure keep the output.
-- [ ] Settings page: `./settings.sh` opens the page in the browser (logs in `build/logs/`); a second
-      `./settings.sh` only opens the page again. Set the OpenRCT2 path to `$E`, Build, Install
-      (game closed), Render previews.
-- [ ] Renders: `python3 tools/renderviews.py build/sequence/<name>.playlist.json --openrct2 $E`
-      writes `build/renders/index.html` with pictures (not black or empty). Try `openrct2-cli` in
-      place of `openrct2` if the GUI binary fails headless.
-- [ ] Drawing page: `python3 tools/drawviews.py playlists/example.toml --openrct2 $E` renders the
-      four angles and opens the page; drawing a box saves.
-- [ ] Import: `python3 tools/importparks.py <a download with an .sv6> -o ~/rct-library --openrct2 $E`
-      converts the save; a download with loose objects installs them under
-      `~/.config/OpenRCT2/object/rct-screensaver/`.
-- [ ] Performance: `python3 tools/perfrun.py run perf/quick.toml --exe $E` runs its cells in sandboxes
-      (the game starts in the mode and quits by itself) and writes `report.md` under `build/perf/`.
-      The VM's numbers mean nothing; only that it runs.
+The tools themselves passed headless (above); on the VM only what needs a desktop or a browser:
+- [ ] `./settings.sh` opens the page in Fedora's browser; set the OpenRCT2 path to
+      `~/openrct2-ss/OpenRCT2/openrct2`, Build, Install (game closed), Render previews. The Scan
+      folder and Import buttons open a file dialog (needs `python3-tkinter`).
+- [ ] `python3 tools/perfrun.py run perf/quick.toml --exe ~/openrct2-ss/OpenRCT2/openrct2` starts the
+      game in the mode in its sandboxes, quits it after each cell and writes `report.md` under
+      `build/perf/` (the VM's numbers mean nothing; only that it runs and ends the game on Linux).
 
 ## 6. Report back
 
