@@ -54,15 +54,20 @@ python3 --version          # 3.11 or later
 **RCT2 data files**: copy the whole RCT2 install folder from the PC (the one holding `Data/`,
 `ObjData/`, `Tracks/`) to, say, `~/RCT2`. OpenRCT2 asks for it on first start.
 
-**The patched engine**: download the artifact `openrct2-v0.5.6-openrct2-screensaver-linux-x64` from
-the latest green "Engine build" run (Actions tab of the repository; the zip holds the tarball), then:
+**The patched engine (AppImage)**: the portable tarball does not run on Fedora (2026-11-04:
+`libicuuc.so.74` missing, as predicted), so the VM uses the AppImage, which carries its own libraries.
+Download the artifact `openrct2-v0.5.6-openrct2-screensaver-linux-x64-appimage` from the latest green
+"Engine build" run (Actions tab), then unpack it rather than mounting it (no FUSE needed, and the
+tools get a plain executable):
 ```sh
 mkdir -p ~/openrct2-ss && cd ~/openrct2-ss
-unzip ~/Downloads/openrct2-v0.5.6-openrct2-screensaver-linux-x64.zip
-tar -xzf openrct2-v0.5.6-openrct2-screensaver-linux-x64.tar.gz
-ls OpenRCT2                # openrct2, openrct2-cli, libopenrct2.so, data/, doc/
+unzip ~/Downloads/openrct2-v0.5.6-openrct2-screensaver-linux-x64-appimage.zip
+chmod +x openrct2-v0.5.6-openrct2-screensaver-linux-x64.AppImage
+./openrct2-v0.5.6-openrct2-screensaver-linux-x64.AppImage --appimage-extract
+ls squashfs-root           # AppRun, usr/ (usr/bin/openrct2, usr/lib/, usr/share/openrct2/)
 ```
-The engine is now `~/openrct2-ss/OpenRCT2/openrct2`.
+The engine is now `~/openrct2-ss/squashfs-root/AppRun` (it starts `usr/bin/openrct2` with the bundled
+libraries). Everywhere below, `$E` means that path: `E=~/openrct2-ss/squashfs-root/AppRun`.
 
 **The repository and parks**:
 ```sh
@@ -71,23 +76,21 @@ cd ~ && git clone https://github.com/Ogrueb/openrct2-screensaver.git
 Copy the ten example park zips from the PC's `ExampleParks\` into `~/openrct2-screensaver/ExampleParks/`
 (the same file names; `playlists/example.toml` finds them there).
 
-## 1. The build starts (decides tarball vs AppImage)
+## 1. The build starts
 
+The tarball failed here (2026-11-04: `libicuuc.so.74: cannot open shared object`), as the libraries
+above predicted; this part now checks the AppImage.
 ```sh
-cd ~/openrct2-ss/OpenRCT2
-./openrct2-cli --version
-ldd ./openrct2 | grep "not found"
+E=~/openrct2-ss/squashfs-root/AppRun
+$E --version
+ldd ~/openrct2-ss/squashfs-root/usr/bin/openrct2 | grep "not found"
 ```
 - [ ] `--version` prints `v0.5.6 (… on openrct2-screensaver)`.
-- [ ] `ldd` prints nothing (no missing libraries). Expect `libicuuc.so.74`, `libicudata.so.74` and
-      `libzip.so.4` here (see above). If it lists any, write them down; try
-      `sudo dnf install <the library's package>` (e.g. `dnf provides '*/libzip.so.5'`). If a library is
-      missing in a version Fedora doesn't ship (a `.so.N` number Fedora lacks), the tarball fails on
-      Fedora and the AppImage fallback is next: stop here and report the list.
-      Only if part 1 passes does the rest of this plan apply to the tarball; otherwise it waits for an
-      AppImage build.
-- [ ] `./openrct2` opens the game, asks for the RCT2 folder (give `~/RCT2`), and reaches the stock
-      title screen with music. Close it.
+- [ ] `ldd` prints nothing. (The bundled libraries are under `usr/lib`; `ldd` on the bare binary may
+      not find them without `AppRun`'s path, so if it lists some, check they exist in
+      `squashfs-root/usr/lib/` before counting it a failure.)
+- [ ] `$E` opens the game, asks for the RCT2 folder (give `~/RCT2`), and reaches the stock title
+      screen with music. Close it.
 
 ## 2. Install the screensaver
 
@@ -100,7 +103,7 @@ ls ~/.config/OpenRCT2/sequence ~/.config/OpenRCT2/plugin
 
 ## 3. Screensaver mode, first under Wayland (Fedora KDE's Plasma session)
 
-Start from the terminal so its output shows: `cd ~/openrct2-ss/OpenRCT2 && ./openrct2`.
+Start from the terminal so its output shows: `$E`.
 
 Fonts first, as the one thing expected to differ on Fedora: the overlay looks for DejaVu or Liberation
 under Debian/Arch paths (`/usr/share/fonts/truetype/dejavu/`, `/usr/share/fonts/TTF/`), and Fedora
@@ -129,7 +132,7 @@ The mode (rows as in `docs/testing.md` "Screensaver mode" and "Plugin follows th
 - [ ] Park changes dip through black (background loading); no freeze over a second.
 - [ ] Esc leaves the mode: title menu back, window style as before, `~/.config/OpenRCT2/config.ini`
       unchanged (compare a copy taken before).
-- [ ] `./openrct2 --screensaver` starts straight in the mode; Esc quits the game.
+- [ ] `$E --screensaver` starts straight in the mode; Esc quits the game.
 - [ ] Scale factor 2: Options → Display → scale 2.0, enter the mode again; icons and text sharp and
       the right size. Back to 1.0 afterwards and check once more.
 
@@ -148,7 +151,7 @@ Mode settings (the settings panel, patch 0014):
 
 Fedora KDE has no X11 login any more; force the game onto XWayland instead:
 ```sh
-SDL_VIDEODRIVER=x11 ./openrct2
+SDL_VIDEODRIVER=x11 $E
 ```
 (`SDL_VIDEODRIVER=wayland` forces native Wayland; the default may already be either, so note what
 `echo $XDG_SESSION_TYPE` says and which driver the run used.) Repeat in part 3: the borderless
@@ -158,9 +161,9 @@ window and its size, the mouse rows, scale 2, the renderers and the window style
 
 The tools themselves passed headless (above); on the VM only what needs a desktop or a browser:
 - [ ] `./settings.sh` opens the page in Fedora's browser; set the OpenRCT2 path to
-      `~/openrct2-ss/OpenRCT2/openrct2`, Build, Install (game closed), Render previews. The Scan
+      `~/openrct2-ss/squashfs-root/AppRun`, Build, Install (game closed), Render previews. The Scan
       folder and Import buttons open a file dialog (needs `python3-tkinter`).
-- [ ] `python3 tools/perfrun.py run perf/quick.toml --exe ~/openrct2-ss/OpenRCT2/openrct2` starts the
+- [ ] `python3 tools/perfrun.py run perf/quick.toml --exe $E` starts the
       game in the mode in its sandboxes, quits it after each cell and writes `report.md` under
       `build/perf/` (the VM's numbers mean nothing; only that it runs and ends the game on Linux).
 
