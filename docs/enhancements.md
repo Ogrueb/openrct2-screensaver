@@ -72,7 +72,8 @@ path to `openrct2` on `PATH` off Windows; the running check is `pgrep -ix openrc
 name in the tarball). 2: the `Linux x64` job is written (OpenRCT2's noble portable recipe: its
 `openrct2-build:26-noble` image, `-DBUILD_SHARED_LIBS=ON -DPORTABLE=ON`, `build-portable` for the
 tarball; tests and their build left out; the checkout is put on a branch named `openrct2-screensaver` so
-`--version` reads `v0.5.6 (<sha> on openrct2-screensaver)`); waiting for its first run and the owner's OK.
+`--version` reads `v0.5.6 (<sha> on openrct2-screensaver)`); green and merged (2026-11-03). 4 and 5: the test plan is `docs/testing-linux.md` (2026-11-04); expect the
+overlay's text to be missing on Fedora, whose DejaVu/Liberation paths patch 0013 doesn't know.
 
 Order: 2 and 3 can be built in cloud sessions now (2 is checked by the workflow run itself); 1 is the
 owner's; 4-7 follow 1. Estimate: 2-3 a day; 4-7 a day on the machine plus fixes.
