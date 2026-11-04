@@ -1,6 +1,6 @@
 # Local test checklist
 
-Run on the Windows PC with RCT2 installed. OpenRCT2's user directory there is
+Run on the Windows PC with RCT2 installed (the Linux build has its own pass, `docs/testing-linux.md`). OpenRCT2's user directory there is
 `Documents\OpenRCT2\` (contains `config.ini`, `sequence\`, `plugin\`, `plugin.store.json`).
 Plugin `console.log` output goes to standard output: start OpenRCT2 from a terminal with
 the console build (`openrct2.com`, next to `openrct2.exe`) to see it.
