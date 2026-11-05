@@ -76,6 +76,14 @@ tarball; tests and their build left out; the checkout is put on a branch named `
 overlay's text to be missing on Fedora, whose DejaVu/Liberation paths patch 0013 doesn't know.
 5 passed headless on Ubuntu 24.04 (2026-11-04, `docs/testing-linux.md`); the tarball links ICU 74 and
 libzip 4, which Fedora 42 likely lacks (the AppImage question).
+2 (2026-11-04): Fedora lacked ICU 74 as predicted, so the workflow also builds OpenRCT2's AppImage
+(`Linux x64 AppImage`, jammy image, clang 20), which runs there unpacked (`--appimage-extract`).
+4 and 5 passed on a Fedora laptop under Wayland with the AppImage (owner, 2026-11-05; results in
+`docs/testing-linux.md`): scale checked at 1.5, sound skipped, XWayland skipped (Wayland only), and
+in-depth performance testing dropped (owner: the patches leave the performance-sensitive engine code
+alone, so platform support is what needs establishing; one quick suite run passed). Fixed from the
+pass: the stock Options window stayed visible in the mode (patch 0011), the settings page's Browse
+folder and its "Not built yet" after a build on files dated in the future.
 
 Order: 2 and 3 can be built in cloud sessions now (2 is checked by the workflow run itself); 1 is the
 owner's; 4-7 follow 1. Estimate: 2-3 a day; 4-7 a day on the machine plus fixes.

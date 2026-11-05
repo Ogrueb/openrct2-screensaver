@@ -1296,7 +1296,7 @@ index 0000000..f13f215
 +    void ReleaseOverlayGL();
 +} // namespace OpenRCT2::Ui::Screensaver
 diff --git a/src/openrct2-ui/screensaver/Screensaver.cpp b/src/openrct2-ui/screensaver/Screensaver.cpp
-index 774cbca..70e5ddb 100644
+index 01b6650..f0751d9 100644
 --- a/src/openrct2-ui/screensaver/Screensaver.cpp
 +++ b/src/openrct2-ui/screensaver/Screensaver.cpp
 @@ -10,6 +10,7 @@
@@ -1307,7 +1307,7 @@ index 774cbca..70e5ddb 100644
  
  #include <SDL.h>
  #include <openrct2/Context.h>
-@@ -230,6 +231,7 @@ namespace OpenRCT2::Ui::Screensaver
+@@ -231,6 +232,7 @@ namespace OpenRCT2::Ui::Screensaver
          _active = false;
          ShowWindows();
          RestoreConfig();

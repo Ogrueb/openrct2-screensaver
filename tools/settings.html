@@ -535,9 +535,13 @@ async function relink() {
   } catch (e) { fail(e); }
 }
 $("browse").addEventListener("click", async () => {
-  try { const r = await api("/api/browse", { start: $("folder").value }); if (r.folder) { $("folder").value = r.folder; await relink(); } } catch (e) { fail(e); }
+  try { const r = await api("/api/browse", { start: $("folder").value }); if (r.folder) { $("folder").value = S.config.folder = r.folder; await relink(); } } catch (e) { fail(e); }
 });
-$("folder").addEventListener("change", relink);
+$("folder").addEventListener("change", async () => {
+  // Kept on the server, which the page's refresh reads it back from (else a refresh put the old one back)
+  try { await api("/api/config", { folder: $("folder").value.trim() }); S.config.folder = $("folder").value.trim(); } catch (e) { fail(e); }
+  await relink();
+});
 $("scan").addEventListener("click", async () => {
   if (dirty && !confirm("Scanning starts a new playlist from the folder; unsaved changes to this one are lost. Go on?")) return;
   try {

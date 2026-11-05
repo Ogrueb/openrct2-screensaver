@@ -31,6 +31,24 @@ What the binary links against (`readelf -d`), the libraries Fedora may lack: `li
 `.so.5`); `openrct2` needs `libFLAC.so.12`. If `ldd` in part 1 lists any of these as missing, the tarball
 does not fit Fedora and the AppImage (which bundles them) is the fallback, as decided.
 
+## Results on a Fedora laptop (2026-11-05)
+
+The owner's pass on a borrowed laptop (full Fedora install, KDE Plasma, Wayland only) with the AppImage
+from engine run 41912019705 and the kit made from the PC (`setup.sh` covered parts 0-2):
+- Passed: text (with the font links), the mode and its button, mouse and bar, keys and the view
+  editor, park changes, Esc and `config.ini`, `--screensaver`, the renderers and other mode settings,
+  `perfrun.py run perf/quick.toml`.
+- Scale factor checked at 1.5 (not 2); sound skipped; part 4 (XWayland) skipped.
+- Window styles: all work; borderless minimizes when another window takes the focus (stock
+  OpenRCT2: Options, Display, "Minimise fullscreen on focus loss", on by default).
+- Fixed after the pass: a stock Options window open when the mode starts stayed on screen and could not
+  be used (the game's per-tick visibility update showed the mode's hidden windows again; patch 0011
+  now marks them with a window flag the update leaves alone); the settings page's Browse folder was
+  put back by the page's refresh, and a build read "Not built yet" when the playlist's inputs were
+  dated in the future (an unzip into another time zone).
+- Not reproduced: Build after unticking parks building the full list (the cloud check built only the
+  ticked ones).
+
 ## 0. Prepare the VM (once)
 
 **VirtualBox settings** (VM powered off):

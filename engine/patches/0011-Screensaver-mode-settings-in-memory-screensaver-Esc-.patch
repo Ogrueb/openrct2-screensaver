@@ -6,7 +6,8 @@ Subject: [PATCH] Screensaver mode: settings in memory, --screensaver, Esc,
 
 A screensaver mode on the title screen (src/openrct2-ui/screensaver/):
 entering closes the title windows and hides every other window but the park's own
-(transparent and invisible, so the park is drawn under them), and applies the mode's
+(transparent and invisible, so the park is drawn under them; a new window flag, hidden,
+keeps the per-tick visibility update from showing them again), and applies the mode's
 settings in memory: window style (borderless by default), title music, game speed,
 light effects and weather gloom off by default, and uncapped frames off, so the game
 draws once per tick (40 fps). Config::SetSaveHook keeps them out of config.ini; leaving
@@ -23,7 +24,7 @@ enter, exit, configure, onChange, onMouse).
  src/openrct2-ui/input/MouseInput.cpp        |  10 +
  src/openrct2-ui/interface/Window.cpp        |   3 +
  src/openrct2-ui/libopenrct2ui.vcxproj       |   3 +
- src/openrct2-ui/screensaver/Screensaver.cpp | 403 ++++++++++++++++++++
+ src/openrct2-ui/screensaver/Screensaver.cpp | 404 ++++++++++++++++++++
  src/openrct2-ui/screensaver/Screensaver.h   |  94 +++++
  src/openrct2-ui/scripting/ScScreensaver.hpp | 280 ++++++++++++++
  src/openrct2-ui/scripting/UiExtensions.cpp  |   6 +
@@ -32,7 +33,9 @@ enter, exit, configure, onChange, onMouse).
  src/openrct2/command_line/RootCommands.cpp  |   3 +
  src/openrct2/config/Config.cpp              |  14 +-
  src/openrct2/config/Config.h                |   3 +
- 13 files changed, 824 insertions(+), 1 deletion(-)
+ src/openrct2/interface/Window.cpp           |   7 +
+ src/openrct2/interface/WindowFlags.h        |   4 +
+ 15 files changed, 836 insertions(+), 1 deletion(-)
  create mode 100644 src/openrct2-ui/screensaver/Screensaver.cpp
  create mode 100644 src/openrct2-ui/screensaver/Screensaver.h
  create mode 100644 src/openrct2-ui/scripting/ScScreensaver.hpp
@@ -130,10 +133,10 @@ index 54d0ec8..7ce5f80 100644
      <ClCompile Include="TextComposition.cpp" />
 diff --git a/src/openrct2-ui/screensaver/Screensaver.cpp b/src/openrct2-ui/screensaver/Screensaver.cpp
 new file mode 100644
-index 0000000..774cbca
+index 0000000..01b6650
 --- /dev/null
 +++ b/src/openrct2-ui/screensaver/Screensaver.cpp
-@@ -0,0 +1,403 @@
+@@ -0,0 +1,404 @@
 +/*****************************************************************************
 + * Copyright (c) 2014-2026 OpenRCT2 developers
 + *
@@ -316,12 +319,12 @@ index 0000000..774cbca
 +        WindowVisitEach([](WindowBase* w) {
 +            if (w->classification == WindowClass::mainWindow || w->flags.has(WindowFlag::dead))
 +                return;
-+            auto it = _hidden.find(w);
-+            if (it != _hidden.end() && !w->isVisible)
++            if (w->flags.has(WindowFlag::hidden) && _hidden.find(w) != _hidden.end())
 +                return;
 +            w->invalidate();
 +            _hidden[w] = { w->flags.has(WindowFlag::transparent), w->isVisible };
 +            w->flags.set(WindowFlag::transparent);
++            w->flags.set(WindowFlag::hidden); // (the visibility update would show it again every tick)
 +            w->isVisible = false;
 +        });
 +    }
@@ -334,6 +337,7 @@ index 0000000..774cbca
 +                return;
 +            if (!it->second.transparent)
 +                w->flags.unset(WindowFlag::transparent);
++            w->flags.unset(WindowFlag::hidden);
 +            w->isVisible = it->second.visible;
 +            w->invalidate();
 +        });
@@ -1069,3 +1073,36 @@ index 68acf54..a785453 100644
 +    void SetSaveHook(void (*hook)(bool writing));
      bool FindOrBrowseInstallDirectory();
  } // namespace OpenRCT2::Config
+diff --git a/src/openrct2/interface/Window.cpp b/src/openrct2/interface/Window.cpp
+index 74e14b1..7ef62c8 100644
+--- a/src/openrct2/interface/Window.cpp
++++ b/src/openrct2/interface/Window.cpp
+@@ -127,6 +127,13 @@ static constexpr float kWindowScrollLocations[][2] = {
+         for (auto it = gWindowList.begin(); it != itEnd; ++it)
+         {
+             auto& window = *(*it);
++            if (window.flags.has(WindowFlag::hidden))
++            {
++                window.isVisible = false;
++                if (window.viewport != nullptr)
++                    window.viewport->isVisible = false;
++                continue;
++            }
+             if (window.viewport == nullptr)
+             {
+                 window.isVisible = true;
+diff --git a/src/openrct2/interface/WindowFlags.h b/src/openrct2/interface/WindowFlags.h
+index c76532c..fe7f0a1 100644
+--- a/src/openrct2/interface/WindowFlags.h
++++ b/src/openrct2/interface/WindowFlags.h
+@@ -40,6 +40,10 @@ namespace OpenRCT2
+         higherContrastOnPress,
+         noTitleBar,
+         noSnapping,
++        /**
++         * Window stays open but is neither drawn nor made visible again by the visibility update
++         */
++        hidden,
+ 
+         // *ONLY* create only flags below
+         autoPosition,
