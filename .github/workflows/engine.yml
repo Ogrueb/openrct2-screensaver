@@ -208,6 +208,9 @@ jobs:
           name=openrct2-${{ steps.version.outputs.ref }}-openrct2-screensaver-linux-x64${{ inputs.release == true && '-release' || '' }}
           echo "name=$name" >> "$GITHUB_OUTPUT"
           export APPIMAGE_FILE_NAME="$name.AppImage"
+          # The install step also puts the static libopenrct2.a in the tree (30 MB), which nothing
+          # loads at run time: the programs link it in
+          find bin/install -name 'libopenrct2.a' -print -delete
           . scripts/setenv -q && build-appimage
           ./bin/openrct2-cli --version || true
       - name: Upload the AppImage
