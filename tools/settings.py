@@ -45,6 +45,7 @@ CACHE = os.path.join(HOME, "facts.json")
 BACKUPS = os.path.join(HOME, "backups")
 SEQUENCE_OUT = os.path.join(HOME, "build")  # the last build only: the game plays the installed copy
 PARK_CACHE = os.path.join(HOME, "park-cache")  # resolved parks, so a build redoes only the parks that changed
+INPUTS = ".inputs.json"  # beside a build result: its inputs' times when the page built it
 RENDERS = os.path.join(HOME, "renders")
 RENDERS_PREVIOUS = os.path.join(HOME, "renders-previous")  # the set before, for comparing
 DRAW_RENDERS = os.path.join(HOME, "draw-renders")  # the drawing page's four-angle renders, by park contents
@@ -332,13 +333,42 @@ class Session:
         path = self.last_build()
         if not path:
             return None
-        stamp = os.path.getmtime(path)
         # (profiles too: the drawing page reads the last build, so a profile change keeps it and
         # marks it old instead of removing it; the next build redoes only the parks it changed)
-        inputs = [self.path, mksequence.edits_path(self.path)] + profile_files()
-        if all(not os.path.exists(i) or os.path.getmtime(i) <= stamp for i in inputs):
+        try:
+            with open(path + INPUTS, encoding="utf-8") as f:
+                recorded = json.load(f)
+        except (OSError, ValueError):
+            recorded = None
+        if recorded is not None:
+            # The inputs' times as the page's build left them: equal means unchanged. (Comparing them with
+            # the build's own time failed on files dated in the future, as an unzip into another time zone
+            # leaves them: every build then looked out of date.)
+            return path if recorded == self.input_stamps() else None
+        stamp = os.path.getmtime(path)  # a build made outside the page
+        if all(not os.path.exists(i) or os.path.getmtime(i) <= stamp for i in self.input_files()):
             return path
         return None
+
+    def input_files(self):
+        return [self.path, mksequence.edits_path(self.path)] + profile_files()
+
+    def input_stamps(self):
+        """What a build of this playlist was made from, as {file: modification time or None}."""
+        out = {}
+        for i in self.input_files():
+            try:
+                out[i] = os.stat(i).st_mtime_ns
+            except OSError:
+                out[i] = None
+        return out
+
+    def record_inputs(self):
+        """After a build: notes its inputs' times beside its result, for built()."""
+        path = self.last_build()
+        if path:
+            with open(path + INPUTS, "w", encoding="utf-8") as f:
+                json.dump(self.input_stamps(), f)
 
     def relink(self, folder):
         """Points missing parks at files of the same name in folder (or below it). Returns how many were found."""
@@ -1151,9 +1181,10 @@ def make_handler(app, token, port):
         def post(self, path, body):
             session = app.session
             if path == "/api/config":
-                for k in ("openrct2", "library"):
+                for k in ("openrct2", "library", "folder"):
                     if k in body:
-                        app.config[k] = body[k] or None
+                        app.config[k] = (os.path.abspath(os.path.expanduser(body[k])) if k == "folder" and body[k]
+                                         else body[k] or None)
                 save_config(app.config)
             elif path == "/api/new":  # an empty, unsaved playlist (named on its first save)
                 with session.lock:
@@ -1169,7 +1200,11 @@ def make_handler(app, token, port):
                     app.config["playlist"] = session.path
                     save_config(app.config)
             elif path == "/api/browse":
-                return {"folder": browse_folder(body.get("start"))}
+                folder = browse_folder(body.get("start"))
+                if folder:  # kept on the server at once: the page's refresh shows the server's folder
+                    app.config["folder"] = os.path.abspath(folder)
+                    save_config(app.config)
+                return {"folder": folder}
             elif path == "/api/backups":
                 open_folder(BACKUPS)
                 return {"path": BACKUPS}
@@ -1222,7 +1257,7 @@ def make_handler(app, token, port):
                         "--cache", PARK_CACHE]
                 if body.get("ignoreEdits"):
                     args.append("--ignore-edits")
-                return {"job": app.start("build", args)}
+                return {"job": app.start("build", args, session.record_inputs)}
             elif path == "/api/install":
                 built = session.built()
                 if not built:
