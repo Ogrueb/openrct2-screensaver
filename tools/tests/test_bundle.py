@@ -72,6 +72,20 @@ class Bundles(unittest.TestCase):
             self.assertEqual(json.load(f)["source"], os.path.abspath(result["playlist"]))
         self.assertTrue(os.path.exists(os.path.join(self.dest["build"], "My List", "script.txt")))
 
+    def test_unticked_park_goes_by_name_only(self):
+        with open(self.playlist, encoding="utf-8") as f:
+            text = f.read()
+        write(self.playlist, text.replace("hold = 9\n", "hold = 9\nuse = false\n"))
+        manifest = bundle.export(self.playlist, self.out, parks=True, log=lambda s: None)
+        with zipfile.ZipFile(self.out) as z:
+            self.assertEqual(sorted(n for n in z.namelist() if n.startswith("parks/")), ["parks/a.park"])
+        self.assertIsNone(manifest["parks"][1]["sha256"])
+        result = self.unpack()
+        self.assertEqual(result["missing"], ["b.park"])
+        data, _ = self.parks_of(result)
+        self.assertEqual(data["park"][1]["use"], False)
+        self.assertEqual(data["park"][1]["hold"], 9)
+
     def test_bad_member_is_refused(self):
         with zipfile.ZipFile(self.out, "w") as z:
             z.writestr("../evil", "x")

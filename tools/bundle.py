@@ -11,7 +11,7 @@ A bundle holds:
   playlist.toml       the playlist, its park files as parks/<file name>
   playlist.views.json the view editor's pinned views, when the playlist has them
   profiles/*.toml     the park profiles the user changed (the shipped ones come with the screensaver)
-  parks/              with --parks: the park files themselves (optional)
+  parks/              with --parks: the files of the ticked parks (unticked ones go by name only)
   build/              with --parks and --build: the built sequence (sequence folder, playlist, companions),
                       so the receiver can render and install without building
 
@@ -58,13 +58,14 @@ def export(playlist_path, out_path, parks=False, build_dir=None, profile_files=(
         while file_name.lower() in used:  # two parks of one name from different folders
             file_name, n = "%s-%d%s" % (stem, n, ext), n + 1
         used.add(file_name.lower())
-        files.append((path, file_name))
+        # An unticked park goes in by name only: its entry keeps its place, its file stays out
+        files.append((path, file_name, e.get("use", True) and os.path.exists(path)))
         entries.append(dict(e, file="parks/" + file_name))
     manifest = {"format": FORMAT, "name": name, "created": datetime.datetime.now().isoformat(timespec="seconds"),
                 "includesParks": bool(parks), "includesBuild": False,
-                # An unticked park that is missing itself is listed by name only
-                "parks": [{"file": file_name, "size": os.path.getsize(path), "sha256": sha256(path)} if os.path.exists(path)
-                          else {"file": file_name, "size": None, "sha256": None} for path, file_name in files],
+                # An unticked park is listed by name only
+                "parks": [{"file": file_name, "size": os.path.getsize(path), "sha256": sha256(path)} if ship
+                          else {"file": file_name, "size": None, "sha256": None} for path, file_name, ship in files],
                 "profiles": []}
     built = None
     if parks and build_dir:
@@ -82,8 +83,8 @@ def export(playlist_path, out_path, parks=False, build_dir=None, profile_files=(
             z.write(profile, "profiles/" + os.path.basename(profile))
             manifest["profiles"].append(os.path.basename(profile))
         if parks:
-            for path, file_name in files:
-                if not os.path.exists(path):
+            for path, file_name, ship in files:
+                if not ship:
                     continue
                 log("park %s" % file_name)
                 z.write(path, "parks/" + file_name, zipfile.ZIP_STORED)  # parks are compressed already
@@ -99,7 +100,8 @@ def export(playlist_path, out_path, parks=False, build_dir=None, profile_files=(
                                 zipfile.ZIP_STORED if n.endswith(".park") else zipfile.ZIP_DEFLATED)
         z.writestr("bundle.json", json.dumps(manifest, indent=1))
     os.replace(tmp, out_path)
-    log("wrote %s (%d parks%s%s, %d profiles)" % (out_path, len(files), ", park files included" if parks else "",
+    log("wrote %s (%d parks%s%s, %d profiles)" % (out_path, len(files), ", files of the %d ticked included"
+                                                  % sum(ship for _, _, ship in files) if parks else "",
                                                   ", build included" if built else "", len(manifest["profiles"])))
     return manifest
 
