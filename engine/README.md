@@ -15,6 +15,9 @@ and plan: `docs/engine-patches.md`.
 
 A release build leaves out 0016 (diagnostics): run the workflow by hand with "Release build" ticked,
 which applies 0001-0015 only.
+With "publish_tag" set too (e.g. `v0.2.0`), it then makes a draft GitHub release from the build: the
+Windows zip and the AppImage (named `-beta`), the notes from `docs/releases/<tag>.md` (first line the
+title). Check the draft on the releases page and publish it there.
 
 To work on a patch locally, clone OpenRCT2 at the release tag, `git am` the patches in order,
 edit (`git rebase -i` to change an earlier patch), and regenerate the whole series in one run with
