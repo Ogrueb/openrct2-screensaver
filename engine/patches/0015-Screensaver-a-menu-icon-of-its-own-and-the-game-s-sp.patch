@@ -10,13 +10,17 @@ as the patched build replaces only the executables and cannot add to g2.dat). An
 src can be "sprite:<image index>": the sprite is drawn into a small render target and mapped
 through the standard palette, so the mode can show the stock exit button whatever palette the
 park sets; its own size is in game pixels.
+
+On Linux, where font folders differ between distributions, a font file not at the fixed paths
+is looked up by its name under /usr/share/fonts, /usr/local/share/fonts and the user's font
+folders (Fedora keeps DejaVu in dejavu-sans-fonts/).
 ---
- src/openrct2-ui/screensaver/MenuIcon.h      | 129 ++++++++++++++++++++
- src/openrct2-ui/screensaver/Overlay.cpp     |  91 +++++++++++++-
+ src/openrct2-ui/screensaver/MenuIcon.h      | 129 +++++++++++++++++
+ src/openrct2-ui/screensaver/Overlay.cpp     | 152 +++++++++++++++++++-
  src/openrct2-ui/screensaver/Overlay.h       |  13 +-
  src/openrct2-ui/scripting/ScScreensaver.hpp |   4 +
- src/openrct2-ui/windows/TitleMenu.cpp       |  21 ++--
- 5 files changed, 239 insertions(+), 19 deletions(-)
+ src/openrct2-ui/windows/TitleMenu.cpp       |  21 +--
+ 5 files changed, 300 insertions(+), 19 deletions(-)
  create mode 100644 src/openrct2-ui/screensaver/MenuIcon.h
 
 diff --git a/src/openrct2-ui/screensaver/MenuIcon.h b/src/openrct2-ui/screensaver/MenuIcon.h
@@ -155,11 +159,22 @@ index 0000000..bfa79bd
 +    };
 +} // namespace OpenRCT2::Ui::Screensaver
 diff --git a/src/openrct2-ui/screensaver/Overlay.cpp b/src/openrct2-ui/screensaver/Overlay.cpp
-index b0db237..8fe49c7 100644
+index b0db237..552e626 100644
 --- a/src/openrct2-ui/screensaver/Overlay.cpp
 +++ b/src/openrct2-ui/screensaver/Overlay.cpp
-@@ -22,6 +22,10 @@
+@@ -13,6 +13,7 @@
+ #include <chrono>
+ #include <cmath>
+ #include <cstdlib>
++#include <cctype>
+ #include <cstring>
+ #include <map>
+ #include <memory>
+@@ -20,8 +21,13 @@
+ #include <openrct2/Diagnostic.h>
+ #include <openrct2/PlatformEnvironment.h>
  #include <openrct2/core/File.h>
++#include <openrct2/core/FileSystem.hpp>
  #include <openrct2/core/Imaging.h>
  #include <openrct2/core/Path.hpp>
 +#include <openrct2/drawing/Drawing.Sprite.h>
@@ -169,7 +184,7 @@ index b0db237..8fe49c7 100644
  #include <openrct2/drawing/TTF.h>
  #include <unordered_map>
  #include <vector>
-@@ -127,6 +131,18 @@ namespace OpenRCT2::Ui::Screensaver::Overlay
+@@ -127,6 +133,57 @@ namespace OpenRCT2::Ui::Screensaver::Overlay
          return Path::Combine(env.GetDirectoryPath(DirBase::user, DirId::plugins), path);
      }
  
@@ -185,10 +200,67 @@ index b0db237..8fe49c7 100644
 +#endif
 +    }
 +
++#if !defined(_WIN32) && !defined(__APPLE__)
++    // Font folders differ between distributions (Debian: truetype/dejavu, Arch: TTF, Fedora:
++    // dejavu-sans-fonts), so the fixed paths are only a first guess: a font's file name is also
++    // looked up once under the usual font roots, folders below them included.
++    static std::string FindSystemFont(const std::string& fileName)
++    {
++        static std::unordered_map<std::string, std::string> index;
++        static bool indexed = false;
++        auto lower = [](std::string text) {
++            std::transform(text.begin(), text.end(), text.begin(), [](unsigned char c) { return std::tolower(c); });
++            return text;
++        };
++        if (!indexed)
++        {
++            indexed = true;
++            std::vector<std::string> roots = { "/usr/share/fonts", "/usr/local/share/fonts" };
++            const char* home = std::getenv("HOME");
++            if (home != nullptr)
++            {
++                roots.push_back(std::string(home) + "/.local/share/fonts");
++                roots.push_back(std::string(home) + "/.fonts");
++            }
++            for (const auto& root : roots)
++            {
++                std::error_code ec;
++                auto it = fs::recursive_directory_iterator(root, fs::directory_options::skip_permission_denied, ec);
++                for (; !ec && it != fs::recursive_directory_iterator(); it.increment(ec))
++                {
++                    std::error_code fileEc;
++                    if (it->is_regular_file(fileEc))
++                        index.emplace(lower(it->path().filename().string()), it->path().string());
++                }
++            }
++        }
++        auto found = index.find(lower(fileName));
++        return found != index.end() ? found->second : std::string();
++    }
++#endif
++
      static std::vector<std::string> DefaultFontCandidates(bool bold)
      {
          std::vector<std::string> result;
-@@ -202,6 +218,16 @@ namespace OpenRCT2::Ui::Screensaver::Overlay
+@@ -158,6 +215,17 @@ namespace OpenRCT2::Ui::Screensaver::Overlay
+         result.push_back("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf");
+         result.push_back("/usr/share/fonts/TTF/DejaVuSans.ttf");
+         result.push_back("/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf");
++        std::vector<std::string> names;
++        if (bold)
++            names = { "DejaVuSans-Bold.ttf", "LiberationSans-Bold.ttf", "NotoSans-Bold.ttf" };
++        for (const auto* name : { "DejaVuSans.ttf", "LiberationSans-Regular.ttf", "NotoSans-Regular.ttf" })
++            names.push_back(name);
++        for (const auto& name : names)
++        {
++            auto path = FindSystemFont(name);
++            if (!path.empty())
++                result.push_back(path);
++        }
+ #endif
+         return result;
+     }
+@@ -202,6 +270,25 @@ namespace OpenRCT2::Ui::Screensaver::Overlay
              auto font = OpenFontFile(ResolvePath(style.font), pixelSize);
              if (font != nullptr)
                  return font;
@@ -201,11 +273,20 @@ index b0db237..8fe49c7 100644
 +                    if (font != nullptr)
 +                        return font;
 +                }
++#if !defined(_WIN32) && !defined(__APPLE__)
++                auto found = FindSystemFont(style.font);
++                if (!found.empty())
++                {
++                    font = OpenFontFile(found, pixelSize);
++                    if (font != nullptr)
++                        return font;
++                }
++#endif
 +            }
          }
          for (const auto& path : DefaultFontCandidates(style.bold))
          {
-@@ -333,8 +359,53 @@ namespace OpenRCT2::Ui::Screensaver::Overlay
+@@ -333,8 +420,53 @@ namespace OpenRCT2::Ui::Screensaver::Overlay
          return layout;
      }
  
@@ -259,7 +340,7 @@ index b0db237..8fe49c7 100644
          auto path = ResolvePath(src);
          auto it = _pictures.find(path);
          if (it != _pictures.end())
-@@ -404,9 +475,11 @@ namespace OpenRCT2::Ui::Screensaver::Overlay
+@@ -404,9 +536,11 @@ namespace OpenRCT2::Ui::Screensaver::Overlay
                  int32_t h = Px(e.height, scale);
                  if (w <= 0 || h <= 0)
                  {
@@ -273,7 +354,7 @@ index b0db237..8fe49c7 100644
                  }
                  return { left, top, left + w, top + h };
              }
-@@ -512,16 +585,22 @@ namespace OpenRCT2::Ui::Screensaver::Overlay
+@@ -512,16 +646,22 @@ namespace OpenRCT2::Ui::Screensaver::Overlay
          uint32_t opacity = static_cast<uint32_t>(std::lround(255.0f * std::clamp(node.element.opacity, 0.0f, 1.0f)));
          if (opacity == 0)
              return;

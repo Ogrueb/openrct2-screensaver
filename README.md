@@ -26,7 +26,7 @@ game files, which are not included; neither are any parks (see `ExampleParks/REA
 
 | | |
 |---|---|
-| Operating system | Windows 10/11. The engine build is Windows x64; the mode's captions use the Segoe UI and Georgia system fonts; `Settings.cmd` and `.sv6` conversion use `openrct2.com`. The Python tools also run on Linux and macOS for building playlists (`settings.sh` starts the settings page there); a Linux engine build is being prepared and is untested. |
+| Operating system | Windows 10/11 (x64), and Linux x64 (tested on Fedora under Wayland, 2026-11-05; X11 untested). The mode's captions use the Segoe UI and Georgia system fonts on Windows and fall back to DejaVu, Liberation or Noto Sans on Linux. `Settings.cmd` and `.sv6` conversion use `openrct2.com` on Windows; `settings.sh` starts the settings page on Linux and macOS. On macOS only the Python tools run (no engine build). |
 | OpenRCT2 | v0.5.6 (`engine/VERSION`), the portable or installed release, with the two patched executables in place of the stock ones. On an unpatched v0.5.6 the plugin falls back to playing on the stock title screen, without the screensaver mode (below). |
 | Python | 3.11 or later, on PATH (`pythonw` for `Settings.cmd`). No third-party packages. |
 | Node | Only to rebuild the plugin (22 or later); the built plugin is committed. |
@@ -63,6 +63,30 @@ game files, which are not included; neither are any parks (see `ExampleParks/REA
 
 Upgrading: replace the two executables again and run Install again (the plugin, its icons and the
 companion scripts are replaced; views you set in the editor are kept, see "Setting views by hand").
+
+### Linux
+
+The patched engine for Linux is a whole build, not two replaced files: download
+`openrct2-v0.5.6-openrct2-screensaver-linux-x64-appimage` from the "Engine build" workflow (or the
+project's releases). The AppImage carries its own libraries, so it runs on any current distribution;
+unpack it rather than mounting it (no FUSE needed, and the tools get a plain executable):
+
+```sh
+mkdir -p ~/openrct2-ss && cd ~/openrct2-ss
+unzip ~/Downloads/openrct2-v0.5.6-openrct2-screensaver-linux-x64-appimage.zip
+chmod +x openrct2-*.AppImage && ./openrct2-*.AppImage --appimage-extract
+~/openrct2-ss/squashfs-root/AppRun        # the game; asks for the RCT2 folder on its first start
+```
+
+Give it the folder holding RCT2's `Data`, `ObjData` and `Tracks` (copied from a Windows install
+or GOG). The user folder is `~/.config/OpenRCT2` (Install writes there; the page's own files go to
+`~/.config/OpenRCT2/screensaver/`), and the settings page wants `squashfs-root/AppRun` as its
+OpenRCT2 path. `python3-tkinter` (or your distribution's Tk package) gives the page its file
+dialogs. Run it with `squashfs-root/AppRun --screensaver` for the mode straight away. The
+`linux-x64` tarball from the same workflow is built on Ubuntu 24.04 and needs that release's
+libraries (ICU 74, libzip 4); prefer the AppImage elsewhere. OpenRCT2's "Minimise fullscreen on
+focus loss" (Options, Display) makes a borderless window minimize when another window takes the
+focus; turn it off to keep the mode in the background.
 
 ### The stock engine
 
@@ -114,7 +138,9 @@ program as a wallpaper: give them `openrct2.exe --screensaver` (with `--user-dat
 if you also play OpenRCT2 normally at the same time, as both instances would otherwise share
 `plugin.store.json`). A window behind the desktop icons gets no keyboard or mouse input, so the
 keys and the bar work only when the game window itself has the focus. Multiple monitors are out
-of scope.
+of scope. On Linux, start `AppRun --screensaver` from an autostart entry
+(`~/.config/autostart/*.desktop`, `Exec=` that command) to bring the mode up at login; screensaver
+daemons such as XScreenSaver hand their programs a window to draw in, which the mode does not take.
 
 ## Playlists and views
 

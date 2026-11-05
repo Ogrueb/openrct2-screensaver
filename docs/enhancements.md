@@ -84,6 +84,11 @@ in-depth performance testing dropped (owner: the patches leave the performance-s
 alone, so platform support is what needs establishing; one quick suite run passed). Fixed from the
 pass: the stock Options window stayed visible in the mode (patch 0011), the settings page's Browse
 folder and its "Not built yet" after a build on files dated in the future.
+Basic Linux support marked done (owner, 2026-11-05) after two last changes: patch 0015 finds the
+overlay's fonts by file name under the usual font folders (Fedora's text had needed links), and the
+README's Installing has a Linux section (the AppImage, `--appimage-extract`, the RCT2 folder,
+`~/.config/OpenRCT2`, an autostart entry for hosting). 6 is documented only (autostart; XScreenSaver's
+window hook not supported); X11 stays untested.
 
 Order: 2 and 3 can be built in cloud sessions now (2 is checked by the workflow run itself); 1 is the
 owner's; 4-7 follow 1. Estimate: 2-3 a day; 4-7 a day on the machine plus fixes.

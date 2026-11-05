@@ -461,6 +461,16 @@ Each item's requirements, acceptance checks and open decisions are worked out in
 
 ### Linux and macOS support (owner, 2026-11-03: the highest-priority enhancement)
 
+**Basic Linux support: done (2026-11-03 to 11-05).** The "Engine build" workflow builds a Linux
+tarball (Ubuntu 24.04) and an AppImage (runs on Fedora, whose ICU and libzip differ from Ubuntu's);
+`settings.sh` starts the settings page; the owner's pass on a Fedora laptop under Wayland passed the
+mode, the bar, keys, editor, park changes, renderers, window styles and the tools (`docs/testing-linux.md`),
+and the overlay finds its fonts under any distribution's font folders (patch 0015). The README's
+Installing has a Linux section. In-depth performance testing was left out (owner: the patches leave
+the performance-sensitive engine code alone). Not tested, known limits: X11/XWayland, sound, scale
+factor 2.0 (1.5 passed). Left open: XScreenSaver hosting (the mode does not draw into a window it is
+handed) and anything for macOS (no engine build; only the Python tools run there).
+
 OpenRCT2 ships official Linux and macOS builds, and most of this project is already portable:
 the generator resolves the user folder on all three systems (`tools/userdata.py`: XDG config on
 Linux, Application Support on macOS), checks for a running game with `pgrep` off Windows, takes
