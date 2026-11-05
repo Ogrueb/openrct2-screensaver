@@ -7,6 +7,9 @@
 #   installs vary too much to replace files in one.
 # - Linux x64 AppImage: the same build bundled with its libraries (OpenRCT2's AppImage recipe), for
 #   distributions whose libraries differ from Ubuntu 24.04's (Fedora: ICU, libzip).
+# - With "publish_tag" on a release build: a draft GitHub release holding the Windows zip and the
+#   AppImage (labeled beta), its notes from docs/releases/<tag>.md. Publishing it stays a click on
+#   the release page.
 name: Engine build
 
 on:
@@ -16,6 +19,10 @@ on:
         description: "Release build: leave out the diagnostics patch (0016)"
         type: boolean
         default: false
+      publish_tag:
+        description: "Make a draft GitHub release with this tag (e.g. v0.2.0; needs Release build). Notes: docs/releases/<tag>.md"
+        type: string
+        default: ""
   push:
     branches:
       - main
@@ -209,3 +216,42 @@ jobs:
           name: ${{ steps.appimage.outputs.name }}-appimage
           path: openrct2/artifacts/${{ steps.appimage.outputs.name }}.AppImage
           if-no-files-found: error
+
+  release:
+    name: Draft release
+    if: github.event_name == 'workflow_dispatch' && inputs.release && inputs.publish_tag != ''
+    needs: [windows, linux-appimage]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ inputs.publish_tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout openrct2-screensaver
+        uses: actions/checkout@v4
+      - name: Download the builds
+        uses: actions/download-artifact@v4
+        with:
+          path: builds
+      - name: Make the release files
+        id: files
+        shell: bash
+        run: |
+          ref=$(tr -d '[:space:]' < engine/VERSION)
+          test -f "docs/releases/$TAG.md" || { echo "missing release notes: docs/releases/$TAG.md"; exit 1; }
+          if gh release view "$TAG" > /dev/null 2>&1; then echo "release $TAG exists already"; exit 1; fi
+          mkdir dist
+          win=openrct2-$ref-openrct2-screensaver-x64-release
+          (cd "builds/$win" && zip -9 "../../dist/$win.zip" openrct2.exe openrct2.com)
+          app=openrct2-$ref-openrct2-screensaver-linux-x64-release
+          cp "builds/$app-appimage/$app.AppImage" "dist/openrct2-$ref-openrct2-screensaver-linux-x64-beta.AppImage"
+          ls -l dist
+      - name: Create the draft release
+        shell: bash
+        run: |
+          # The notes file's first line is the release's title ("# v0.2.0: ..."), the rest its notes
+          title=$(head -n 1 "docs/releases/$TAG.md" | sed 's/^# *//')
+          tail -n +2 "docs/releases/$TAG.md" > notes.md
+          gh release create "$TAG" --draft --target "$GITHUB_SHA" --title "$title" \
+            --notes-file notes.md dist/*

@@ -66,14 +66,15 @@ companion scripts are replaced; views you set in the editor are kept, see "Setti
 
 ### Linux
 
-The patched engine for Linux is a whole build, not two replaced files: download
-`openrct2-v0.5.6-openrct2-screensaver-linux-x64-appimage` from the "Engine build" workflow (or the
-project's releases). The AppImage carries its own libraries, so it runs on any current distribution;
-unpack it rather than mounting it (no FUSE needed, and the tools get a plain executable):
+The patched engine for Linux (beta) is a whole build, not two replaced files: download
+`openrct2-v0.5.6-openrct2-screensaver-linux-x64-beta.AppImage` from the project's releases (or the
+`linux-x64-appimage` zip from the "Engine build" workflow, unzipped first). The AppImage carries its
+own libraries, so it runs on any current distribution; unpack it rather than mounting it (no FUSE
+needed, and the tools get a plain executable):
 
 ```sh
 mkdir -p ~/openrct2-ss && cd ~/openrct2-ss
-unzip ~/Downloads/openrct2-v0.5.6-openrct2-screensaver-linux-x64-appimage.zip
+cp ~/Downloads/openrct2-v0.5.6-openrct2-screensaver-linux-x64-beta.AppImage .
 chmod +x openrct2-*.AppImage && ./openrct2-*.AppImage --appimage-extract
 ~/openrct2-ss/squashfs-root/AppRun        # the game; asks for the RCT2 folder on its first start
 ```
