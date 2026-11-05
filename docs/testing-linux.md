@@ -188,5 +188,6 @@ The tools themselves passed headless (above); on the VM only what needs a deskto
 ## 6. Report back
 
 Send the ticked list, the notes on fonts, renderers and window styles, and any terminal output from
-failures. Fixes known in advance: the overlay's font paths for Fedora (a small engine patch change, to
-make step 3's symlinks unnecessary).
+failures. Since 2026-11-05 the overlay finds DejaVu, Liberation or Noto Sans by file name under the
+system's font folders (patch 0015), so builds after that need no symlinks: the "With fonts" step then
+only checks that text shows without them.

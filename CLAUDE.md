@@ -137,7 +137,7 @@ See README.md for usage.
   main-thread work. `TitleSequence.backgroundLoading` tells the plugin, which then skips the
   fade. Patches are `git format-patch` output against the tag in `engine/VERSION`;
   `.github/workflows/engine.yml` builds Windows x64 binaries (about 15 min) that replace
-  `openrct2.exe`/`openrct2.com` in a stock install, on pushes to `main` touching `engine/`
+  `openrct2.exe`/`openrct2.com` in a stock install, plus a Linux tarball (Ubuntu 24.04 libraries) and an AppImage (any distribution; Fedora uses it), on pushes to `main` touching `engine/`
   or by manual run (pick the branch). The series is grouped by topic (owner, 2026-11-03; table in `engine/README.md`): 0001 palette,
   0002 ride music, 0003-0008 background loading, 0009-0010 plugin API, 0011-0015 screensaver mode, and last
   0016 diagnostics (park load timings and the perf log), which stays for testing and is dropped for release
@@ -532,6 +532,7 @@ See README.md for usage.
   (`--install` puts it in the plugin's settings and the screensaver mode applies it in memory, 2026-11-01; it used to set `config.ini` `title_theme`), `[[park]] use = false`; `events = false` drops shows too).
 - `docs/view-generation.md`: the generator's stages and every `[views]` option, for users (the README
   keeps a nine-line summary; owner, 2026-11-03: the full text there was a wall).
-- `docs/testing.md`: what local test runs need to check; `docs/testing-linux.md` the Linux build's pass (Fedora VM).
+- `docs/testing.md`: what local test runs need to check; `docs/testing-linux.md` the Linux build's pass (Fedora; basic Linux support done 2026-11-05: the
+  AppImage under Wayland, README "Linux" under Installing; X11 and sound untested).
 - `docs/roadmap.md`: planned work, and what was done with the decisions made on the way.
 - `docs/known-issues.md`: problems in parks or third-party content that the project does not fix.
