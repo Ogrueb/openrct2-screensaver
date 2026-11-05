@@ -518,7 +518,7 @@ See README.md for usage.
   warnings sit in the footer next to Cancel/Save (no pop-ups), previews match parks by key (renderviews.py
   writes `renders.json`) and open the contact sheet.
 - `tools/bundle.py`: playlist bundles (owner, 2026-10-31): a zip of the playlist, its views file and the user's
-  changed profiles, optionally with the park files and the build; import unpacks into the user folder (parks
+  changed profiles, optionally with the ticked parks' files and the build (unticked parks by name only, 2026-11-05); import unpacks into the user folder (parks
   under `bundles/<slug>/`, a build into `build/`) and looks for parks it lacks in the park folder by file name.
   The settings page's top bar: Build (highlighted), then Render, Install (`mksequence.py --install-built
   <name>.result.json`, which every build writes) and Export, grayed until the open playlist has a current

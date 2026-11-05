@@ -305,7 +305,7 @@ class Session:
                 "writtenHere": bool(self.path) and written_here(self.path), "data": self.data, "parks": parks,
                 "built": self.built() is not None, "builtAt": built_at(self.built()),
                 "parkBytes": sum(os.path.getsize(os.path.join(self.base, e["file"])) for e in entries
-                                 if os.path.exists(os.path.join(self.base, e["file"])))}
+                                 if e.get("use", True) and os.path.exists(os.path.join(self.base, e["file"])))}
 
     def last_build(self):
         """The last build's result file when it is this playlist's, changed since or not."""
