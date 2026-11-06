@@ -72,3 +72,39 @@ class LooseObjects(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Downloads(unittest.TestCase):
+    """How a folder given on the command line splits into downloads."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = self.tmp.name
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def touch(self, *names):
+        for n in names:
+            path = os.path.join(self.dir, n)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            open(path, "wb").close()
+
+    def names(self, each=False):
+        return [os.path.basename(p) for p in importparks.downloads([self.dir], each)]
+
+    def test_folder_of_loose_saves_is_one_park_per_file(self):
+        self.touch("Fenrir.SV4", "Fiesta!.SV4", "Riverwood Theme Park.SV6", "New.park", "readme.txt")
+        self.assertEqual(self.names(), ["Fenrir.SV4", "Fiesta!.SV4", "New.park", "Riverwood Theme Park.SV6"])
+
+    def test_one_save_is_one_download(self):
+        self.touch("Park.SV6", "readme.txt")
+        self.assertEqual(self.names(), [os.path.basename(self.dir)])
+
+    def test_saves_with_objects_are_one_download(self):
+        self.touch("Park v1.SV6", "Park v2.SV6", "SCENERY.DAT")
+        self.assertEqual(self.names(), [os.path.basename(self.dir)])
+
+    def test_zips_and_loose_saves_together(self):
+        self.touch("A.zip", "B.SV4", "C.SC4")
+        self.assertEqual(self.names(), ["A.zip", "B.SV4", "C.SC4"])
