@@ -207,6 +207,10 @@ def convert(openrct2, archive, member):
             # Without the terminal colour codes OpenRCT2 writes (TOML comments can't hold them).
             log = re.sub(r"\x1b\[[0-9;]*[A-Za-z]|[\x00-\x08\x0b-\x1f\x7f]", "",
                          result.stdout + result.stderr).strip().splitlines()
+            missing = [m.strip() for m in re.findall(r"\[([^\]]{1,8})\]\s*Object not found", "\n".join(log))]
+            if missing:
+                raise RuntimeError("openrct2 convert failed: %d objects missing (install them first): %s"
+                                   % (len(missing), ", ".join(dict.fromkeys(missing))))
             raise RuntimeError("openrct2 convert failed (exit %d): %s"
                                % (result.returncode, " / ".join(log[-3:]) or "no output"))
         with open(out, "rb") as f:
