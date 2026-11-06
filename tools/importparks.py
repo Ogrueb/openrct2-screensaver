@@ -12,7 +12,7 @@ For each download:
   copied into OpenRCT2's user object folder, under object/rct-screensaver/, unless an object with
   the same identifier is installed already; installed.json there records which imports (by the downloads
   given) use each file, so importing a folder again replaces only that folder's objects;
-- RCT2 saves (.sv6, .sc6) are converted to .park with `openrct2 convert` (needs --openrct2;
+- RCT1 and RCT2 saves and scenarios (.sv4, .sc4, .sv6, .sc6) are converted to .park with `openrct2 convert` (needs --openrct2;
   the objects above are installed first, as some saves don't open without them);
 - the park is stored gzip-compressed as <library>/<download>.park: OpenRCT2 v0.5.x saves with
   zstd, which Python before 3.14 reads only with tools/unzstd.py, slowly;
@@ -25,8 +25,9 @@ Writes <library>/<name>.toml, a playlist of every imported park (rewritten by ea
 it before editing), and <library>/import.json (what was done per download). Parks already in
 the library are reused unless their download changed or --force is given.
 
-A folder holding .zip files is read as a folder of downloads (each zip and subfolder is one);
-any other folder is one download, unless --each says each of its entries is one. A download
+A folder holding .zip files is read as a folder of downloads (each zip and subfolder is one), and
+a folder of several loose saves with no object files beside them (an RCT1/RCT2 Parks folder) as
+one park per save; any other folder is one download, unless --each says each of its entries is one. A download
 named again later on the command line (e.g. a folder of fixed re-releases) replaces the earlier.
 """
 import argparse, hashlib, json, os, re, shutil, struct, subprocess, sys, tempfile
@@ -36,6 +37,7 @@ import parkinfo  # noqa: E402
 from mksequence import default_user_dir, slug  # noqa: E402
 
 OBJECT_EXTENSIONS = (".parkobj", ".dat")
+SAVE_EXTENSIONS = (".park",) + parkinfo.LEGACY_EXTENSIONS
 OBJECT_SUBDIR = "rct-screensaver"  # under the user object folder
 GZIP, ZSTD = 1, 2
 
@@ -49,8 +51,13 @@ def downloads(paths, each=False):
             out.append(path)
             continue
         entries = sorted(os.path.join(path, e) for e in os.listdir(path) if not parkinfo.is_junk(e))
-        if each or any(e.lower().endswith(".zip") for e in entries):
-            out += [e for e in entries if os.path.isdir(e) or e.lower().endswith(".zip")]
+        saves = [e for e in entries if os.path.isfile(e) and e.lower().endswith(SAVE_EXTENSIONS)]
+        objects = [e for e in entries if os.path.isfile(e) and e.lower().endswith(OBJECT_EXTENSIONS)]
+        # A folder of loose saves (several parks side by side, no objects beside them, e.g. an
+        # RCT1/RCT2 Parks folder) holds one park per file, not one download with versions.
+        loose = len(saves) > 1 and not objects
+        if each or loose or any(e.lower().endswith(".zip") for e in entries):
+            out += [e for e in entries if os.path.isdir(e) or e.lower().endswith(".zip") or e in saves]
         else:
             out.append(path)
     # A download given again later (a fixed re-release, same name) replaces the earlier one.
@@ -200,6 +207,10 @@ def convert(openrct2, archive, member):
             # Without the terminal colour codes OpenRCT2 writes (TOML comments can't hold them).
             log = re.sub(r"\x1b\[[0-9;]*[A-Za-z]|[\x00-\x08\x0b-\x1f\x7f]", "",
                          result.stdout + result.stderr).strip().splitlines()
+            missing = [m.strip() for m in re.findall(r"\[([^\]]{1,8})\]\s*Object not found", "\n".join(log))]
+            if missing:
+                raise RuntimeError("openrct2 convert failed: %d objects missing (install them first): %s"
+                                   % (len(missing), ", ".join(dict.fromkeys(missing))))
             raise RuntimeError("openrct2 convert failed (exit %d): %s"
                                % (result.returncode, " / ".join(log[-3:]) or "no output"))
         with open(out, "rb") as f:
@@ -274,7 +285,7 @@ def import_one(path, args, user_dir, library, previous):
             break
         if kind == "legacy":
             if not args.openrct2:
-                record["warnings"].append("RCT2 save %s needs --openrct2 to be converted" % member)
+                record["warnings"].append("RCT save %s needs --openrct2 to be converted" % member)
                 continue
             try:
                 raw = convert(args.openrct2, archive, member)

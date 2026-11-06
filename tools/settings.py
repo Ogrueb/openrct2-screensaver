@@ -203,7 +203,7 @@ def scan_folder(folder):
         if parkinfo.is_junk(name):
             continue
         if low.endswith(LEGACY):
-            reasons.append("%s is an RCT2 save (needs converting)" % name)
+            reasons.append("%s is an RCT save (needs converting)" % name)
         elif low.endswith(OBJECTS):
             reasons.append("%s is a loose object (needs installing)" % name)
         elif low.endswith(".zip") or os.path.isdir(path):
@@ -213,7 +213,7 @@ def scan_folder(folder):
             except (OSError, ValueError, zipfile.BadZipFile):
                 continue
             if archive.legacy() and not parks:
-                reasons.append("%s holds an RCT2 save (needs converting)" % name)
+                reasons.append("%s holds an RCT save (needs converting)" % name)
                 continue
             if any(f[0].lower().endswith(OBJECTS) for f in archive.files):
                 reasons.append("%s ships loose objects (need installing)" % name)
