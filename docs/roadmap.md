@@ -3,7 +3,7 @@
 What is done, what is being worked on now, and what comes next, in the owner's order
 (2026-10-28, with the configurable generator added before Release on 2026-10-29; its wiring
 to the settings UI started 2026-10-31, ahead of the wrapper). Last rebuilt 2026-10-30, updated
-2026-11-03. Problems in parks or other people's content that the project does not fix are in
+2026-11-07 (after the v0.2.1 release). Problems in parks or other people's content that the project does not fix are in
 `docs/known-issues.md`; the decisions behind each piece are in `CLAUDE.md`.
 
 ## At a glance
@@ -18,10 +18,15 @@ to the settings UI started 2026-10-31, ahead of the wrapper). Last rebuilt 2026-
 | 1e | Shuffle and random view order | Done (2026-10-31; PRs #105, #106, #109, #110) |
 | 5 | Configurable generator (final version) | Done (2026-10-31 to 11-02): the settings page, renders and drawing pages in daily use on the PC; Show titles wired 2026-11-03 |
 | 2 | Wallpaper wrapper | Done (2026-10-31 to 11-03; PRs up to #158): screensaver mode, overlay, controls bar, settings panel, view editor, park name captions with frame styles; live-tested by the owner |
-| 3 | Performance testing with logging, and optimizations | Now (framework built 2026-11-02; first runs done 2026-11-03; PresentMon next; overnight soaks moved to potential enhancements) |
-| 6 | Release | v0.1.0 published 2026-11-03 (github.com/Ogrueb/openrct2-screensaver); the frozen tool builds remain |
+| 3 | Performance testing with logging, and optimizations | Now, post-release (framework built 2026-11-02; first runs done 2026-11-03; PresentMon next; overnight soaks moved to potential enhancements) |
+| 6 | Release | Done: v0.1.0 (2026-11-03, github.com/Ogrueb/openrct2-screensaver), v0.2.0 (2026-11-05, fixes and a Linux beta), v0.2.1 (2026-11-06, import fixes) |
+| 7 | Standalone tool builds (settings page, drawing page) | Now, post-release: split out of the release step |
+| L | Basic Linux support | Done (2026-11-03 to 11-05), shipped as a beta AppImage in v0.2.0 |
 
-## Now
+## Now (post-release)
+
+The project is released (v0.1.0 on 2026-11-03, v0.2.0 on 11-05, v0.2.1 on 11-06); nothing below blocks a
+release.
 
 ### 3. Performance testing with logging, and any optimizations it calls for
 
@@ -60,11 +65,28 @@ fragility (deferred object unload, sliced finish).
 Check for memory leaks (owner, 2026-10-30): the 1 h short-park soak found no leak worth chasing;
 the overnight runs are a potential enhancement now (see "Overnight memory soaks" there).
 
-### 6. Release
+### 7. Standalone tool builds (split out of the release step, 2026-11-07)
+
+The tools still need a Python 3.11+ install (`Settings.cmd`, `./settings.sh`). Left from the
+release step:
+
+- Package `tools/drawviews.py` (with its page) as a standalone Windows `.exe` (PyInstaller or
+  similar, built in CI) so drawing views needs no Python install (owner, 2026-10-27).
+- Package the settings UI server (`tools/settings.py`, see `docs/settings-ui-wiring.md`) the same
+  way, and test it there (owner, 2026-10-31): in a frozen build the tools are called in-process,
+  not as `python` subprocesses; check SmartScreen and antivirus warnings on the unsigned build.
+
+## Done recently, with the decisions made on the way
+
+### 6. Release (done: v0.1.0 2026-11-03, v0.2.0 11-05, v0.2.1 11-06)
 
 v0.1.0 was published on 2026-11-03 from the public repository `Ogrueb/openrct2-screensaver`, with
-the release engine build (0001-0015) and the source archive. What remains here is packaging the
-tools without a Python install.
+the release engine build (0001-0015) and the source archive. Since then (notes in `docs/releases/`):
+v0.2.0, fixes found after v0.1.0 (stock windows over the mode, the settings page's folder and build
+state, unticked parks in bundles) and the Linux AppImage as a beta; v0.2.1, park import fixes
+(a folder of loose RCT1/RCT2 saves imports every save, `.sv4`/`.sc4` convert, a failed convert lists
+every missing object), the settings page's footer link to the repository, and a smaller AppImage.
+The standalone tool builds moved to step 7 under "Now".
 
 - License: GPLv3 (owner, 2026-11-03; `LICENSE`, the plugin's `package.json`).
 - The example parks left the repository (owner, 2026-11-03): `ExampleParks/README.md` lists their
@@ -72,17 +94,10 @@ tools without a Python install.
 - Package the patched OpenRCT2 builds without the diagnostics patch (0016: load timings, perf log):
   the Engine build workflow's "Release build" input (2026-11-03); v0.1.0 carries the two
   executables, so users need no Actions login.
-- Package `tools/drawviews.py` (with its page) as a standalone Windows `.exe` (PyInstaller or
-  similar, built in CI) so drawing views needs no Python install (owner, 2026-10-27).
-- Package the settings UI server (`tools/settings.py`, see `docs/settings-ui-wiring.md`) the same
-  way, and test it there (owner, 2026-10-31): in a frozen build the tools are called in-process,
-  not as `python` subprocesses; check SmartScreen and antivirus warnings on the unsigned build.
 - The stock-engine stopgaps are gone (owner, 2026-11-03): the generator's palette index 10 rewrite
   (`fix_ui_palette`, `--keep-palette`) and the plugin's fade through a black window around the
   stock engine's park loads. The plugin still plays on a stock engine (autostart, toolbox items,
   the window editor), with cuts between parks; patch 0001 handles the palette.
-
-## Done recently, with the decisions made on the way
 
 ### 5. Wire the generator scripts to the settings UI (done, 2026-10-31 to 11-02)
 
@@ -461,7 +476,7 @@ Each item's requirements, acceptance checks and open decisions are worked out in
 
 ### Linux and macOS support (owner, 2026-11-03: the highest-priority enhancement)
 
-**Basic Linux support: done (2026-11-03 to 11-05).** The "Engine build" workflow builds a Linux
+**Basic Linux support: done (2026-11-03 to 11-05), released as a beta in v0.2.0.** The "Engine build" workflow builds a Linux
 tarball (Ubuntu 24.04) and an AppImage (runs on Fedora, whose ICU and libzip differ from Ubuntu's);
 `settings.sh` starts the settings page; the owner's pass on a Fedora laptop under Wayland passed the
 mode, the bar, keys, editor, park changes, renderers, window styles and the tools (`docs/testing-linux.md`),
