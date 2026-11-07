@@ -194,7 +194,7 @@ files (every playlist and profile in the repo reads back equal).
 - **Python 3.11+**, because of `tomllib`. On Python older than 3.14, a zstd park takes 3-6 s to
   read, so the first scan of a large folder is slow. Importing (which stores parks as gzip) and
   the facts cache make later scans fast. Accepted.
-- **Packaging** as a standalone `.exe` is tested at the release stage (roadmap step 6). A frozen
+- **Packaging** as a standalone `.exe` is tested when it is built (roadmap: potential enhancement "Standalone tool builds"). A frozen
   build can't run `python mksequence.py`, so the server calls the tools in-process there.
   SmartScreen and antivirus warnings on unsigned PyInstaller builds are checked then too.
 

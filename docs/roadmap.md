@@ -3,7 +3,8 @@
 What is done, what is being worked on now, and what comes next, in the owner's order
 (2026-10-28, with the configurable generator added before Release on 2026-10-29; its wiring
 to the settings UI started 2026-10-31, ahead of the wrapper). Last rebuilt 2026-10-30, updated
-2026-11-07 (after the v0.2.1 release). Problems in parks or other people's content that the project does not fix are in
+2026-11-07 (after the v0.2.1 release; nothing is in progress, all open work is under "Potential
+enhancements"). Problems in parks or other people's content that the project does not fix are in
 `docs/known-issues.md`; the decisions behind each piece are in `CLAUDE.md`.
 
 ## At a glance
@@ -18,63 +19,10 @@ to the settings UI started 2026-10-31, ahead of the wrapper). Last rebuilt 2026-
 | 1e | Shuffle and random view order | Done (2026-10-31; PRs #105, #106, #109, #110) |
 | 5 | Configurable generator (final version) | Done (2026-10-31 to 11-02): the settings page, renders and drawing pages in daily use on the PC; Show titles wired 2026-11-03 |
 | 2 | Wallpaper wrapper | Done (2026-10-31 to 11-03; PRs up to #158): screensaver mode, overlay, controls bar, settings panel, view editor, park name captions with frame styles; live-tested by the owner |
-| 3 | Performance testing with logging, and optimizations | Now, post-release (framework built 2026-11-02; first runs done 2026-11-03; PresentMon next; overnight soaks moved to potential enhancements) |
+| 3 | Performance testing with logging, and optimizations | Potential enhancement (2026-11-07), grouped with the overnight soaks: framework built 2026-11-02, first runs 2026-11-03, PresentMon next |
 | 6 | Release | Done: v0.1.0 (2026-11-03, github.com/Ogrueb/openrct2-screensaver), v0.2.0 (2026-11-05, fixes and a Linux beta), v0.2.1 (2026-11-06, import fixes) |
-| 7 | Standalone tool builds (settings page, drawing page) | Now, post-release: split out of the release step |
+| 7 | Standalone tool builds (settings page, drawing page) | Potential enhancement (2026-11-07), split out of the release step |
 | L | Basic Linux support | Done (2026-11-03 to 11-05), shipped as a beta AppImage in v0.2.0 |
-
-## Now (post-release)
-
-The project is released (v0.1.0 on 2026-11-03, v0.2.0 on 11-05, v0.2.1 on 11-06); nothing below blocks a
-release.
-
-### 3. Performance testing with logging, and any optimizations it calls for
-
-Framework built (2026-11-02, thread "Plan the performance-testing process"; `docs/performance-testing.md`):
-engine patch 0016 (perf log), the plugin's bench mode and marks, `tools/perfrun.py` and
-`tools/perfreport.py`, suites quick, renderers, survey, features and soak. First runs done
-(2026-11-02/03 on the PC; the reports are kept with the PC's `build\perf\` run folders and in the
-project files, not in the repository): quick (the baseline), renderers (OpenGL with
-multithreading fastest, then picked for the other suites), survey, features and a 1 h short-park soak
-(memory 83 MB/h, 1.3 MB per switch as parks repeat; no crash). Next: a PresentMon run (owner's OK,
-2026-11-03) to tell the GPU's time from vsync waits in OpenGL's ~31 ms present. The overnight soaks
-moved to potential enhancements (owner, 2026-11-03), below.
-
-From the wrapper design (owner, 2026-10-31): consider here whether guests and vehicles out of view
-could update less often (a change to the core update loop, so only if the simulation proves the cost).
-
-Owner, 2026-10-27. Thorough A/B runs (each feature on and off, same park, view and window size)
-of what the screensaver adds to the engine: the engine patches (background loading, palette
-split, ride music and fades), the plugin itself, parks' companion plugins, large-map loading
-and the load fade/loading screens, comparing the stock, CI and patched builds by numbers. The
-renderer may need to be a test dimension too: software against OpenGL (owner, 2026-10-28). Log
-frame times split into simulation update, plugin (script) time and drawing, plus park switch
-stalls, to a file per run (engine timing patch or a plugin), so results can be compared and
-kept in `docs/`.
-
-Known so far: on the PC (1920×1080, software renderer) some views drop to about 15 fps, worst on
-certain zoomed-in views of larger parks; Europa-Park (365×327, 17k guests, 523 rides) plays at
-under a third of other parks' frame rate at every zoom, though it loads fine; OpenRCT2's
-multithreaded drawing evens it out, but loading screens still stall. Sambhava's mist companion
-stalls frames during pans (see per-park enhancements). Measure frame rates across the imported
-MoreParks set to see whether large-park slowdowns are common enough for an engine patch, or
-whether leaving out oversized parks (a size filter in step 5) is enough. The remaining 15-37 ms
-hitch per park switch is visible but accepted (owner, 2026-10-27): not worth more engine
-fragility (deferred object unload, sliced finish).
-
-Check for memory leaks (owner, 2026-10-30): the 1 h short-park soak found no leak worth chasing;
-the overnight runs are a potential enhancement now (see "Overnight memory soaks" there).
-
-### 7. Standalone tool builds (split out of the release step, 2026-11-07)
-
-The tools still need a Python 3.11+ install (`Settings.cmd`, `./settings.sh`). Left from the
-release step:
-
-- Package `tools/drawviews.py` (with its page) as a standalone Windows `.exe` (PyInstaller or
-  similar, built in CI) so drawing views needs no Python install (owner, 2026-10-27).
-- Package the settings UI server (`tools/settings.py`, see `docs/settings-ui-wiring.md`) the same
-  way, and test it there (owner, 2026-10-31): in a frozen build the tools are called in-process,
-  not as `python` subprocesses; check SmartScreen and antivirus warnings on the unsigned build.
 
 ## Done recently, with the decisions made on the way
 
@@ -86,7 +34,7 @@ v0.2.0, fixes found after v0.1.0 (stock windows over the mode, the settings page
 state, unticked parks in bundles) and the Linux AppImage as a beta; v0.2.1, park import fixes
 (a folder of loose RCT1/RCT2 saves imports every save, `.sv4`/`.sc4` convert, a failed convert lists
 every missing object), the settings page's footer link to the repository, and a smaller AppImage.
-The standalone tool builds moved to step 7 under "Now".
+The standalone tool builds became a potential enhancement.
 
 - License: GPLv3 (owner, 2026-11-03; `LICENSE`, the plugin's `package.json`).
 - The example parks left the repository (owner, 2026-11-03): `ExampleParks/README.md` lists their
@@ -521,6 +469,65 @@ Requirements, in order:
 
 Estimate: a day of work plus a test pass on the machine. Not a release blocker (owner).
 
+### Performance testing and overnight memory soaks (step 3 and the soaks grouped here, owner, 2026-11-07)
+
+The release came first; what is left of step 3 joins the overnight soaks the owner had moved here on
+2026-11-03.
+
+
+Framework built (2026-11-02, thread "Plan the performance-testing process"; `docs/performance-testing.md`):
+engine patch 0016 (perf log), the plugin's bench mode and marks, `tools/perfrun.py` and
+`tools/perfreport.py`, suites quick, renderers, survey, features and soak. First runs done
+(2026-11-02/03 on the PC; the reports are kept with the PC's `build\perf\` run folders and in the
+project files, not in the repository): quick (the baseline), renderers (OpenGL with
+multithreading fastest, then picked for the other suites), survey, features and a 1 h short-park soak
+(memory 83 MB/h, 1.3 MB per switch as parks repeat; no crash). Next: a PresentMon run (owner's OK,
+2026-11-03) to tell the GPU's time from vsync waits in OpenGL's ~31 ms present.
+
+From the wrapper design (owner, 2026-10-31): consider here whether guests and vehicles out of view
+could update less often (a change to the core update loop, so only if the simulation proves the cost).
+
+Owner, 2026-10-27. Thorough A/B runs (each feature on and off, same park, view and window size)
+of what the screensaver adds to the engine: the engine patches (background loading, palette
+split, ride music and fades), the plugin itself, parks' companion plugins, large-map loading
+and the load fade/loading screens, comparing the stock, CI and patched builds by numbers. The
+renderer may need to be a test dimension too: software against OpenGL (owner, 2026-10-28). Log
+frame times split into simulation update, plugin (script) time and drawing, plus park switch
+stalls, to a file per run (engine timing patch or a plugin), so results can be compared and
+kept in `docs/`.
+
+Known so far: on the PC (1920×1080, software renderer) some views drop to about 15 fps, worst on
+certain zoomed-in views of larger parks; Europa-Park (365×327, 17k guests, 523 rides) plays at
+under a third of other parks' frame rate at every zoom, though it loads fine; OpenRCT2's
+multithreaded drawing evens it out, but loading screens still stall. Sambhava's mist companion
+stalls frames during pans (see per-park enhancements). Measure frame rates across the imported
+MoreParks set to see whether large-park slowdowns are common enough for an engine patch, or
+whether leaving out oversized parks (a size filter in step 5) is enough. The remaining 15-37 ms
+hitch per park switch is visible but accepted (owner, 2026-10-27): not worth more engine
+fragility (deferred object unload, sliced finish).
+
+Check for memory leaks (owner, 2026-10-30): the 1 h short-park soak found no leak worth chasing.
+
+#### Overnight memory soaks (owner moved them out of step 3, 2026-11-03)
+
+The 1 h short-park soak (2026-11-03, report with the PC's run folder) settled to 83 MB/h,
+1.3 MB per switch, over 64 switches of 10 parks, with no crash; first visits to new parks cost 24-38 MB
+each (survey, features). Left open: whether that keeps flattening over 9 h, the QuickJS heap's slow
+growth (4.7 → 7.3 MB in the hour), thermal throttling on the PC, and the crash after hours of play the
+owner saw on 2026-10-30. `perf/soak.toml` is ready: `full` (9 h) first, then `no-background-loading`,
+`no-companions`, `opengl` or `two-parks` only if `full` shows growth. Each night needs the owner's OK.
+
+### Standalone tool builds (split out of the release step; an enhancement, owner, 2026-11-07)
+
+The tools still need a Python 3.11+ install (`Settings.cmd`, `./settings.sh`). Left from the
+release step:
+
+- Package `tools/drawviews.py` (with its page) as a standalone Windows `.exe` (PyInstaller or
+  similar, built in CI) so drawing views needs no Python install (owner, 2026-10-27).
+- Package the settings UI server (`tools/settings.py`, see `docs/settings-ui-wiring.md`) the same
+  way, and test it there (owner, 2026-10-31): in a frozen build the tools are called in-process,
+  not as `python` subprocesses; check SmartScreen and antivirus warnings on the unsigned build.
+
 ### Live view editor in the screensaver mode (owner, 2026-11-02)
 
 The mode's UI is built in the order controls bar and load cover, captions, then the editor
@@ -579,15 +586,6 @@ A "Show titles" setting with three choices:
 
 The setting is stored in the playlist (owner, 2026-10-30), and a plugin setting
 (`RCTScreensaver.settings`) can override it.
-
-### Overnight memory soaks (owner moved them here from step 3, 2026-11-03)
-
-The 1 h short-park soak (2026-11-03, report with the PC's run folder) settled to 83 MB/h,
-1.3 MB per switch, over 64 switches of 10 parks, with no crash; first visits to new parks cost 24-38 MB
-each (survey, features). Left open: whether that keeps flattening over 9 h, the QuickJS heap's slow
-growth (4.7 → 7.3 MB in the hour), thermal throttling on the PC, and the crash after hours of play the
-owner saw on 2026-10-30. `perf/soak.toml` is ready: `full` (9 h) first, then `no-background-loading`,
-`no-companions`, `opengl` or `two-parks` only if `full` shows growth. Each night needs the owner's OK.
 
 ### Name rule for open prop rides (not needed for release)
 

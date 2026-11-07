@@ -157,7 +157,7 @@ See README.md for usage.
   iteration (`RCT\engine-src\openrct2`, `scripts\vstool.cmd msbuild openrct2.proj /p:Configuration=Release`; without it the build is Debug and plays like a slideshow: full build
   3 min 42 s, incremental 30-40 s; the owner copies `bin\openrct2.exe` into the portable install
   themselves, as the PC's permission check blocks that step for Remote Control sessions).
-- **Performance testing** (roadmap step 3, `docs/performance-testing.md`; owner 2026-11-02: automated
+- **Performance testing** (roadmap step 3, a potential enhancement since 2026-11-07 grouped with the overnight soaks; `docs/performance-testing.md`; owner 2026-11-02: automated
   and log-based, not manual): engine patch 0016 `--perf-log` writes per-frame stage times (tick, plugin,
   input, paint, present, with the camera), 10 s samples (memory, handles, QuickJS heap, image list
   fragmentation, entity counts) and events (load stages, plugin marks); it stays in every build until

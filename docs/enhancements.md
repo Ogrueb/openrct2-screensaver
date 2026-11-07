@@ -197,7 +197,13 @@ Done otherwise (2026-11-03). Two leftovers, both small:
    Aero style using it instead of the frost tile when the engine reports the feature. A day. The frost
    texture was preferred; this item exists only if the owner sees Aero on more parks and wants the blur.
 
-## 5. Overnight memory soaks
+## 5. Performance testing and overnight memory soaks
+
+The rest of roadmap step 3 is grouped here (owner, 2026-11-07): next a PresentMon run (owner's OK,
+2026-11-03) to tell the GPU's time from vsync waits in OpenGL's ~31 ms present, and simulation
+throttling out of view only if the numbers call for it; the framework and first runs are in
+`docs/performance-testing.md`. The soaks:
+
 
 Goal: know whether memory keeps growing past the first hour, and catch the crash the owner saw after
 hours of play (2026-10-30).
