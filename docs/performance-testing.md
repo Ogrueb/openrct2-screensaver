@@ -1,4 +1,4 @@
-# Performance testing (roadmap step 3)
+# Performance testing (roadmap: potential enhancements, with the overnight soaks)
 
 Every test is an unattended, scripted run on the PC. The game writes a perf log, and a report
 script turns the logs into numbers and A/B verdicts, so nothing has to be judged by eye.
