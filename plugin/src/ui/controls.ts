@@ -213,6 +213,20 @@ export class ControlsBar {
         this.render();
     }
 
+    /** Whether a point is on the bar or its settings panel and flyout (shown or not). */
+    covers(x: number, y: number): boolean {
+        const quit = this.boxes.get("quit");
+        return contains(this.strip, x, y, 8) ||
+            (quit !== undefined && contains(quit, x, y)) ||
+            (this.panel !== undefined && contains(this.panel, x, y, 8)) ||
+            (this.flyout !== undefined && contains(this.flyout, x, y, 8));
+    }
+
+    /** Whether the settings panel is open (a click elsewhere closes it). */
+    get panelOpen(): boolean {
+        return this.panel !== undefined;
+    }
+
     /** The mouse moved over something else (the editor panel): the bar stays as it is, awake. */
     mouseSeen(): void {
         this.lastMove = Date.now();
@@ -225,11 +239,7 @@ export class ControlsBar {
             this.lastMove = Date.now(); // the editor keeps the bar and the cursor up
             this.setShown(true);
         }
-        const quit = this.boxes.get("quit");
-        const over = contains(this.strip, this.mouse.x, this.mouse.y, 8) ||
-            (quit !== undefined && contains(quit, this.mouse.x, this.mouse.y)) ||
-            (this.panel !== undefined && contains(this.panel, this.mouse.x, this.mouse.y, 8)) ||
-            (this.flyout !== undefined && contains(this.flyout, this.mouse.x, this.mouse.y, 8));
+        const over = this.covers(this.mouse.x, this.mouse.y);
         if (this.layer.visible && !this.downOn && !over && Date.now() - this.lastMove > TIMING.hideAfter) {
             this.panel = undefined;
             this.flyout = undefined;

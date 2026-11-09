@@ -144,6 +144,20 @@ follows the cursor exactly, a view over a tower keeps its height), with Set to c
 to set the height afterward; boxes during Play with the editor closed (a review mode) are left out of
 the first version.
 
+Design (owner's go-ahead, 2026-11-09, thread "Explore live view editor implementation"): two modes on the
+overlay editor. **Frame** (the default) makes the selected view the camera: dragging the park moves the shot,
+the wheel zooms it, so what is seen is what plays; no engine change. **Map** (Tab) steps the camera out and
+draws every view as a box to drag, as requirements 1-3 and 5 describe; its pan lines need a `line` overlay
+element (a small patch in the mode group). Stages, one PR each:
+
+1. Frame mode and undo. **Done 2026-11-09** (`docs/screensaver-ui.md` "Live editing"; tests in
+   `plugin/test/editor-unit.mjs` and `mode-run.mjs`, which now also runs on a small fixture playlist).
+2. Map mode: boxes, other-angle markers, drag, Shift+wheel zoom, right-click add, double-click to frame;
+   a perf-log run while panning in Map mode (the overlay unites changes into one dirty rect, so moving
+   boxes redraw the whole window).
+3. The `line` overlay element and pan lines.
+4. Event views (locked boxes with labels) and requirement 6.
+
 ## 3. Weather and day/night in the generator (low priority)
 
 Goal: the playlist decides the light and weather of the show rather than each park's saved date and the
