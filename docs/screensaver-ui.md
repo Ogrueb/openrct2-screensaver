@@ -208,6 +208,30 @@ faster), and Space starts and stops Play. After the owner's first look (2026-11-
 backing, list columns as wide as their widest text, hold and pan on one line with their values centered
 between − and +. `Editor` keeps the logic for both: the stock engine still gets the window (`WindowView`).
 
+### Live editing (first stage of the live editor, 2026-11-09)
+
+The "Frame" stage of the live editor (`docs/enhancements.md` section 2): the mouse on the park, off the
+panel and the bar, edits the selected view directly.
+
+- **Drag** with the left button: the park follows the mouse (the camera moves on the plane at its
+  height), and on release the selected view goes where the camera is, as one change (Set to camera).
+  A plain click changes nothing; a drag that runs over the panel or the bar keeps going to the release.
+  With no view selected, or while Play is on, a drag only moves the camera (and stops Play).
+- **Wheel** over the park: the selected view zooms a level per step (up: in).
+- **Fit height** (panel): the camera's height becomes what is seen at the screen's centre (the first tile
+  top, ground or water met walking down the heights that point could show), without moving the picture,
+  and the selected view takes it; a later drag then moves on that plane.
+- **Set to camera** keeps the view's pan, turn, inertia and event settings (it used to drop them); a framed
+  overview loses its `overview` flag, so it plays as framed.
+- **Undo and redo** (the panel's Undo and Redo, Ctrl+Z, Ctrl+Y or Ctrl+Shift+Z): every change to a park's
+  views, per park, 100 deep, kept while the plugin runs. Undoing the first edit goes back to the
+  playlist's views (as Use playlist views does, which itself can be undone).
+- The arrow keys, Rotate and Zoom buttons still move only the camera (then Add view or Set to camera).
+- With the settings panel open, a click on the park closes it, as before.
+
+Next stages (not built): the box map (Tab: every view as a box on a wider camera, drag boxes, pan
+lines; needs an overlay `line` element), then event views and the drawing page decision.
+
 ## Widget kit (`plugin/src/ui/kit.ts`)
 
 - `Layer`: a group of overlay elements under one id prefix. It sends only new or changed elements,

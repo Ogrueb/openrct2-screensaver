@@ -5,6 +5,9 @@
 // views play with their pans, looping in the park, the list highlighting the view on screen, and
 // every edit plays on again from the selected view a second later. Moving the camera by hand stops it. Edited views are saved to
 // shared storage as they change (see Player.setViews) and replace the park's playlist views.
+// Live editing (docs/screensaver-ui.md, "Live editing"): in the mode, dragging the park moves the camera and
+// the selected view goes where it ends, the wheel zooms the selected view, Fit sets its height to what is
+// under the screen's centre, and every change can be undone (per park, while the plugin runs).
 
 import { toScreen, toWorld } from "./fit";
 import { Player } from "./player";
@@ -22,6 +25,9 @@ const MIN_HOLD = 1;
 const MAX_HOLD = 600;
 const DEFAULT_HOLD = 10;
 const PAN_SHARE_STEP = 0.1;
+const UNDO_DEPTH = 100; // changes kept per park
+const MAX_Z = 2040; // the highest world height (255 height steps of 8)
+const Z_STEP = 8; // one height step
 
 /** What shows the editor: opened and closed by it, refreshed after every change. */
 export interface EditorView {
@@ -47,6 +53,49 @@ function round2(n: number): number {
     return Math.round(n * 100) / 100;
 }
 
+/** A park's views before a change, to go back to. */
+interface Snapshot {
+    views: View[];
+    selected: number;
+    edited: boolean; // the views were hand-set; false: undoing goes back to the playlist's views
+}
+
+/** Top of what stands on a tile (world units): the highest visible element, or the ground or
+ * water; undefined off the map. */
+function topZ(tx: number, ty: number): number | undefined {
+    const size = map.size;
+    if (tx < 0 || ty < 0 || (size && (tx >= size.x || ty >= size.y))) {
+        return undefined;
+    }
+    try {
+        let top: number | undefined;
+        for (const e of map.getTile(tx, ty).elements) {
+            if (e.isHidden) {
+                continue;
+            }
+            const h = e.type === "surface" ? Math.max(e.baseZ, e.waterHeight ?? 0) : e.clearanceZ ?? e.baseZ;
+            top = top === undefined ? h : Math.max(top, h);
+        }
+        return top;
+    } catch {
+        return undefined;
+    }
+}
+
+/** The height of what is seen at a screen point (zoom 0 screen coordinates at `rotation`): walks
+ * down the heights the point could show, nearest the camera first, to the first tile whose top
+ * reaches the height; undefined when the point shows only the void. */
+export function surfaceZ(p: { x: number; y: number }, rotation: number, top = topZ): number | undefined {
+    for (let z = MAX_Z; z >= 0; z -= Z_STEP) {
+        const w = toWorld(p, z, rotation);
+        const h = top(Math.floor(w.x / TILE), Math.floor(w.y / TILE));
+        if (h !== undefined && h >= z) {
+            return z;
+        }
+    }
+    return undefined;
+}
+
 /** Ground height (world units) at a tile, or 0 off the map. */
 function groundZ(x: number, y: number): number {
     try {
@@ -62,6 +111,8 @@ export class Editor {
     private shown = false;
     private camera: Camera = { x: 0, y: 0, z: 0, rotation: 0, zoom: 0 };
     private selected = -1;
+    private undoStacks = new Map<number, { undo: Snapshot[]; redo: Snapshot[] }>(); // by park index
+    private gesture: { commit: boolean; moved: boolean } | undefined; // a drag on the park
 
     constructor(private readonly player: Player, private readonly view: EditorView = new WindowView()) {}
 
@@ -97,13 +148,161 @@ export class Editor {
     /** Moves the camera by a number of steps on screen (right and down are positive). */
     pan(dx: number, dy: number, fast = false): void {
         this.stopPreview();
-        const step = PAN_STEP * Math.pow(2, this.camera.zoom) * (fast ? PAN_FAST : 1);
+        const step = PAN_STEP * (fast ? PAN_FAST : 1);
+        this.moveCamera(dx * step, dy * step);
+    }
+
+    /** Moves the camera by window pixels (right and down are positive), on the plane at its height. */
+    private moveCamera(dx: number, dy: number): void {
         const c = this.camera;
+        const scale = Math.pow(2, c.zoom);
         const p = toScreen(c.x, c.y, c.z, c.rotation);
-        const world = toWorld({ x: p.x + dx * step, y: p.y + dy * step }, c.z, c.rotation);
+        const world = toWorld({ x: p.x + dx * scale, y: p.y + dy * scale }, c.z, c.rotation);
         c.x = world.x;
         c.y = world.y;
         this.applyCamera();
+    }
+
+    // Live editing: the mouse on the park.
+
+    /** A press on the park: a drag starts. It edits the selected view only if Play was off (a
+     * drag during Play just stops it where it is). */
+    dragStart(): void {
+        this.gesture = { commit: !this.player.isPreviewing && this.selectedIndex >= 0, moved: false };
+        this.stopPreview();
+    }
+
+    /** The mouse moved by window pixels during a drag: the park follows it. */
+    dragBy(dx: number, dy: number): void {
+        if (!this.gesture || (dx === 0 && dy === 0)) {
+            return;
+        }
+        this.gesture.moved = true;
+        this.moveCamera(-dx, -dy);
+    }
+
+    /** The drag ended: the selected view goes where the camera is, as one change. */
+    dragEnd(): void {
+        const g = this.gesture;
+        this.gesture = undefined;
+        if (g?.commit && g.moved) {
+            this.update();
+        }
+    }
+
+    get dragging(): boolean {
+        return this.gesture !== undefined;
+    }
+
+    /** The wheel over the park: zooms the camera a level (delta > 0 in) and the selected view with
+     * it; during Play it only stops Play. */
+    wheel(delta: number): void {
+        const commit = !this.player.isPreviewing && this.selectedIndex >= 0;
+        this.zoom(delta > 0 ? -1 : 1);
+        if (commit) {
+            this.update();
+        }
+    }
+
+    /** Sets the camera's height to what is under the screen's centre, without moving the picture,
+     * and the selected view's with it. */
+    fit(): void {
+        this.stopPreview();
+        const c = this.camera;
+        const p = toScreen(c.x, c.y, c.z, c.rotation);
+        const z = surfaceZ(p, c.rotation);
+        if (z === undefined) {
+            return;
+        }
+        const world = toWorld(p, z, c.rotation);
+        this.camera = { ...c, x: world.x, y: world.y, z };
+        this.applyCamera();
+        if (this.selectedIndex >= 0) {
+            this.update();
+        }
+    }
+
+    // Undo and redo, per park.
+
+    private stacks(): { undo: Snapshot[]; redo: Snapshot[] } {
+        const park = this.player.parkIndex;
+        let s = this.undoStacks.get(park);
+        if (!s) {
+            s = { undo: [], redo: [] };
+            this.undoStacks.set(park, s);
+        }
+        return s;
+    }
+
+    private snapshot(): Snapshot {
+        return { views: this.views(), selected: this.selected, edited: this.player.isEdited };
+    }
+
+    private sameAs(s: Snapshot): boolean {
+        return s.edited === this.player.isEdited && JSON.stringify(s.views) === JSON.stringify(this.player.currentViews);
+    }
+
+    /** Runs a change, remembering the views before it if it changed them. */
+    private change(apply: () => void): void {
+        if (this.player.isLoading) {
+            return;
+        }
+        const before = this.snapshot();
+        apply();
+        if (!this.sameAs(before)) {
+            const s = this.stacks();
+            s.undo.push(before);
+            if (s.undo.length > UNDO_DEPTH) {
+                s.undo.shift();
+            }
+            s.redo = [];
+            this.refresh();
+        }
+    }
+
+    undo(): void {
+        this.step(true);
+    }
+
+    redo(): void {
+        this.step(false);
+    }
+
+    get canUndo(): boolean {
+        return !this.player.isLoading && (this.undoStacks.get(this.player.parkIndex)?.undo.length ?? 0) > 0;
+    }
+
+    get canRedo(): boolean {
+        return !this.player.isLoading && (this.undoStacks.get(this.player.parkIndex)?.redo.length ?? 0) > 0;
+    }
+
+    private step(back: boolean): void {
+        if (this.player.isLoading) {
+            return;
+        }
+        const s = this.stacks();
+        const target = (back ? s.undo : s.redo).pop();
+        if (!target) {
+            return;
+        }
+        (back ? s.redo : s.undo).push(this.snapshot());
+        this.restore(target);
+    }
+
+    private restore(to: Snapshot): void {
+        if (!to.edited) {
+            this.player.revertViews(); // the playlist's own views, as before the first edit
+            this.selected = this.player.viewIndex;
+            this.refresh();
+            return;
+        }
+        const show = Math.min(to.selected, to.views.length - 1);
+        this.selected = show;
+        this.player.setViews(to.views.map(v => ({ ...v })), show, true);
+        if (show < 0) {
+            this.refresh();
+        }
+        this.replay();
     }
 
     rotate(delta: number): void {
@@ -174,53 +373,62 @@ export class Editor {
     }
 
     add(): void {
-        if (this.player.isLoading) {
-            return;
-        }
-        const views = this.views();
-        const at = this.selected >= 0 ? this.selected + 1 : views.length;
-        views.splice(at, 0, this.cameraView(views[this.selected]?.hold ?? DEFAULT_HOLD));
-        this.save(views, at);
+        this.change(() => {
+            const views = this.views();
+            const at = this.selected >= 0 ? this.selected + 1 : views.length;
+            views.splice(at, 0, this.cameraView(views[this.selected]?.hold ?? DEFAULT_HOLD));
+            this.save(views, at);
+        });
     }
 
     update(): void {
-        const views = this.views();
-        if (!views[this.selected]) {
-            return;
-        }
-        views[this.selected] = this.cameraView(views[this.selected].hold);
-        this.save(views, this.selected);
+        this.change(() => {
+            const views = this.views();
+            if (!views[this.selected]) {
+                return;
+            }
+            // Keeps how the view pans on and its flags; only where it looks changes.
+            views[this.selected] = { ...views[this.selected], ...this.cameraView(views[this.selected].hold) };
+            delete views[this.selected].overview; // a framed overview plays as framed
+            this.save(views, this.selected);
+        });
     }
 
     remove(): void {
-        const views = this.views();
-        if (!views[this.selected]) {
-            return;
-        }
-        views.splice(this.selected, 1);
-        this.save(views, Math.min(this.selected, views.length - 1), true);
+        this.change(() => {
+            const views = this.views();
+            if (!views[this.selected]) {
+                return;
+            }
+            views.splice(this.selected, 1);
+            this.save(views, Math.min(this.selected, views.length - 1), true);
+        });
     }
 
     move(delta: number): void {
-        const views = this.views();
-        const to = this.selected + delta;
-        if (!views[this.selected] || to < 0 || to >= views.length) {
-            return;
-        }
-        [views[this.selected], views[to]] = [views[to], views[this.selected]];
-        this.save(views, to, true);
+        this.change(() => {
+            const views = this.views();
+            const to = this.selected + delta;
+            if (!views[this.selected] || to < 0 || to >= views.length) {
+                return;
+            }
+            [views[this.selected], views[to]] = [views[to], views[this.selected]];
+            this.save(views, to, true);
+        });
     }
 
     changeHold(delta: number): void {
-        const views = this.views();
-        const view = views[this.selected];
-        if (!view) {
-            return;
-        }
-        view.hold = Math.min(MAX_HOLD, Math.max(MIN_HOLD, Math.round(view.hold) + delta));
-        this.player.setViews(views, -1, true); // no camera move: the view itself is unchanged
-        this.replay();
-        this.refresh();
+        this.change(() => {
+            const views = this.views();
+            const view = views[this.selected];
+            if (!view) {
+                return;
+            }
+            view.hold = Math.min(MAX_HOLD, Math.max(MIN_HOLD, Math.round(view.hold) + delta));
+            this.player.setViews(views, -1, true); // no camera move: the view itself is unchanged
+            this.replay();
+            this.refresh();
+        });
     }
 
     /** Changes the share of the selected view's hold spent panning to the next view. */
@@ -245,23 +453,25 @@ export class Editor {
     }
 
     revert(): void {
-        this.player.revertViews();
+        this.change(() => this.player.revertViews());
     }
 
     /** Changes how the selected view pans on; like a hold, a change to how the list plays. */
-    private togglePan(change: (view: View) => Partial<View>): void {
-        const views = this.views();
-        const view = views[this.selected];
-        if (!view) {
-            return;
-        }
-        Object.assign(view, change(view));
-        if (view.pan === 0) {
-            delete view.pan;
-        }
-        this.player.setViews(views, -1, true);
-        this.replay();
-        this.refresh();
+    private togglePan(edit: (view: View) => Partial<View>): void {
+        this.change(() => {
+            const views = this.views();
+            const view = views[this.selected];
+            if (!view) {
+                return;
+            }
+            Object.assign(view, edit(view));
+            if (view.pan === 0) {
+                delete view.pan;
+            }
+            this.player.setViews(views, -1, true);
+            this.replay();
+            this.refresh();
+        });
     }
 
     /** Saves the views; `arranged` when the list itself was changed by hand (not just a view). */

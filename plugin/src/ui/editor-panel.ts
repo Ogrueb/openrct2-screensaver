@@ -1,6 +1,7 @@
 // The view editor in the screensaver mode (docs/screensaver-ui.md, "Editor"): the stock window's
 // controls (editor.ts, WindowView) on the overlay, in the controls bar's style. It stays shown while
-// open, at the window's top left. Arrow keys pan the camera as with the window (main.ts).
+// open, at the window's top left. Arrow keys pan the camera as with the window (main.ts). Live editing
+// (docs/screensaver-ui.md): a drag on the park moves the selected view, the wheel zooms it.
 
 import type { Editor, EditorView } from "../editor";
 import { EDITOR_COLUMNS } from "../editor";
@@ -10,11 +11,15 @@ import { EDITOR, THEME, TIMING, Z } from "./theme";
 
 type HitId =
     | "close" | "prevPark" | "nextPark" | `row.${number}` | "scrollUp" | "scrollDown"
-    | "add" | "update" | "delete" | "up" | "down" | "revert"
+    | "add" | "update" | "fit" | "delete" | "up" | "down" | "revert" | "undo" | "redo"
     | "holdLess" | "holdMore" | "panLess" | "panMore" | "turn" | "inertia"
     | "rotl" | "rotr" | "zoomin" | "zoomout" | "play";
 
 const PAN_SHARE_STEP = 0.1;
+const HELP = [
+    "Drag the park: moves the selected view. Wheel: zooms it.",
+    "Arrows pan the camera (Shift: faster). Ctrl+Z undoes. E closes.",
+];
 
 export class EditorPanel implements EditorView {
     private readonly layer: Layer;
@@ -28,6 +33,7 @@ export class EditorPanel implements EditorView {
     private scroll = 0; // first row shown
     private followed = -1; // the selection the list last scrolled to (a new one scrolls into view)
     private track: Rect | undefined; // the scroll bar between its arrows, when the list scrolls
+    private drag: { x: number; y: number } | undefined; // a left drag on the park: where the mouse last was
 
     constructor(private readonly mode: ScreensaverApi) {
         this.layer = new Layer(mode.overlay, "rcts.ed.");
@@ -48,6 +54,7 @@ export class EditorPanel implements EditorView {
     close(): void {
         this.editor = undefined;
         this.downOn = undefined;
+        this.drag = undefined;
         this.layer.clear();
     }
 
@@ -57,8 +64,8 @@ export class EditorPanel implements EditorView {
 
     /** Handles a mouse event over the panel (or a press that started on it); false lets it through. */
     onMouse(e: MouseEvent): boolean {
-        if (!this.editor) {
-            return false;
+        if (!this.editor || this.drag) {
+            return false; // a drag on the park keeps the mouse over the panel too
         }
         if (e.type !== "wheel") {
             this.mouse = { x: e.x, y: e.y }; // a wheel step is taken where the mouse last was
@@ -79,6 +86,40 @@ export class EditorPanel implements EditorView {
         }
         this.render();
         return used;
+    }
+
+    /** Handles a mouse event on the park (off the panel and the bar, or during a drag that started on
+     * the park): a left drag moves the camera and with it the selected view, the wheel zooms it. */
+    onPark(e: MouseEvent): boolean {
+        const editor = this.editor;
+        if (!editor) {
+            return false;
+        }
+        if (e.type === "down" && e.button === 0) {
+            this.drag = { x: e.x, y: e.y };
+            editor.dragStart();
+        } else if (e.type === "move" && this.drag) {
+            const dx = e.x - this.drag.x;
+            const dy = e.y - this.drag.y;
+            this.drag = { x: e.x, y: e.y };
+            editor.dragBy(dx, dy);
+        } else if (e.type === "up" && e.button === 0 && this.drag) {
+            this.drag = undefined;
+            editor.dragEnd();
+        } else if (e.type === "wheel") {
+            editor.wheel(e.delta);
+        } else {
+            return false; // the rest is the bar's (a move wakes it; a release ends a press on it)
+        }
+        if (e.type !== "wheel") {
+            this.mouse = { x: e.x, y: e.y };
+        }
+        return true;
+    }
+
+    /** A drag on the park is going on (every mouse event is the park's until it ends). */
+    get dragging(): boolean {
+        return this.drag !== undefined;
     }
 
     private hit(): HitId | undefined {
@@ -114,6 +155,9 @@ export class EditorPanel implements EditorView {
             case "nextPark": e.goToPark(e.parkIndex + 1); break;
             case "add": e.add(); break;
             case "update": e.update(); break;
+            case "fit": e.fit(); break;
+            case "undo": e.undo(); break;
+            case "redo": e.redo(); break;
             case "delete": e.remove(); break;
             case "up": e.move(-1); break;
             case "down": e.move(1); break;
@@ -186,7 +230,7 @@ export class EditorPanel implements EditorView {
             this.track = { x: bx, y: rowsTop + bar, width: bar - 2, height: rowsBottom - rowsTop - 2 * bar };
         }
         y = this.list.y + this.list.height + s.gap;
-        buttonRow(["add", "update", "delete"]);
+        buttonRow(["add", "update", "fit", "delete"]);
         buttonRow(["up", "down", "revert"]);
         // Hold and pan on one line, each a value centred between its − and + (owner, 2026-11-02).
         const half = Math.round((inner - s.sectionGap) / 2);
@@ -203,12 +247,20 @@ export class EditorPanel implements EditorView {
         this.boxes.set("inertia", { x: x0 + inner - half, y, width: half, height: s.buttonHeight });
         y += s.buttonHeight + s.gap;
         buttonRow(["rotl", "rotr", "zoomin", "zoomout"]);
-        buttonRow(["play"]);
+        // Undo and redo, then Play taking the rest of the row.
+        const small = Math.round((inner - 2 * s.gap) / 6);
+        this.boxes.set("undo", { x: x0, y, width: small, height: s.buttonHeight });
+        this.boxes.set("redo", { x: x0 + small + s.gap, y, width: small, height: s.buttonHeight });
+        const px = x0 + 2 * (small + s.gap);
+        this.boxes.set("play", { x: px, y, width: x0 + inner - px, height: s.buttonHeight });
+        y += s.buttonHeight + s.gap;
         const status = e.status();
         this.texts.set("status", { text: status.text, warning: status.warning, r: { x: x0, y, width: inner, height: s.lineHeight } });
         y += s.lineHeight;
-        this.texts.set("help", { text: "Arrows pan the camera (Shift: faster). E closes.", r: { x: x0, y, width: inner, height: s.lineHeight } });
-        y += s.lineHeight;
+        for (const [i, help] of HELP.entries()) {
+            this.texts.set(`help${i}`, { text: help, r: { x: x0, y, width: inner, height: s.lineHeight } });
+            y += s.lineHeight;
+        }
         this.frame = { x: s.x, y: s.y, width: s.width, height: y + s.pad - s.y };
     }
 
@@ -261,6 +313,7 @@ export class EditorPanel implements EditorView {
         }
         textButton("add", "Add view");
         textButton("update", "Set to camera");
+        textButton("fit", "Fit height");
         textButton("delete", "Delete");
         textButton("up", "Move up");
         textButton("down", "Move down");
@@ -275,7 +328,9 @@ export class EditorPanel implements EditorView {
         textButton("rotr", "Rotate right");
         textButton("zoomin", "Zoom in");
         textButton("zoomout", "Zoom out");
-        textButton("play", e.isPlaying ? "Play: on (stops when you move the camera)" : "Play: off", e.isPlaying);
+        textButton("undo", "Undo");
+        textButton("redo", "Redo");
+        textButton("play", e.isPlaying ? "Play: on (moving the camera stops it)" : "Play: off", e.isPlaying);
         for (const [key, t] of this.texts) {
             label(scene, `text.${key}`, t.text, t.r, key === "park" ? s.titleSize : s.textSize, overlay, t.bold);
             if (t.center) {

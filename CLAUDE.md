@@ -19,7 +19,7 @@ See README.md for usage.
   buttons, sharp corners, partly transparent backings). The controls bar (`plugin/src/ui/`) shows on mouse
   move and hides with the cursor: previous park, previous view, Hold, next view, next park, then a smaller
   row below: speed, shuffle, titles, music (an off/ride-music toggle), time of day (day, night, cycle; icons; titles drive the park name captions, `ui/captions.ts`, top left) (caption styles, owner 2026-11-03: gold, silver, wood portrait frames, Minimal dark and light, Aero (a frost texture, no blur), Canvas in a gallery frame; an Accent color; picked in the settings panel's Title frame flyout), edit views (the
-  view editor on the overlay, `ui/editor-panel.ts`; the stock engine keeps its window), settings (a panel with the stock
+  view editor on the overlay, `ui/editor-panel.ts`; the stock engine keeps its window; live editing, stage 1 of the live editor (owner 2026-11-09, `docs/enhancements.md` section 2): a drag on the park moves the selected view, the wheel zooms it, Fit height, Ctrl+Z/Ctrl+Y undo; next the box map, Tab), settings (a panel with the stock
   options that apply to the mode: window style, light effects, weather gloom; owner 2026-11-02). Icons are
   PNGs drawn by `tools/mkicons.py` at every output size.
 - **Languages:** Python wherever there is a choice (stdlib only). The plugin must be

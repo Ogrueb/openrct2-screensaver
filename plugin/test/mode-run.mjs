@@ -270,8 +270,62 @@ assert.ok(scene.get("rcts.bar.titles.icon").src.includes("titles-off"), "on -> o
     assert.equal(ed("cell.0.0").text, "2", "the wheel scrolls the list");
     assert.ok(![...scene.keys()].some(k => k.startsWith("rcts.ed.") && /wheel/.test(scene.get(k).text ?? "")),
         "no counter text over the list");
+    // Live editing: a drag on the park moves the camera, and the selected view goes where it ends.
+    const edits = () => Object.values(saved["RCTScreensaver.edits"] ?? {})[0]?.views ?? [];
+    edClick("scrollUp");
+    edClick("row.0");
+    const tile = () => ed("cell.0.1").text;
+    const before = tile();
+    const centre0 = JSON.stringify(viewport.centre);
+    mouse("move", 1400, 700); mouse("down", 1400, 700);
+    mouse("move", 1300, 700); mouse("move", 1200, 700);
+    assert.equal(tile(), before, "the view moves only when the drag ends");
+    assert.notEqual(JSON.stringify(viewport.centre), centre0, "the park follows the mouse during the drag");
+    mouse("up", 1200, 700);
+    assert.notEqual(tile(), before, "the selected view goes where the drag ended");
+    assert.equal(ed("cell.0.6").text, "you", "set by hand");
+    const moved = tile();
+    assert.ok(edits()[0]?.manual, "saved to the edits");
+    shortcuts["rctscreensaver.undo"]();
+    assert.equal(tile(), before, "Ctrl+Z undoes the drag");
+    shortcuts["rctscreensaver.redo"]();
+    assert.equal(tile(), moved, "Ctrl+Y redoes it");
+    edClick("undo");
+    assert.equal(tile(), before, "the Undo button undoes too");
+    edClick("redo");
+    // A drag that runs over the panel keeps going; a click without a move changes nothing.
+    const fr = ed("frame");
+    mouse("move", 1400, 700); mouse("down", 1400, 700);
+    mouse("move", fr.x + 20, fr.y + 20);
+    mouse("up", fr.x + 20, fr.y + 20);
+    assert.notEqual(tile(), moved, "a drag over the panel still moves the view");
+    const dragged = tile();
+    mouse("move", 1400, 700); mouse("down", 1400, 700); mouse("up", 1400, 700);
+    assert.equal(tile(), dragged, "a click on the park changes nothing");
+    // The wheel over the park zooms the selected view a level.
+    const zoom = Number(ed("cell.0.3").text);
+    mouse("move", 1400, 700); mouse("wheel", 1400, 700, 0, 1);
+    assert.equal(Number(ed("cell.0.3").text), Math.max(-2, zoom - 1), "a step up zooms the view in");
+    mouse("wheel", 1400, 700, 0, -1);
+    assert.equal(Number(ed("cell.0.3").text), zoom, "a step down zooms it out");
+    // Fit: the view's height becomes what is under the screen's centre (the mock's ground, 48).
+    edClick("fit");
+    assert.equal(edits()[0].z, 48, "Fit sets the view's height to the ground under the centre");
+    // During Play a drag only stops Play: no view moves.
+    shortcuts["rctscreensaver.hold"]();
+    const playing = tile();
+    mouse("move", 1400, 700); mouse("down", 1400, 700); mouse("move", 1000, 500); mouse("up", 1000, 500);
+    assert.equal(ed("play.text").text, "Play: off", "a drag stops Play");
+    assert.equal(tile(), playing, "and moves no view");
+    // Undo goes back through every change to the playlist's own views.
+    for (let i = 0; i < 40; i++) shortcuts["rctscreensaver.undo"]();
+    assert.equal(ed("cell.0.6").text, "auto", "undoing every change brings the playlist's views back");
     edClick("close");
     assert.equal(ed("frame"), undefined, "the close button closes the panel");
+    // The mouse on the park is the bar's again once the editor is closed.
+    const c0 = JSON.stringify(viewport.centre);
+    mouse("move", 1400, 700); mouse("down", 1400, 700); mouse("move", 1200, 700); mouse("up", 1200, 700);
+    assert.equal(JSON.stringify(viewport.centre), c0, "no drag with the editor closed");
 }
 // Park name captions (titles): top left, under the load cover; "overview" on the park's first view only.
 {

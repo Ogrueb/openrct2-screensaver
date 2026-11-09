@@ -65,6 +65,17 @@ on the overlay with the same controls (`docs/screensaver-ui.md`).
       `playlists/example.views.json` and still play.
 - [ ] Check whether mouse dragging can scroll the camera on the title screen (not expected).
 
+Live editing (screensaver mode only, `docs/screensaver-ui.md` "Live editing"):
+- [ ] With a view selected, drag the park: the picture follows the mouse, and on release the view's
+      tile changes in the list and "Set by" says "you". A plain click on the park changes nothing.
+- [ ] A drag that runs over the panel or the bar keeps going until the button is let go.
+- [ ] The wheel over the park zooms the selected view one level per step; over the list it scrolls.
+- [ ] Fit height on a view over a tall building, then drag: the view moves at the building's top.
+- [ ] Ctrl+Z and the Undo button step back through drags, zooms, holds, adds and deletes; Ctrl+Y (or
+      Ctrl+Shift+Z) and Redo step forward; undoing everything shows "auto" views again.
+- [ ] With Play on, a drag stops Play and moves no view.
+- [ ] With the settings panel open, a click on the park closes it (no drag).
+
 ### View panning (`docs/view-panning.md`)
 - [ ] Default (`pan` unset): views still and cut exactly as before.
 - [ ] A view with `pan` holds still, then pans to the next view and arrives exactly; angle/zoom

@@ -149,9 +149,41 @@
   var MAX_HOLD = 600;
   var DEFAULT_HOLD = 10;
   var PAN_SHARE_STEP = 0.1;
+  var UNDO_DEPTH = 100;
+  var MAX_Z = 2040;
+  var Z_STEP = 8;
   var EDITOR_COLUMNS = ["#", "Tile", "Angle", "Zoom", "Hold", "Pan", "Set by"];
   function round2(n) {
     return Math.round(n * 100) / 100;
+  }
+  function topZ(tx, ty) {
+    const size = map.size;
+    if (tx < 0 || ty < 0 || size && (tx >= size.x || ty >= size.y)) {
+      return void 0;
+    }
+    try {
+      let top;
+      for (const e of map.getTile(tx, ty).elements) {
+        if (e.isHidden) {
+          continue;
+        }
+        const h = e.type === "surface" ? Math.max(e.baseZ, e.waterHeight ?? 0) : e.clearanceZ ?? e.baseZ;
+        top = top === void 0 ? h : Math.max(top, h);
+      }
+      return top;
+    } catch {
+      return void 0;
+    }
+  }
+  function surfaceZ(p, rotation, top = topZ) {
+    for (let z = MAX_Z; z >= 0; z -= Z_STEP) {
+      const w = toWorld(p, z, rotation);
+      const h = top(Math.floor(w.x / TILE2), Math.floor(w.y / TILE2));
+      if (h !== void 0 && h >= z) {
+        return z;
+      }
+    }
+    return void 0;
   }
   function groundZ(x, y) {
     try {
@@ -162,12 +194,14 @@
     }
   }
   var Editor = class {
+    // a drag on the park
     constructor(player2, view = new WindowView()) {
       this.player = player2;
       this.view = view;
       this.shown = false;
       this.camera = { x: 0, y: 0, z: 0, rotation: 0, zoom: 0 };
       this.selected = -1;
+      this.undoStacks = /* @__PURE__ */ new Map();
     }
     get isOpen() {
       return this.shown;
@@ -198,13 +232,142 @@
     /** Moves the camera by a number of steps on screen (right and down are positive). */
     pan(dx, dy, fast = false) {
       this.stopPreview();
-      const step = PAN_STEP * Math.pow(2, this.camera.zoom) * (fast ? PAN_FAST : 1);
+      const step = PAN_STEP * (fast ? PAN_FAST : 1);
+      this.moveCamera(dx * step, dy * step);
+    }
+    /** Moves the camera by window pixels (right and down are positive), on the plane at its height. */
+    moveCamera(dx, dy) {
       const c = this.camera;
+      const scale = Math.pow(2, c.zoom);
       const p = toScreen(c.x, c.y, c.z, c.rotation);
-      const world = toWorld({ x: p.x + dx * step, y: p.y + dy * step }, c.z, c.rotation);
+      const world = toWorld({ x: p.x + dx * scale, y: p.y + dy * scale }, c.z, c.rotation);
       c.x = world.x;
       c.y = world.y;
       this.applyCamera();
+    }
+    // Live editing: the mouse on the park.
+    /** A press on the park: a drag starts. It edits the selected view only if Play was off (a
+     * drag during Play just stops it where it is). */
+    dragStart() {
+      this.gesture = { commit: !this.player.isPreviewing && this.selectedIndex >= 0, moved: false };
+      this.stopPreview();
+    }
+    /** The mouse moved by window pixels during a drag: the park follows it. */
+    dragBy(dx, dy) {
+      if (!this.gesture || dx === 0 && dy === 0) {
+        return;
+      }
+      this.gesture.moved = true;
+      this.moveCamera(-dx, -dy);
+    }
+    /** The drag ended: the selected view goes where the camera is, as one change. */
+    dragEnd() {
+      const g = this.gesture;
+      this.gesture = void 0;
+      if (g?.commit && g.moved) {
+        this.update();
+      }
+    }
+    get dragging() {
+      return this.gesture !== void 0;
+    }
+    /** The wheel over the park: zooms the camera a level (delta > 0 in) and the selected view with
+     * it; during Play it only stops Play. */
+    wheel(delta) {
+      const commit = !this.player.isPreviewing && this.selectedIndex >= 0;
+      this.zoom(delta > 0 ? -1 : 1);
+      if (commit) {
+        this.update();
+      }
+    }
+    /** Sets the camera's height to what is under the screen's centre, without moving the picture,
+     * and the selected view's with it. */
+    fit() {
+      this.stopPreview();
+      const c = this.camera;
+      const p = toScreen(c.x, c.y, c.z, c.rotation);
+      const z = surfaceZ(p, c.rotation);
+      if (z === void 0) {
+        return;
+      }
+      const world = toWorld(p, z, c.rotation);
+      this.camera = { ...c, x: world.x, y: world.y, z };
+      this.applyCamera();
+      if (this.selectedIndex >= 0) {
+        this.update();
+      }
+    }
+    // Undo and redo, per park.
+    stacks() {
+      const park = this.player.parkIndex;
+      let s = this.undoStacks.get(park);
+      if (!s) {
+        s = { undo: [], redo: [] };
+        this.undoStacks.set(park, s);
+      }
+      return s;
+    }
+    snapshot() {
+      return { views: this.views(), selected: this.selected, edited: this.player.isEdited };
+    }
+    sameAs(s) {
+      return s.edited === this.player.isEdited && JSON.stringify(s.views) === JSON.stringify(this.player.currentViews);
+    }
+    /** Runs a change, remembering the views before it if it changed them. */
+    change(apply) {
+      if (this.player.isLoading) {
+        return;
+      }
+      const before = this.snapshot();
+      apply();
+      if (!this.sameAs(before)) {
+        const s = this.stacks();
+        s.undo.push(before);
+        if (s.undo.length > UNDO_DEPTH) {
+          s.undo.shift();
+        }
+        s.redo = [];
+        this.refresh();
+      }
+    }
+    undo() {
+      this.step(true);
+    }
+    redo() {
+      this.step(false);
+    }
+    get canUndo() {
+      return !this.player.isLoading && (this.undoStacks.get(this.player.parkIndex)?.undo.length ?? 0) > 0;
+    }
+    get canRedo() {
+      return !this.player.isLoading && (this.undoStacks.get(this.player.parkIndex)?.redo.length ?? 0) > 0;
+    }
+    step(back) {
+      if (this.player.isLoading) {
+        return;
+      }
+      const s = this.stacks();
+      const target = (back ? s.undo : s.redo).pop();
+      if (!target) {
+        return;
+      }
+      (back ? s.redo : s.undo).push(this.snapshot());
+      this.restore(target);
+    }
+    restore(to) {
+      if (!to.edited) {
+        this.player.revertViews();
+        this.selected = this.player.viewIndex;
+        this.refresh();
+        return;
+      }
+      const show = Math.min(to.selected, to.views.length - 1);
+      this.selected = show;
+      this.player.setViews(to.views.map((v) => ({ ...v })), show, true);
+      if (show < 0) {
+        this.refresh();
+      }
+      this.replay();
     }
     rotate(delta) {
       this.stopPreview();
@@ -270,49 +433,57 @@
       };
     }
     add() {
-      if (this.player.isLoading) {
-        return;
-      }
-      const views = this.views();
-      const at = this.selected >= 0 ? this.selected + 1 : views.length;
-      views.splice(at, 0, this.cameraView(views[this.selected]?.hold ?? DEFAULT_HOLD));
-      this.save(views, at);
+      this.change(() => {
+        const views = this.views();
+        const at = this.selected >= 0 ? this.selected + 1 : views.length;
+        views.splice(at, 0, this.cameraView(views[this.selected]?.hold ?? DEFAULT_HOLD));
+        this.save(views, at);
+      });
     }
     update() {
-      const views = this.views();
-      if (!views[this.selected]) {
-        return;
-      }
-      views[this.selected] = this.cameraView(views[this.selected].hold);
-      this.save(views, this.selected);
+      this.change(() => {
+        const views = this.views();
+        if (!views[this.selected]) {
+          return;
+        }
+        views[this.selected] = { ...views[this.selected], ...this.cameraView(views[this.selected].hold) };
+        delete views[this.selected].overview;
+        this.save(views, this.selected);
+      });
     }
     remove() {
-      const views = this.views();
-      if (!views[this.selected]) {
-        return;
-      }
-      views.splice(this.selected, 1);
-      this.save(views, Math.min(this.selected, views.length - 1), true);
+      this.change(() => {
+        const views = this.views();
+        if (!views[this.selected]) {
+          return;
+        }
+        views.splice(this.selected, 1);
+        this.save(views, Math.min(this.selected, views.length - 1), true);
+      });
     }
     move(delta) {
-      const views = this.views();
-      const to = this.selected + delta;
-      if (!views[this.selected] || to < 0 || to >= views.length) {
-        return;
-      }
-      [views[this.selected], views[to]] = [views[to], views[this.selected]];
-      this.save(views, to, true);
+      this.change(() => {
+        const views = this.views();
+        const to = this.selected + delta;
+        if (!views[this.selected] || to < 0 || to >= views.length) {
+          return;
+        }
+        [views[this.selected], views[to]] = [views[to], views[this.selected]];
+        this.save(views, to, true);
+      });
     }
     changeHold(delta) {
-      const views = this.views();
-      const view = views[this.selected];
-      if (!view) {
-        return;
-      }
-      view.hold = Math.min(MAX_HOLD, Math.max(MIN_HOLD, Math.round(view.hold) + delta));
-      this.player.setViews(views, -1, true);
-      this.replay();
-      this.refresh();
+      this.change(() => {
+        const views = this.views();
+        const view = views[this.selected];
+        if (!view) {
+          return;
+        }
+        view.hold = Math.min(MAX_HOLD, Math.max(MIN_HOLD, Math.round(view.hold) + delta));
+        this.player.setViews(views, -1, true);
+        this.replay();
+        this.refresh();
+      });
     }
     /** Changes the share of the selected view's hold spent panning to the next view. */
     changePan(delta) {
@@ -332,22 +503,24 @@
       }
     }
     revert() {
-      this.player.revertViews();
+      this.change(() => this.player.revertViews());
     }
     /** Changes how the selected view pans on; like a hold, a change to how the list plays. */
-    togglePan(change) {
-      const views = this.views();
-      const view = views[this.selected];
-      if (!view) {
-        return;
-      }
-      Object.assign(view, change(view));
-      if (view.pan === 0) {
-        delete view.pan;
-      }
-      this.player.setViews(views, -1, true);
-      this.replay();
-      this.refresh();
+    togglePan(edit) {
+      this.change(() => {
+        const views = this.views();
+        const view = views[this.selected];
+        if (!view) {
+          return;
+        }
+        Object.assign(view, edit(view));
+        if (view.pan === 0) {
+          delete view.pan;
+        }
+        this.player.setViews(views, -1, true);
+        this.replay();
+        this.refresh();
+      });
     }
     /** Saves the views; `arranged` when the list itself was changed by hand (not just a view). */
     save(views, show, arranged = false) {
@@ -2862,6 +3035,15 @@
       }
       this.render();
     }
+    /** Whether a point is on the bar or its settings panel and flyout (shown or not). */
+    covers(x, y) {
+      const quit = this.boxes.get("quit");
+      return contains(this.strip, x, y, 8) || quit !== void 0 && contains(quit, x, y) || this.panel !== void 0 && contains(this.panel, x, y, 8) || this.flyout !== void 0 && contains(this.flyout, x, y, 8);
+    }
+    /** Whether the settings panel is open (a click elsewhere closes it). */
+    get panelOpen() {
+      return this.panel !== void 0;
+    }
     /** The mouse moved over something else (the editor panel): the bar stays as it is, awake. */
     mouseSeen() {
       this.lastMove = Date.now();
@@ -2873,8 +3055,7 @@
         this.lastMove = Date.now();
         this.setShown(true);
       }
-      const quit = this.boxes.get("quit");
-      const over = contains(this.strip, this.mouse.x, this.mouse.y, 8) || quit !== void 0 && contains(quit, this.mouse.x, this.mouse.y) || this.panel !== void 0 && contains(this.panel, this.mouse.x, this.mouse.y, 8) || this.flyout !== void 0 && contains(this.flyout, this.mouse.x, this.mouse.y, 8);
+      const over = this.covers(this.mouse.x, this.mouse.y);
       if (this.layer.visible && !this.downOn && !over && Date.now() - this.lastMove > TIMING.hideAfter) {
         this.panel = void 0;
         this.flyout = void 0;
@@ -3688,8 +3869,12 @@
 
   // src/ui/editor-panel.ts
   var PAN_SHARE_STEP2 = 0.1;
+  var HELP = [
+    "Drag the park: moves the selected view. Wheel: zooms it.",
+    "Arrows pan the camera (Shift: faster). Ctrl+Z undoes. E closes."
+  ];
   var EditorPanel = class {
-    // the scroll bar between its arrows, when the list scrolls
+    // a left drag on the park: where the mouse last was
     constructor(mode2) {
       this.mode = mode2;
       this.mouse = { x: -1, y: -1 };
@@ -3715,6 +3900,7 @@
     close() {
       this.editor = void 0;
       this.downOn = void 0;
+      this.drag = void 0;
       this.layer.clear();
     }
     refresh() {
@@ -3722,7 +3908,7 @@
     }
     /** Handles a mouse event over the panel (or a press that started on it); false lets it through. */
     onMouse(e) {
-      if (!this.editor) {
+      if (!this.editor || this.drag) {
         return false;
       }
       if (e.type !== "wheel") {
@@ -3744,6 +3930,38 @@
       }
       this.render();
       return used;
+    }
+    /** Handles a mouse event on the park (off the panel and the bar, or during a drag that started on
+     * the park): a left drag moves the camera and with it the selected view, the wheel zooms it. */
+    onPark(e) {
+      const editor2 = this.editor;
+      if (!editor2) {
+        return false;
+      }
+      if (e.type === "down" && e.button === 0) {
+        this.drag = { x: e.x, y: e.y };
+        editor2.dragStart();
+      } else if (e.type === "move" && this.drag) {
+        const dx = e.x - this.drag.x;
+        const dy = e.y - this.drag.y;
+        this.drag = { x: e.x, y: e.y };
+        editor2.dragBy(dx, dy);
+      } else if (e.type === "up" && e.button === 0 && this.drag) {
+        this.drag = void 0;
+        editor2.dragEnd();
+      } else if (e.type === "wheel") {
+        editor2.wheel(e.delta);
+      } else {
+        return false;
+      }
+      if (e.type !== "wheel") {
+        this.mouse = { x: e.x, y: e.y };
+      }
+      return true;
+    }
+    /** A drag on the park is going on (every mouse event is the park's until it ends). */
+    get dragging() {
+      return this.drag !== void 0;
     }
     hit() {
       for (const [id, r] of this.boxes) {
@@ -3785,6 +4003,15 @@
           break;
         case "update":
           e.update();
+          break;
+        case "fit":
+          e.fit();
+          break;
+        case "undo":
+          e.undo();
+          break;
+        case "redo":
+          e.redo();
           break;
         case "delete":
           e.remove();
@@ -3888,7 +4115,7 @@
         this.track = { x: bx, y: rowsTop + bar2, width: bar2 - 2, height: rowsBottom - rowsTop - 2 * bar2 };
       }
       y = this.list.y + this.list.height + s.gap;
-      buttonRow(["add", "update", "delete"]);
+      buttonRow(["add", "update", "fit", "delete"]);
       buttonRow(["up", "down", "revert"]);
       const half = Math.round((inner - s.sectionGap) / 2);
       const step = (less, more, key, text, x, w) => {
@@ -3904,12 +4131,19 @@
       this.boxes.set("inertia", { x: x0 + inner - half, y, width: half, height: s.buttonHeight });
       y += s.buttonHeight + s.gap;
       buttonRow(["rotl", "rotr", "zoomin", "zoomout"]);
-      buttonRow(["play"]);
+      const small = Math.round((inner - 2 * s.gap) / 6);
+      this.boxes.set("undo", { x: x0, y, width: small, height: s.buttonHeight });
+      this.boxes.set("redo", { x: x0 + small + s.gap, y, width: small, height: s.buttonHeight });
+      const px = x0 + 2 * (small + s.gap);
+      this.boxes.set("play", { x: px, y, width: x0 + inner - px, height: s.buttonHeight });
+      y += s.buttonHeight + s.gap;
       const status = e.status();
       this.texts.set("status", { text: status.text, warning: status.warning, r: { x: x0, y, width: inner, height: s.lineHeight } });
       y += s.lineHeight;
-      this.texts.set("help", { text: "Arrows pan the camera (Shift: faster). E closes.", r: { x: x0, y, width: inner, height: s.lineHeight } });
-      y += s.lineHeight;
+      for (const [i, help] of HELP.entries()) {
+        this.texts.set(`help${i}`, { text: help, r: { x: x0, y, width: inner, height: s.lineHeight } });
+        y += s.lineHeight;
+      }
       this.frame = { x: s.x, y: s.y, width: s.width, height: y + s.pad - s.y };
     }
     render() {
@@ -3971,6 +4205,7 @@
       }
       textButton("add", "Add view");
       textButton("update", "Set to camera");
+      textButton("fit", "Fit height");
       textButton("delete", "Delete");
       textButton("up", "Move up");
       textButton("down", "Move down");
@@ -3985,7 +4220,9 @@
       textButton("rotr", "Rotate right");
       textButton("zoomin", "Zoom in");
       textButton("zoomout", "Zoom out");
-      textButton("play", e.isPlaying ? "Play: on (stops when you move the camera)" : "Play: off", e.isPlaying);
+      textButton("undo", "Undo");
+      textButton("redo", "Redo");
+      textButton("play", e.isPlaying ? "Play: on (moving the camera stops it)" : "Play: off", e.isPlaying);
       for (const [key, t] of this.texts) {
         label(scene, `text.${key}`, t.text, t.r, key === "park" ? s.titleSize : s.textSize, overlay, t.bold);
         if (t.center) {
@@ -4144,7 +4381,11 @@
       // In the editor, Space starts and stops Play (playback is paused there otherwise).
       ["hold", "Hold / release view", ["SPACE"], either((p) => p.toggleHold(), (e) => e.togglePreview())],
       ["shuffle", "Shuffle on / off", ["S"], (p) => p.toggleShuffle()],
-      ["edit", "Open / close view editor", ["E"], () => toggleEditor()]
+      ["edit", "Open / close view editor", ["E"], () => toggleEditor()],
+      ["undo", "Undo (view editor)", ["CTRL+Z"], either(() => {
+      }, (e) => e.undo())],
+      ["redo", "Redo (view editor)", ["CTRL+Y", "CTRL+SHIFT+Z"], either(() => {
+      }, (e) => e.redo())]
     ];
     for (const [id, text, bindings, action] of shortcuts) {
       ui.registerShortcut({
@@ -4203,10 +4444,11 @@
           }
           return;
         }
-        if (!editorPanel?.onMouse(e)) {
-          bar?.onMouse(e);
-        } else {
+        const onPark = editorPanel?.isOpen === true && (editorPanel.dragging || !bar?.covers(e.x, e.y) && !bar?.panelOpen);
+        if (editorPanel?.onMouse(e) || onPark && editorPanel.onPark(e)) {
           bar?.mouseSeen();
+        } else {
+          bar?.onMouse(e);
         }
       });
     } else {

@@ -1,0 +1,180 @@
+{
+ "version": 1,
+ "sequence": "Mini",
+ "parks": [
+  {
+   "key": "p0.park",
+   "name": "Park 0",
+   "fileName": "p0.park",
+   "load": 0,
+   "views": [
+    {
+     "x": 40,
+     "y": 50,
+     "z": 64,
+     "rotation": 0,
+     "zoom": 0,
+     "hold": 10,
+     "overview": true
+    },
+    {
+     "x": 30,
+     "y": 40,
+     "z": 64,
+     "rotation": 0,
+     "zoom": -1,
+     "hold": 8
+    },
+    {
+     "x": 35,
+     "y": 43,
+     "z": 64,
+     "rotation": 1,
+     "zoom": -1,
+     "hold": 8
+    },
+    {
+     "x": 40,
+     "y": 46,
+     "z": 64,
+     "rotation": 2,
+     "zoom": -1,
+     "hold": 8
+    },
+    {
+     "x": 45,
+     "y": 49,
+     "z": 64,
+     "rotation": 3,
+     "zoom": -1,
+     "hold": 8
+    }
+   ],
+   "bounds": {
+    "x0": 10,
+    "y0": 10,
+    "x1": 90,
+    "y1": 90,
+    "z0": 48,
+    "z1": 160
+   },
+   "author": "A. Builder"
+  },
+  {
+   "key": "p1.park",
+   "name": "Park 1",
+   "fileName": "p1.park",
+   "load": 2,
+   "views": [
+    {
+     "x": 41,
+     "y": 50,
+     "z": 64,
+     "rotation": 0,
+     "zoom": 0,
+     "hold": 10,
+     "overview": true
+    },
+    {
+     "x": 30,
+     "y": 40,
+     "z": 64,
+     "rotation": 0,
+     "zoom": -1,
+     "hold": 8
+    },
+    {
+     "x": 35,
+     "y": 43,
+     "z": 64,
+     "rotation": 1,
+     "zoom": -1,
+     "hold": 8
+    },
+    {
+     "x": 40,
+     "y": 46,
+     "z": 64,
+     "rotation": 2,
+     "zoom": -1,
+     "hold": 8
+    },
+    {
+     "x": 45,
+     "y": 49,
+     "z": 64,
+     "rotation": 3,
+     "zoom": -1,
+     "hold": 8
+    }
+   ],
+   "bounds": {
+    "x0": 10,
+    "y0": 10,
+    "x1": 90,
+    "y1": 90,
+    "z0": 48,
+    "z1": 160
+   },
+   "author": "A. Builder"
+  },
+  {
+   "key": "p2.park",
+   "name": "Park 2",
+   "fileName": "p2.park",
+   "load": 4,
+   "views": [
+    {
+     "x": 42,
+     "y": 50,
+     "z": 64,
+     "rotation": 0,
+     "zoom": 0,
+     "hold": 10,
+     "overview": true
+    },
+    {
+     "x": 30,
+     "y": 40,
+     "z": 64,
+     "rotation": 0,
+     "zoom": -1,
+     "hold": 8
+    },
+    {
+     "x": 35,
+     "y": 43,
+     "z": 64,
+     "rotation": 1,
+     "zoom": -1,
+     "hold": 8
+    },
+    {
+     "x": 40,
+     "y": 46,
+     "z": 64,
+     "rotation": 2,
+     "zoom": -1,
+     "hold": 8
+    },
+    {
+     "x": 45,
+     "y": 49,
+     "z": 64,
+     "rotation": 3,
+     "zoom": -1,
+     "hold": 8
+    }
+   ],
+   "bounds": {
+    "x0": 10,
+    "y0": 10,
+    "x1": 90,
+    "y1": 90,
+    "z0": 48,
+    "z1": 160
+   },
+   "author": "A. Builder"
+  }
+ ]
+}

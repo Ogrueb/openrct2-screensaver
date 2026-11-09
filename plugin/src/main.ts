@@ -153,6 +153,8 @@ function registerShortcuts(): void {
         ["hold", "Hold / release view", ["SPACE"], either(p => p.toggleHold(), e => e.togglePreview())],
         ["shuffle", "Shuffle on / off", ["S"], p => p.toggleShuffle()],
         ["edit", "Open / close view editor", ["E"], () => toggleEditor()],
+        ["undo", "Undo (view editor)", ["CTRL+Z"], either(() => {}, e => e.undo())],
+        ["redo", "Redo (view editor)", ["CTRL+Y", "CTRL+SHIFT+Z"], either(() => {}, e => e.redo())],
     ];
     for (const [id, text, bindings, action] of shortcuts) {
         ui.registerShortcut({
@@ -219,11 +221,14 @@ function main(): void {
                 }
                 return;
             }
-            // The editor panel takes the mouse over it; the bar gets the rest.
-            if (!editorPanel?.onMouse(e)) {
-                bar?.onMouse(e);
-            } else {
+            // The editor panel takes the mouse over it, and the park around it while the editor is open
+            // (a drag that started there keeps it to the end); the bar gets the rest.
+            const onPark = editorPanel?.isOpen === true && (editorPanel.dragging ||
+                (!bar?.covers(e.x, e.y) && !bar?.panelOpen));
+            if (editorPanel?.onMouse(e) || (onPark && editorPanel!.onPark(e))) {
                 bar?.mouseSeen();
+            } else {
+                bar?.onMouse(e);
             }
         });
     } else {
