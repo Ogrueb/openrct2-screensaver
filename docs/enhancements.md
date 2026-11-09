@@ -185,13 +185,10 @@ the weather schedule is worth a plugin API patch or the stock climate with a fix
 
 ## 4. Caption frames: what the pilot left open
 
-Done otherwise (2026-11-03). Two leftovers, both small:
+Done otherwise (2026-11-03). Canvas's plain stretcher edge (a second Canvas style without the gallery
+frame) was dropped (owner, 2026-11-09). One leftover, small:
 
-1. **Canvas's plain stretcher edge**: a second Canvas style (`canvasPlain`: the linen wrapped round a
-   stretcher's edge, no gallery frame, no mat; mocked up in the project files' `caption-styles/`), drawn by
-   `tools/mkframe.py` like the gallery frame; a flyout entry. Half a day; only if the owner wants it as a
-   choice.
-2. **A real blur for Aero**: an engine patch in the screensaver group that lets an overlay element ask
+1. **A real blur for Aero**: an engine patch in the screensaver group that lets an overlay element ask
    for the frame behind it blurred (a box blur of the 32-bit frame under the element's rectangle before
    the element is drawn; cost a few hundred µs per caption at 4K, measured with the perf log), and the
    Aero style using it instead of the frost tile when the engine reports the feature. A day. The frost
@@ -234,26 +231,7 @@ Requirements:
 Done when: rule 2 is met or every suspect has its night and the growth is attributed. Estimate: an hour
 of work per night plus the night.
 
-## 6. Name rule for open prop rides
-
-Goal: a ride pan never follows a prop run as an open ride.
-
-Starting point: `ride_status = "open"` follows open rides only; Bangkok Dynamo's `_Traffic` is open.
-
-Requirements:
-
-1. `[views] ride_names = "named"` (default): a ride whose name begins with `_` or is the stock default
-   (an empty `customName` in `parkinfo.parse_rides`, the name then being `<type> <nameNumber>`) counts as a prop and is
-   skipped by `ride_pans`; `"any"` keeps today's behavior. A skipped ride goes to `ridesTurnedDown` with
-   reason `name`.
-2. `tools/ridesurvey.py` prints the rule's skips, so the library can be checked for rides it loses: run on
-   the imported library once and list any good run lost in the PR.
-
-Done when: Bangkok Dynamo's run moves to another ride or none, and the 107 library runs lose none the
-owner liked. Estimate: an hour. Decision: whether a default-named ride (`Wooden Roller Coaster 1`) counts
-as a prop; the safe first version uses the underscore only.
-
-## 7. Better default views (automatic views v2)
+## 6. Better default views (automatic views v2)
 
 Goal: fewer near-tie losses of ride views to still scenery, a view budget that follows distinct content,
 and better zoom -2 picks on large parks.
@@ -286,11 +264,21 @@ Requirements, each judged on the ten examples with renders before any default ch
    its place. `--set` and profiles work as for the circuit. In the settings page these show under View
    order only when random is chosen. Judge: `playlists/example.toml` with `route = "random"` and each
    option on, on the renders. Half a day each for 1-5.
+6. **Name rule for open prop rides** (moved here from its own item, owner, 2026-11-09): a ride pan
+   never follows a prop run as an open ride (Bangkok Dynamo's `_Traffic` is open, so `ride_status =
+   "open"` keeps it). `[views] ride_names = "named"` (default): a ride whose name begins with `_` or is
+   the stock default (an empty `customName` in `parkinfo.parse_rides`, the name then being `<type>
+   <nameNumber>`) counts as a prop and is skipped by `ride_pans`; `"any"` keeps today's behavior. A
+   skipped ride goes to `ridesTurnedDown` with reason `name`. `tools/ridesurvey.py` prints the rule's
+   skips; run it on the imported library once and list any good run lost. Judge: Bangkok Dynamo's run
+   moves to another ride or none, and the 107 library runs lose none the owner liked. An hour. Decision:
+   whether a default-named ride (`Wooden Roller Coaster 1`) counts as a prop; the safe first version uses
+   the underscore only.
 
 Done when: a candidate default set gives more "better" than "worse" on the owner's sheet over the
 examples and a 20-park library batch, with stability (±5%) no worse than 15% moved; then the defaults
 change in one PR with the before/after sheet attached. Estimate: three days spread over rounds.
 
 Skipped for now (owner, 2026-11-03). When it is taken up: which of 2-4 to try first (recommended: 1
-then 2, as the near-ties are the recurring complaint); whether 5 is wanted before the random order has
+then 2, as the near-ties are the recurring complaint; 6 is an hour and can go first); whether 5 is wanted before the random order has
 a user.

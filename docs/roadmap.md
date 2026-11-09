@@ -553,9 +553,9 @@ light effects come from stock lamp, path and vehicle objects), so night shows li
 ### More caption frame styles (owner, 2026-11-03)
 
 Done 2026-11-03 (Minimal dark and light, Aero with a frost texture, Canvas in a gallery frame with an accent
-mat; the Title frame flyout): `docs/screensaver-ui.md` "Further styles". Left open from the pilot: Canvas's
-plain stretcher edge (mocked up, not chosen) and a real blur for Aero (an engine patch; the frost texture
-was preferred). The original item:
+mat; the Title frame flyout): `docs/screensaver-ui.md` "Further styles". Left open from the pilot: a real blur for
+Aero (an engine patch; the frost texture was preferred). Canvas's plain stretcher edge (mocked up, not
+chosen) was dropped (owner, 2026-11-09). The original item:
 
 The park name caption's frame comes in gold, silver and wood (the settings panel's Title frame, drawn by
 `tools/mkframe.py`), with a marble mat and a velvet byline band (`docs/screensaver-ui.md`). More styles
@@ -587,11 +587,6 @@ A "Show titles" setting with three choices:
 The setting is stored in the playlist (owner, 2026-10-30), and a plugin setting
 (`RCTScreensaver.settings`) can override it.
 
-### Name rule for open prop rides (not needed for release)
-
-Bangkok Dynamo's ride pan follows an open ride named `_Traffic` (a prop run as a ride); a rule
-excluding names with a leading underscore would skip it.
-
 ### Better default views (automatic views v2; owner moved it here from the plan, 2026-11-02)
 
 Improve the `spots` heuristics deliberately: the recurring near-ties where a ride view narrowly
@@ -599,6 +594,11 @@ loses to a nearby still view, and a view budget from the park's distinct content
 candidate counts (which the half-cell offset grids roughly double). Zoom -2 close-ups on large
 parks still pick poor spots, even after weighting them down. Tested ideas are under
 "Background: view heuristics, first version" above.
+
+#### Name rule for open prop rides (owner moved it into v2, 2026-11-09)
+
+Bangkok Dynamo's ride pan follows an open ride named `_Traffic` (a prop run as a ride); a rule
+excluding names with a leading underscore would skip it.
 
 #### Circuit improvements in the random order (owner, 2026-10-31)
 
