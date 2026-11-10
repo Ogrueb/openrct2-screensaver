@@ -136,6 +136,137 @@
     return result;
   }
 
+  // src/storage.ts
+  var NAMESPACE = "RCTScreensaver";
+  function isPinned(view) {
+    return view.animation !== void 0 && !view.fixed || view.show !== void 0 || view.cue !== void 0;
+  }
+  function isCut(view) {
+    return !!view.cue?.cut && typeof view.cue.tick === "number";
+  }
+  function placeCuts(views) {
+    const due = (v) => v.cue.tick / 40 - (v.cue.lead ?? 0);
+    const cuts = views.filter(isCut).sort((a, b) => due(a) - due(b));
+    if (cuts.length === 0) {
+      return views;
+    }
+    const rest = views.filter((v) => !isCut(v));
+    const starts = [];
+    let t = 0;
+    rest.forEach((v, i) => {
+      if (!isPinned(v)) {
+        starts.push([i, t]);
+        t += v.hold;
+      }
+    });
+    const after = /* @__PURE__ */ new Map();
+    for (const c of cuts) {
+      let k = starts.length > 0 ? starts[0][0] : rest.length - 1;
+      for (const [i, start] of starts) {
+        if (start <= due(c)) {
+          k = i;
+        }
+      }
+      after.set(k, [...after.get(k) ?? [], c]);
+    }
+    return [...rest.flatMap((v, i) => [v, ...after.get(i) ?? []]), ...after.get(-1) ?? []];
+  }
+  function loadPlaylistProps(sequence) {
+    const all = context.sharedStorage.get(NAMESPACE + ".playlistProps", {});
+    return { ...all[sequence] ?? {} };
+  }
+  function savePlaylistProps(sequence, props) {
+    const all = context.sharedStorage.get(NAMESPACE + ".playlistProps", {});
+    all[sequence] = props;
+    context.sharedStorage.set(NAMESPACE + ".playlistProps", all);
+  }
+  var CHECKPOINTS_PER_PARK = 10;
+  function loadCheckpoints() {
+    return context.sharedStorage.get(NAMESPACE + ".checkpoints", {});
+  }
+  function saveCheckpoints(all) {
+    context.sharedStorage.set(NAMESPACE + ".checkpoints", all);
+  }
+  var TITLES = ["overview", "on", "off"];
+  function titlesOf(settings) {
+    return settings.titlesOverride ?? settings.titles;
+  }
+  var DEFAULT_SETTINGS = {
+    autostart: true,
+    shuffle: false,
+    debug: false,
+    speed: 1,
+    fadeMs: 600,
+    panTolerance: 500,
+    panToleranceStep: 100,
+    panChanges: "end",
+    inertia: false,
+    changeHold: 2,
+    arriveHold: 1,
+    returnHold: 2,
+    cameraLog: false,
+    scaleToWindow: true,
+    window: "borderless",
+    titleMusic: "keep",
+    titles: "overview",
+    captionPlace: "topLeft",
+    captionFrame: "gold",
+    captionBand: "green",
+    lightEffects: false,
+    weatherGloom: false,
+    weather: false,
+    timeOfDay: "day",
+    masterVolume: null,
+    soundVolume: null,
+    musicVolume: null,
+    drawingEngine: null,
+    multiThreading: null,
+    editorPinned: true,
+    bench: false,
+    profilerExport: ""
+  };
+  function loadSettings() {
+    const stored = context.sharedStorage.get(NAMESPACE + ".settings", {});
+    return { ...DEFAULT_SETTINGS, ...stored };
+  }
+  function saveSettings(settings) {
+    const { titlesOverride: _, ...saved } = settings;
+    context.sharedStorage.set(NAMESPACE + ".settings", saved);
+  }
+  function loadEdits() {
+    return context.sharedStorage.get(NAMESPACE + ".edits", {});
+  }
+  function saveEdits(edits) {
+    context.sharedStorage.set(NAMESPACE + ".edits", edits);
+  }
+  function loadVisits() {
+    return context.sharedStorage.get(NAMESPACE + ".visits", {});
+  }
+  function saveVisits(visits) {
+    context.sharedStorage.set(NAMESPACE + ".visits", visits);
+  }
+  function loadPlaylist() {
+    return context.sharedStorage.get(NAMESPACE + ".playlist");
+  }
+  function resolveSequence(playlist) {
+    if (playlist.version !== 1) {
+      return `unsupported playlist version ${playlist.version}`;
+    }
+    const sequence = titleSequenceManager.titleSequences.find((s) => s.name === playlist.sequence);
+    if (!sequence) {
+      return `title sequence "${playlist.sequence}" not found`;
+    }
+    const commands = sequence.commands;
+    const parks = sequence.parks;
+    for (const park of playlist.parks) {
+      const command = commands[park.load];
+      if (!command || command.type !== "load" || parks[command.index]?.fileName !== park.fileName) {
+        return `title sequence "${playlist.sequence}" does not match the installed playlist (${park.fileName}); re-run tools/mksequence.py --install`;
+      }
+    }
+    return sequence;
+  }
+
   // src/editor.ts
   var CLASSIFICATION = "rctscreensaver.editor";
   var WIDTH = 300;
@@ -195,7 +326,7 @@
     }
   }
   var Editor = class {
-    // the map lets event views be dragged
+    // by park key, as saved
     constructor(player2, view = new WindowView()) {
       this.player = player2;
       this.view = view;
@@ -207,6 +338,10 @@
       this.map = false;
       // the map: every view a box on a camera stepped out
       this.eventsUnlocked = false;
+      // the map lets event views be dragged
+      this.opened = /* @__PURE__ */ new Map();
+      // the current park's playlist views (Reset view)
+      this.checkpoints = loadCheckpoints();
     }
     get isOpen() {
       return this.shown;
@@ -225,8 +360,19 @@
       } else {
         this.cameraFromViewport();
       }
+      this.noteOpened();
       this.view.open(this);
       this.refresh();
+    }
+    /** Remembers the current park's views the first time the editor shows them ("Editor opened"). */
+    noteOpened() {
+      const key = this.player.parkKey;
+      if (this.base && this.base.park !== this.player.parkIndex) {
+        this.base = void 0;
+      }
+      if (key !== void 0 && !this.player.isLoading && !this.opened.has(key)) {
+        this.opened.set(key, { time: Date.now(), snapshot: this.snapshot() });
+      }
     }
     close() {
       if (this.shown) {
@@ -314,7 +460,8 @@
       return s;
     }
     snapshot() {
-      return { views: this.views(), selected: this.selected, edited: this.player.isEdited };
+      const views = this.player.isLoading ? [] : this.player.currentViews.map((v) => ({ ...v }));
+      return { views, selected: this.selected, edited: this.player.isEdited };
     }
     sameAs(s) {
       return s.edited === this.player.isEdited && JSON.stringify(s.views) === JSON.stringify(this.player.currentViews);
@@ -543,7 +690,11 @@
     /** The views to change: the park's current views, copied (generated ones are fitted).
      * Empty while a park is loading, so nothing is changed until its views are on screen. */
     views() {
-      return this.player.isLoading ? [] : this.player.currentViews.map((v) => ({ ...v }));
+      if (this.player.isLoading) {
+        return [];
+      }
+      const first = !this.player.isEdited;
+      return this.player.currentViews.map((v, i) => first ? { ...v, origin: i } : { ...v });
     }
     cameraView(hold) {
       const c = this.camera;
@@ -638,6 +789,146 @@
     toggleInertia() {
       this.togglePan((v) => ({ inertia: !this.player.inertiaOf(v) }));
     }
+    /** Moves a view to another place in the list (a row dragged in the editing UI). */
+    moveTo(from, to) {
+      this.change(() => {
+        const views = this.views();
+        if (!views[from] || to < 0 || to >= views.length || from === to) {
+          return;
+        }
+        const [moved] = views.splice(from, 1);
+        views.splice(to, 0, moved);
+        this.save(views, to, true);
+      });
+    }
+    /** Whether a view can be dragged or moved: event views only with the lock off. */
+    movable(index) {
+      const v = this.player.currentViews[index];
+      return !!v && (!this.isEvent(v) || this.eventsUnlocked);
+    }
+    isEvent(v) {
+      return isPinned(v) || v.animation !== void 0;
+    }
+    /** The current park's playlist views, as reverting would give them (kept until the park changes). */
+    baseViews() {
+      if (!this.base || this.base.park !== this.player.parkIndex) {
+        this.base = { park: this.player.parkIndex, views: this.player.baseViews() };
+      }
+      return this.base.views;
+    }
+    /** The selected view's playlist version, if it differs from the view (Reset view). */
+    resetTarget() {
+      const v = this.player.currentViews[this.selected];
+      if (!v || v.origin === void 0 || !this.player.isEdited || this.player.isLoading) {
+        return void 0;
+      }
+      const base = this.baseViews()[v.origin];
+      if (!base) {
+        return void 0;
+      }
+      const { origin: _, ...rest } = v;
+      return JSON.stringify(rest) === JSON.stringify(base) ? void 0 : base;
+    }
+    get canResetView() {
+      return this.resetTarget() !== void 0;
+    }
+    /** Puts the selected view back as the playlist has it (the rest of the list unchanged). */
+    resetView() {
+      const base = this.resetTarget();
+      if (!base) {
+        return;
+      }
+      this.change(() => {
+        const views = this.views();
+        views[this.selected] = { ...base, origin: views[this.selected].origin };
+        this.save(views, this.selected);
+      });
+    }
+    // Restore points (the editing UI's top-right box).
+    restorePoints() {
+      const key = this.player.parkKey;
+      if (key === void 0) {
+        return [];
+      }
+      const points = [];
+      const opened = this.opened.get(key);
+      if (opened) {
+        points.push({ id: "session", label: "Editor opened", tag: "session", time: opened.time });
+      }
+      for (const c of [...this.checkpoints[key] ?? []].reverse()) {
+        points.push({ id: `checkpoint.${c.n}`, label: `Checkpoint ${c.n}`, time: c.time });
+      }
+      if (this.player.installedHandSet) {
+        points.push({ id: "install", label: "Last install", tag: "install", time: this.player.installedAt });
+      }
+      points.push({ id: "generated", label: "Generated", tag: "build", time: this.player.builtAt });
+      return points;
+    }
+    /** Saves the current park's views as a checkpoint (at most CHECKPOINTS_PER_PARK, the oldest goes). */
+    saveCheckpoint() {
+      const key = this.player.parkKey;
+      if (key === void 0 || this.player.isLoading) {
+        return;
+      }
+      const all = this.checkpoints;
+      const list = all[key] ?? [];
+      const n = list.reduce((m, c) => Math.max(m, c.n), 0) + 1;
+      list.push({ n, time: Date.now(), views: this.player.currentViews.map((v) => ({ ...v })), screen: [ui.width, ui.height] });
+      all[key] = list.slice(-CHECKPOINTS_PER_PARK);
+      saveCheckpoints(all);
+      this.refresh();
+    }
+    /** Goes back to a restore point; one change, so Undo returns. */
+    restoreTo(id) {
+      const key = this.player.parkKey;
+      if (key === void 0) {
+        return;
+      }
+      this.change(() => {
+        if (id === "session") {
+          const opened = this.opened.get(key);
+          if (opened) {
+            this.restore(opened.snapshot);
+          }
+        } else if (id === "install") {
+          this.player.restoreInstalled();
+        } else if (id === "generated") {
+          this.player.revertViews();
+        } else if (id.startsWith("checkpoint.")) {
+          const c = (this.checkpoints[key] ?? []).find((cp) => `checkpoint.${cp.n}` === id);
+          if (c) {
+            this.selected = 0;
+            this.player.setViews(c.views.map((v) => ({ ...v })), 0, true);
+          }
+        }
+        this.selected = this.player.viewIndex;
+        this.refresh();
+      });
+    }
+    /** The panes stay shown (the pin); off, they hide with the cursor like the controls bar. */
+    get pinned() {
+      return this.player.liveSettings.editorPinned !== false;
+    }
+    togglePinned() {
+      const settings = this.player.liveSettings;
+      settings.editorPinned = !this.pinned;
+      saveSettings(settings);
+      this.refresh();
+    }
+    /** The playback, for the editing UI's park order and Playlist properties. */
+    get playback() {
+      return this.player;
+    }
+    /** Where the park's views come from, for the restore points' header. */
+    source() {
+      if (this.player.isLoading) {
+        return { text: "loading park...", warning: false };
+      }
+      if (!this.player.canEdit) {
+        return { text: "can't edit: re-run --install", warning: true };
+      }
+      return { text: this.player.isEdited ? "edited \xB7 saved in the game" : "playlist views", warning: false };
+    }
     goToPark(index) {
       const n = this.player.parkNames.length;
       if (n > 0) {
@@ -679,6 +970,7 @@
     /** A view was shown (selected, the park finished loading, or Play moved on): follow it, so
      * the list highlights the view on screen and edits apply to it. */
     viewShown(view) {
+      this.noteOpened();
       if (this.map && !this.player.isPreviewing) {
         this.selected = this.player.viewIndex;
         this.applyCamera();
@@ -1054,6 +1346,20 @@
     editorList: "#0d1d13f0",
     warning: "#ff7a6a",
     // a status that needs action (the editor's "re-run --install")
+    // An inactive button (owner, 2026-11-10: flat, pressed in and gray), its text and its icon's opacity.
+    faceOff: "#2a2e2c80",
+    textOff: "#ffffff5c",
+    iconOff: 0.35,
+    textDim: "#ffffffa0",
+    // key hints, section labels, times
+    textGood: "#8fd6a0",
+    // the editor's "edited · saved in the game"
+    dragLine: "#ff6a1a",
+    // where a dragged row goes (the mockups' orange)
+    rowDimmed: "#00000099",
+    // over a row being dragged
+    dragGhost: "#3f7a51f5",
+    // the dragged row itself, lifted (nearly opaque, over the rows it passes)
     tipPad: 6
   };
   var BAR = {
@@ -1105,23 +1411,66 @@
   };
   var EDITOR = {
     x: 16,
+    // every pane's distance from the window's edges
     y: 16,
     width: 540,
-    pad: 10,
-    gap: 4,
-    titleHeight: 30,
+    // the views pane
+    pad: 8,
+    gap: 3,
+    titleHeight: 32,
     titleSize: 17,
     rowHeight: 24,
     visibleRows: 10,
-    buttonHeight: 28,
     textSize: 14,
-    lineHeight: 20,
-    sectionGap: 16,
-    // between the hold and pan controls on their shared line
     cellMargin: 14,
     // added to each list column's widest text
-    scrollBar: 24
-    // the list's scroll bar, when it has more than visibleRows views
+    scrollBar: 12,
+    // a list's scroll bar, when it overflows
+    grip: 18,
+    // the drag handle column of the views and parks
+    parkRow: 26,
+    // the park dropdown's rows
+    dragStart: 5,
+    // pixels the mouse moves before a press on a row drags it
+    holdOpen: 300,
+    // ms: a press on the park field held this long opens the list until release
+    // The toolbox
+    tool: 38,
+    // a tool button's side
+    toolIcon: 20,
+    // its icon (tools/mkicons.py GAME_SIZES)
+    groupGap: 10,
+    labelSize: 11,
+    // VIEW, CAMERA, EVENTS, HOLD, PAN
+    labelHeight: 15,
+    switchHeight: 34,
+    // Frame | Map
+    hintSize: 12,
+    hintHeight: 20,
+    stepValue: 58,
+    // the hold and pan value between its - and +
+    footerGap: 14,
+    // between redo and Reset view
+    playWidth: 96,
+    // The top-right box
+    boxWidth: 420,
+    boxRow: 28,
+    // a restore point
+    boxRows: 3.5,
+    // restore points shown (a half row says there are more; owner, 2026-11-10)
+    boxHead: 12,
+    // the RESTORE POINTS line
+    boxButton: 32,
+    propRow: 30,
+    propHeader: 30,
+    segHeight: 24,
+    segPad: 10,
+    // each side of a segment's text
+    stepButton: 26,
+    stepValueBox: 56,
+    holdStep: 0.5,
+    // seconds per - or + of the Playlist timing holds
+    holdMax: 10
   };
   var TIMING = {
     hideAfter: 2500,
@@ -1538,120 +1887,6 @@
     return pair && pair.length === 2 ? { width: pair[0], height: pair[1] } : void 0;
   }
 
-  // src/storage.ts
-  var NAMESPACE = "RCTScreensaver";
-  function isPinned(view) {
-    return view.animation !== void 0 && !view.fixed || view.show !== void 0 || view.cue !== void 0;
-  }
-  function isCut(view) {
-    return !!view.cue?.cut && typeof view.cue.tick === "number";
-  }
-  function placeCuts(views) {
-    const due = (v) => v.cue.tick / 40 - (v.cue.lead ?? 0);
-    const cuts = views.filter(isCut).sort((a, b) => due(a) - due(b));
-    if (cuts.length === 0) {
-      return views;
-    }
-    const rest = views.filter((v) => !isCut(v));
-    const starts = [];
-    let t = 0;
-    rest.forEach((v, i) => {
-      if (!isPinned(v)) {
-        starts.push([i, t]);
-        t += v.hold;
-      }
-    });
-    const after = /* @__PURE__ */ new Map();
-    for (const c of cuts) {
-      let k = starts.length > 0 ? starts[0][0] : rest.length - 1;
-      for (const [i, start] of starts) {
-        if (start <= due(c)) {
-          k = i;
-        }
-      }
-      after.set(k, [...after.get(k) ?? [], c]);
-    }
-    return [...rest.flatMap((v, i) => [v, ...after.get(i) ?? []]), ...after.get(-1) ?? []];
-  }
-  var TITLES = ["overview", "on", "off"];
-  function titlesOf(settings) {
-    return settings.titlesOverride ?? settings.titles;
-  }
-  var DEFAULT_SETTINGS = {
-    autostart: true,
-    shuffle: false,
-    debug: false,
-    speed: 1,
-    fadeMs: 600,
-    panTolerance: 500,
-    panToleranceStep: 100,
-    panChanges: "end",
-    inertia: false,
-    changeHold: 2,
-    arriveHold: 1,
-    returnHold: 2,
-    cameraLog: false,
-    scaleToWindow: true,
-    window: "borderless",
-    titleMusic: "keep",
-    titles: "overview",
-    captionPlace: "topLeft",
-    captionFrame: "gold",
-    captionBand: "green",
-    lightEffects: false,
-    weatherGloom: false,
-    weather: false,
-    timeOfDay: "day",
-    masterVolume: null,
-    soundVolume: null,
-    musicVolume: null,
-    drawingEngine: null,
-    multiThreading: null,
-    bench: false,
-    profilerExport: ""
-  };
-  function loadSettings() {
-    const stored = context.sharedStorage.get(NAMESPACE + ".settings", {});
-    return { ...DEFAULT_SETTINGS, ...stored };
-  }
-  function saveSettings(settings) {
-    const { titlesOverride: _, ...saved } = settings;
-    context.sharedStorage.set(NAMESPACE + ".settings", saved);
-  }
-  function loadEdits() {
-    return context.sharedStorage.get(NAMESPACE + ".edits", {});
-  }
-  function saveEdits(edits) {
-    context.sharedStorage.set(NAMESPACE + ".edits", edits);
-  }
-  function loadVisits() {
-    return context.sharedStorage.get(NAMESPACE + ".visits", {});
-  }
-  function saveVisits(visits) {
-    context.sharedStorage.set(NAMESPACE + ".visits", visits);
-  }
-  function loadPlaylist() {
-    return context.sharedStorage.get(NAMESPACE + ".playlist");
-  }
-  function resolveSequence(playlist) {
-    if (playlist.version !== 1) {
-      return `unsupported playlist version ${playlist.version}`;
-    }
-    const sequence = titleSequenceManager.titleSequences.find((s) => s.name === playlist.sequence);
-    if (!sequence) {
-      return `title sequence "${playlist.sequence}" not found`;
-    }
-    const commands = sequence.commands;
-    const parks = sequence.parks;
-    for (const park of playlist.parks) {
-      const command = commands[park.load];
-      if (!command || command.type !== "load" || parks[command.index]?.fileName !== park.fileName) {
-        return `title sequence "${playlist.sequence}" does not match the installed playlist (${park.fileName}); re-run tools/mksequence.py --install`;
-      }
-    }
-    return sequence;
-  }
-
   // src/player.ts
   var MIN_SPEED = 1;
   var MAX_SPEED = 4;
@@ -1722,6 +1957,7 @@
       // the editor plays the park's views (with pans), looping in the park
       this.running = false;
       this.edits = loadEdits();
+      // and as saved in the game's storage
       this.scalingLogged = "";
       this.panPlanned = false;
       // planned for the current view (pan undefined: it cuts instead)
@@ -1746,12 +1982,31 @@
       this.triggersIn = /* @__PURE__ */ new Set();
       // camera log: car cues (by view) with a car on their tiles
       this.arrivedChanged = false;
+      this.installedMusic = "keep";
       /** Which of a park's orders (its views, or one of `variants`) plays on the current visit:
        *  the first visit ever plays the cheapest order and each later visit the next
        *  (circuit_variants); the visit count persists in storage across runs. */
       this.visits = loadVisits();
       this.dip = !!overlay && settings.fadeMs > 0 && backgroundLoading(sequence) && canHoldSwitch(sequence);
       this.cover = new Cover(settings.fadeMs, this.dip ? overlay : void 0);
+      this.savedProps = loadPlaylistProps(playlist.sequence);
+      this.props = { ...this.savedProps };
+      this.noteInstalledMusic(settings.titleMusic);
+      this.applyPresentation();
+    }
+    /** The editor's Title music and Show titles, where set, over the viewer's settings (the mode's
+     *  title music takes effect when the caller configures the mode). */
+    applyPresentation() {
+      if (this.props.titleMusic !== void 0) {
+        this.settings.titleMusic = this.props.titleMusic;
+      }
+      if (this.props.titles !== void 0) {
+        this.settings.titlesOverride = this.props.titles ?? void 0;
+      }
+    }
+    /** The settings playback runs with (shared with the controls bar). */
+    get liveSettings() {
+      return this.settings;
     }
     /** True while the view is held (Space, or the controls bar's hold button). */
     get isHeld() {
@@ -1774,7 +2029,7 @@
       this.running = true;
       this.holding = false;
       this.settings.speed = Math.min(MAX_SPEED, Math.max(MIN_SPEED, this.settings.speed));
-      this.parkOrder = range2(this.playlist.parks.length);
+      this.parkOrder = this.orderFromProps();
       this.unplayed.clear();
       this.history = [];
       if (!this.sequence.isPlaying) {
@@ -1966,7 +2221,7 @@
       }
       this.unplayed.delete(this.parkPos);
       if (this.unplayed.size === 0) {
-        this.unplayed = new Set(this.parkOrder.filter((i) => i !== this.parkPos));
+        this.unplayed = new Set(range2(this.parkOrder.length).filter((p) => p !== this.parkPos));
       }
       const pool = [...this.unplayed];
       this.upNext = pool[context.getRandom(0, pool.length)];
@@ -2054,6 +2309,154 @@
     }
     get parkNames() {
       return this.playlist.parks.map((p) => p.name);
+    }
+    /** Playlist indices of the parks in play order (the view editor's Playlist order). */
+    get playOrder() {
+      return [...this.parkOrder];
+    }
+    /** How many views each park has (by playlist index): its edits', else the playlist's. */
+    viewCountOf(index) {
+      if (index === this.parkIndex && !this.loadingPark) {
+        return this.views.length;
+      }
+      const park = this.playlist.parks[index];
+      const edit = park?.key !== void 0 ? this.edits[park.key] : void 0;
+      return edit?.views?.length ?? (edit?.reset ? park.defaultViews?.length : void 0) ?? park?.views.length ?? 0;
+    }
+    /** The play order from the editor's saved order (parks it does not name keep theirs, after it). */
+    orderFromProps() {
+      const parks = this.playlist.parks;
+      const order = this.props.order ?? [];
+      const rank = (i) => {
+        const r = order.indexOf(parks[i].key ?? parks[i].fileName);
+        return r < 0 ? order.length + i : r;
+      };
+      return range2(parks.length).sort((a, b) => rank(a) - rank(b));
+    }
+    /** Moves a park in the play order (positions), keeping the park on screen; saved at once. */
+    moveParkInOrder(from, to) {
+      const n = this.parkOrder.length;
+      if (from === to || from < 0 || to < 0 || from >= n || to >= n) {
+        return;
+      }
+      const current = this.parkOrder[this.parkPos];
+      const [moved] = this.parkOrder.splice(from, 1);
+      this.parkOrder.splice(to, 0, moved);
+      this.parkPos = this.parkOrder.indexOf(current);
+      this.unplayed.clear();
+      this.history = [];
+      this.pickNext();
+      const order = this.parkOrder.map((i) => this.playlist.parks[i].key ?? this.playlist.parks[i].fileName);
+      this.props.order = order;
+      this.savedProps.order = order;
+      savePlaylistProps(this.playlist.sequence, this.savedProps);
+    }
+    get sequenceName() {
+      return this.playlist.sequence;
+    }
+    /** The playlist's own values for the editor's Playlist properties, as built. */
+    get playlistDefaults() {
+      const p = this.playlist;
+      return {
+        inertia: p.inertia ?? this.settings.inertia,
+        panChanges: p.panChanges ?? this.settings.panChanges,
+        changeHold: p.changeHold ?? this.settings.changeHold,
+        arriveHold: p.arriveHold ?? this.settings.arriveHold,
+        returnHold: p.returnHold ?? this.settings.returnHold,
+        titleMusic: this.installedMusic,
+        titles: p.titles ?? null
+      };
+    }
+    /** The title music the install set (settings.titleMusic as playback started), for the editor. */
+    noteInstalledMusic(music) {
+      this.installedMusic = music === "ride" || music === "theme" ? music : "keep";
+    }
+    /** The Playlist properties in force: the editor's over the playlist's own. */
+    get playlistProps() {
+      const d = this.playlistDefaults;
+      const p = this.props;
+      return {
+        inertia: p.inertia ?? d.inertia,
+        panChanges: p.panChanges ?? d.panChanges,
+        changeHold: p.changeHold ?? d.changeHold,
+        arriveHold: p.arriveHold ?? d.arriveHold,
+        returnHold: p.returnHold ?? d.returnHold,
+        titleMusic: p.titleMusic ?? d.titleMusic,
+        titles: p.titles !== void 0 ? p.titles : d.titles
+      };
+    }
+    /** Changes a Playlist property: in force at once (from the next pan), saved with savePlaylistProps. */
+    setPlaylistProp(key, value) {
+      this.props[key] = value;
+      if (key === "titleMusic" || key === "titles") {
+        if (key === "titleMusic") {
+          this.settings.titleMusic = value ?? this.installedMusic;
+        } else {
+          this.settings.titlesOverride = value === void 0 ? this.playlist.titles : value ?? void 0;
+        }
+        return;
+      }
+      this.clearPan();
+    }
+    /** The Playlist properties differ from what is saved in the game's storage. */
+    get playlistPropsUnsaved() {
+      return JSON.stringify(this.props) !== JSON.stringify(this.savedProps);
+    }
+    savePlaylistProps() {
+      this.savedProps = { ...this.props };
+      savePlaylistProps(this.playlist.sequence, this.savedProps);
+      saveSettings(this.settings);
+    }
+    /** When the playlist was built and installed (ms since 1970), if known. */
+    get builtAt() {
+      return this.playlist.built;
+    }
+    get installedAt() {
+      return this.playlist.installed;
+    }
+    /** The current park's key (its edits, checkpoints), or undefined if it cannot be edited. */
+    get parkKey() {
+      return this.currentPark()?.key;
+    }
+    /** The current park's views were set by hand at install (its views file): "Last install" differs
+     *  from "Generated". */
+    get installedHandSet() {
+      return this.currentPark()?.handSet === true;
+    }
+    /** The views the park would play without the editor's edits: the playlist's own ("Generated", or
+     *  with `installed` the views as installed, hand-set ones included). */
+    baseViews(installed = false) {
+      const park = this.currentPark();
+      if (!park || park.key === void 0) {
+        return [];
+      }
+      const saved = this.edits[park.key];
+      delete this.edits[park.key];
+      if (!installed && park.handSet) {
+        this.edits[park.key] = { reset: true };
+      }
+      try {
+        return this.viewsFor(park, !this.loadingPark);
+      } finally {
+        if (saved) {
+          this.edits[park.key] = saved;
+        } else {
+          delete this.edits[park.key];
+        }
+      }
+    }
+    /** Drops the editor's edits of the current park, back to its views as installed. */
+    restoreInstalled() {
+      const park = this.currentPark();
+      if (park.key === void 0 || !this.edits[park.key]) {
+        return;
+      }
+      delete this.edits[park.key];
+      saveEdits(this.edits);
+      this.views = this.viewsFor(park);
+      this.viewOrder = this.makeViewOrder();
+      this.viewPos = 0;
+      this.showView(false, "revert");
     }
     /** Playlist index of the current park. */
     get parkIndex() {
@@ -2200,14 +2603,19 @@
       return Math.min(1, Math.max(0, view.pan ?? 0));
     }
     panChangesOf(view) {
-      return (view.panChanges ?? this.settings.panChanges) === "start" ? "start" : "end";
+      return this.changesSetting(view) === "start" ? "start" : "end";
+    }
+    /** Where a view's pan changes the angle and zoom: the editor's Playlist property (not on overviews:
+     *  they keep their own, owner's rule), else the view's, else the settings'. "off": such a pan cuts. */
+    changesSetting(view) {
+      return (!view.overview ? this.props.panChanges : void 0) ?? view.panChanges ?? this.settings.panChanges;
     }
     inertiaOf(view) {
-      return (view.inertia ?? this.settings.inertia) === true;
+      return (this.props.inertia ?? view.inertia ?? this.settings.inertia) === true;
     }
     /** A pan hold in ms: the playlist's (settings UI, times its time scaling), else the plugin setting's. */
     holdMs(key, fallback) {
-      return Math.max(0, (this.playlist[key] ?? this.settings[key] ?? fallback) * 1e3);
+      return Math.max(0, (this.props[key] ?? this.playlist[key] ?? this.settings[key] ?? fallback) * 1e3);
     }
     /** Plans the current view's pan to the next view of the park, if it gets one. */
     planPan() {
@@ -2224,6 +2632,10 @@
       }
       const effectMs = view?.cue ? this.effectLeftMs() : 0;
       if (!view || !next || view === next || view.show || effectMs === void 0 || this.panOf(view) === 0) {
+        this.camLog("plan", "cut");
+        return;
+      }
+      if (this.changesSetting(view) === "off" && (next.rotation !== view.rotation || next.zoom !== view.zoom)) {
         this.camLog("plan", "cut");
         return;
       }
@@ -2909,14 +3321,17 @@
       this.prefix = prefix;
       this.sent = /* @__PURE__ */ new Map();
       this.shown = false;
+      this.base = /* @__PURE__ */ new Map();
     }
     get visible() {
       return this.shown;
     }
+    // each element's own opacity (an inactive button's icon)
     render(scene) {
-      const opacity = this.shown ? 1 : 0;
       for (const [id, element] of scene) {
-        const full = { ...element, opacity };
+        const own = element.opacity ?? 1;
+        this.base.set(id, own);
+        const full = { ...element, opacity: this.shown ? own : 0 };
         const key = JSON.stringify(full);
         if (this.sent.get(id) !== key) {
           this.overlay.set(this.prefix + id, full);
@@ -2927,6 +3342,7 @@
         if (!scene.has(id)) {
           this.overlay.remove(this.prefix + id);
           this.sent.delete(id);
+          this.base.delete(id);
         }
       }
     }
@@ -2937,9 +3353,10 @@
       }
       this.shown = on;
       for (const id of this.sent.keys()) {
-        this.overlay.fade(this.prefix + id, on ? 1 : 0, ms);
+        const to = on ? this.base.get(id) ?? 1 : 0;
+        this.overlay.fade(this.prefix + id, to, ms);
         const element = JSON.parse(this.sent.get(id));
-        this.sent.set(id, JSON.stringify({ ...element, opacity: on ? 1 : 0 }));
+        this.sent.set(id, JSON.stringify({ ...element, opacity: to }));
       }
     }
     clear() {
@@ -2947,6 +3364,7 @@
         this.overlay.remove(this.prefix + id);
       }
       this.sent.clear();
+      this.base.clear();
       this.shown = false;
     }
   };
@@ -2962,13 +3380,65 @@
     bevel(scene, id, r, THEME.backingLight, THEME.backingDark, THEME.bevel, Z.backing);
   }
   function button(scene, id, r, state, content, overlay) {
-    const sunk = state.down || state.on;
+    const off = state.disabled === true;
+    const sunk = !off && (state.down || state.on);
     const onFace = state.alt ? THEME.faceAlt : THEME.faceOn;
-    const face = state.face && !state.down ? state.face : state.down ? THEME.faceDown : state.hover ? state.on && state.alt ? THEME.faceAltHover : THEME.faceHover : state.on ? onFace : THEME.face;
+    const face = off ? THEME.faceOff : state.face && !state.down ? state.face : state.down ? THEME.faceDown : state.hover ? state.on && state.alt ? THEME.faceAltHover : THEME.faceHover : state.on ? onFace : THEME.face;
     scene.set(id, { type: "rect", x: r.x, y: r.y, width: r.width, height: r.height, fill: face, z: Z.face });
-    bevel(scene, id, r, sunk ? THEME.bevelDark : THEME.bevelLight, sunk ? THEME.bevelLight : THEME.bevelDark, THEME.bevel, Z.bevel);
+    bevel(
+      scene,
+      id,
+      r,
+      sunk || off ? THEME.bevelDark : THEME.bevelLight,
+      sunk ? THEME.bevelLight : off ? THEME.backingLight : THEME.bevelDark,
+      THEME.bevel,
+      Z.bevel
+    );
     const nudge = sunk ? 1 : 0;
-    if (content.icon) {
+    const colour = off ? THEME.textOff : THEME.text;
+    const opacity = off ? THEME.iconOff : void 0;
+    if (content.icon && content.text !== void 0) {
+      const size = content.iconSize ?? 16;
+      const px = iconPixels(size, overlay.scale);
+      const side = px / overlay.scale;
+      const textSize = content.textSize ?? 12;
+      const hintSize = Math.max(9, textSize - 4);
+      const tm = measure(overlay, content.text, textSize, true);
+      const hm = content.hint ? measure(overlay, content.hint, hintSize) : { width: 0, height: 0 };
+      const gap = Math.round(side * 0.4);
+      const total = side + gap + tm.width + (content.hint ? gap + hm.width : 0);
+      const x0 = (content.left ? r.x + Math.round(side * 0.5) : r.x + Math.round((r.width - total) / 2)) + nudge;
+      scene.set(`${id}.icon`, {
+        type: "image",
+        src: iconPath(content.icon, px),
+        z: Z.icon,
+        x: x0,
+        y: r.y + (r.height - side) / 2 + nudge,
+        ...opacity !== void 0 ? { opacity } : {}
+      });
+      scene.set(`${id}.text`, {
+        type: "text",
+        text: content.text,
+        size: textSize,
+        bold: true,
+        colour,
+        shadow: THEME.textShadow,
+        x: x0 + side + gap,
+        y: r.y + (r.height - tm.height) / 2 + nudge,
+        z: Z.icon
+      });
+      if (content.hint) {
+        scene.set(`${id}.hint`, {
+          type: "text",
+          text: content.hint,
+          size: hintSize,
+          colour: THEME.textDim,
+          x: x0 + side + gap + tm.width + gap,
+          y: r.y + (r.height - hm.height) / 2 + nudge + 1,
+          z: Z.icon
+        });
+      }
+    } else if (content.icon) {
       const size = content.iconSize ?? 16;
       const px = iconPixels(size, overlay.scale);
       const side = px / overlay.scale;
@@ -2977,7 +3447,8 @@
         src: iconPath(content.icon, px),
         z: Z.icon,
         x: r.x + (r.width - side) / 2 + nudge,
-        y: r.y + (r.height - side) / 2 + nudge
+        y: r.y + (r.height - side) / 2 + nudge,
+        ...opacity !== void 0 ? { opacity } : {}
       });
     } else if (content.text !== void 0) {
       const size = content.textSize ?? 12;
@@ -2987,7 +3458,7 @@
         text: content.text,
         size,
         bold: true,
-        colour: THEME.text,
+        colour,
         shadow: THEME.textShadow,
         align: "center",
         x: r.x + r.width / 2 + nudge,
@@ -3037,7 +3508,7 @@
     scene.set(id, { type: "rect", x, y, width, height, fill: THEME.tipBacking, z: Z.tip });
     scene.set(`${id}.text`, { type: "text", text, size, colour: THEME.tipText, x: x + pad, y: y + pad, z: Z.tip + 1 });
   }
-  var ICON_PIXELS = [24, 30, 34, 36, 42, 48, 51, 60, 68, 72, 85, 96, 102, 136];
+  var ICON_PIXELS = [20, 24, 25, 30, 34, 35, 36, 40, 42, 48, 50, 51, 60, 68, 72, 80, 85, 96, 102, 136];
   var ICON_FOLDER = "rct-screensaver/icons";
   function iconPixels(size, scale) {
     const want = size * scale;
@@ -4375,27 +4846,79 @@
 
   // src/ui/editor-panel.ts
   var PAN_SHARE_STEP2 = 0.1;
-  var HELP = [
-    "Drag the park: moves the selected view. Wheel: zooms it.",
-    "Arrows pan the camera (Shift: faster). Ctrl+Z undoes. E closes."
-  ];
-  var MAP_HELP = [
-    "Drag a box: moves it; its corner: zooms it. Drag the park: pans.",
-    "Right-click: adds a view. Double-click a box: frames it. M closes."
-  ];
+  var HINT_FRAME = "Drag the park: moves the view. Wheel: zooms it.";
+  var HINT_MAP = "Drag a box or its corner. Right-click: adds a view.";
+  var DRAG_Z = Z.tip - 2;
+  var CHOICES = {
+    inertia: [["Off", false], ["On", true]],
+    panChanges: [["Off", "off"], ["Start", "start"], ["End", "end"]],
+    titleMusic: [["Ride", "ride"], ["Theme", "theme"], ["Unset", "keep"]],
+    titles: [["Overview", "overview"], ["On", "on"], ["Off", "off"], ["Unset", null]]
+  };
+  var Scroll = class {
+    constructor() {
+      this.first = 0;
+    }
+    clamp(count, visible) {
+      this.first = Math.max(0, Math.min(this.first, Math.max(0, Math.ceil(count - visible))));
+    }
+    by(rows, count, visible) {
+      this.first += rows;
+      this.clamp(count, visible);
+    }
+    /** Lays the bar out in `track` (none when everything shows). */
+    layout(track, count, visible) {
+      this.clamp(count, visible);
+      if (count <= visible) {
+        this.track = this.thumb = void 0;
+        return;
+      }
+      const h = Math.max(12, Math.round(track.height * visible / count));
+      const span = Math.max(1, Math.ceil(count - visible));
+      this.track = track;
+      this.thumb = { x: track.x, y: track.y + Math.round((track.height - h) * this.first / span), width: track.width, height: h };
+    }
+    draw(scene, id) {
+      if (this.track && this.thumb) {
+        scene.set(`${id}.track`, { type: "rect", ...this.track, fill: THEME.editorList, z: Z.face });
+        scene.set(`${id}.thumb`, { type: "rect", ...this.thumb, fill: THEME.faceOn, z: Z.icon });
+      }
+    }
+    /** The first row for the thumb dragged to `y` (from a press at y0 when the first row was first0). */
+    dragTo(y, y0, first0, count, visible) {
+      if (!this.track || !this.thumb) {
+        return;
+      }
+      const span = Math.max(1, this.track.height - this.thumb.height);
+      this.first = first0 + Math.round((y - y0) / span * Math.max(0, count - visible));
+      this.clamp(count, visible);
+    }
+  };
   var EditorPanel = class {
-    // a left drag on the park: where the mouse last was
-    constructor(mode2) {
+    constructor(mode2, now = () => Date.now()) {
       this.mode = mode2;
+      this.now = now;
       this.supportsMap = true;
       this.mouse = { x: -1, y: -1 };
       this.boxes = /* @__PURE__ */ new Map();
-      this.texts = /* @__PURE__ */ new Map();
-      this.frame = { x: 0, y: 0, width: 0, height: 0 };
-      this.list = { x: 0, y: 0, width: 0, height: 0 };
-      this.scroll = 0;
-      // first row shown
+      this.tips = /* @__PURE__ */ new Map();
+      this.off = /* @__PURE__ */ new Set();
+      // inactive buttons
+      this.frames = [];
+      // the panes shown, for what the mouse is over
+      this.paneViews = { x: 0, y: 0, width: 0, height: 0 };
+      this.listRect = { x: 0, y: 0, width: 0, height: 0 };
+      // the restore points' rows
+      this.views = new Scroll();
+      this.parks = new Scroll();
+      this.points = new Scroll();
       this.followed = -1;
+      // the restore point highlighted
+      this.propsOpen = true;
+      // the top-right box unfolded by hand (undefined: by the window's width)
+      this.lastMove = 0;
+      // the pin off: the panes hide this long after the mouse last moved
+      this.hidden = false;
       this.layer = new Layer(mode2.overlay, "rcts.ed.");
       this.map = new ViewMap(mode2.overlay);
     }
@@ -4404,7 +4927,11 @@
     }
     open(editor2) {
       this.editor = editor2;
-      this.scroll = 0;
+      this.views.first = 0;
+      this.dropdown = void 0;
+      this.picked = void 0;
+      this.hidden = false;
+      this.lastMove = this.now();
       this.render();
       this.layer.show(true, TIMING.fadeIn);
       this.render();
@@ -4413,44 +4940,194 @@
       this.editor = void 0;
       this.downOn = void 0;
       this.drag = void 0;
+      this.rowDrag = void 0;
+      this.thumbDrag = void 0;
+      this.dropdown = void 0;
       this.layer.clear();
       this.map.clear();
     }
     refresh() {
       this.render();
     }
-    /** Handles a mouse event over the panel (or a press that started on it); false lets it through. */
+    /** Called every update: with the pin off the panes hide once the mouse has rested a while. */
+    update() {
+      const e = this.editor;
+      if (!e || e.pinned || this.hidden || this.busy || this.over(this.mouse.x, this.mouse.y)) {
+        return;
+      }
+      if (this.now() - this.lastMove >= TIMING.hideAfter) {
+        this.hidden = true;
+        this.layer.show(false, TIMING.fadeOut);
+      }
+    }
+    get busy() {
+      return this.downOn !== void 0 || this.rowDrag !== void 0 || this.thumbDrag !== void 0 || this.dropdown !== void 0;
+    }
+    over(x, y) {
+      return this.frames.some((f) => contains(f, x, y));
+    }
+    wake() {
+      this.lastMove = this.now();
+      if (this.hidden) {
+        this.hidden = false;
+        this.layer.show(true, TIMING.fadeIn);
+      }
+    }
+    /** Handles a mouse event over the panes (or a press that started on them); false lets it through. */
     onMouse(e) {
-      if (!this.editor || this.drag || this.map.dragging) {
+      const ed = this.editor;
+      if (!ed || this.drag || this.map.dragging) {
         return false;
       }
       if (e.type !== "wheel") {
+        if (e.x !== this.mouse.x || e.y !== this.mouse.y) {
+          this.wake();
+        }
         this.mouse = { x: e.x, y: e.y };
       }
-      const inside = contains(this.frame, this.mouse.x, this.mouse.y);
-      let used = inside || this.downOn !== void 0;
-      if (e.type === "down" && e.button === 0 && inside) {
-        this.downOn = this.hit();
-      } else if (e.type === "up" && e.button === 0) {
-        const hit = this.hit();
-        if (this.downOn && hit === this.downOn) {
-          this.activate(hit);
+      const inside = this.over(this.mouse.x, this.mouse.y);
+      let used = inside || this.busy;
+      if (e.type === "move") {
+        this.moved();
+      } else if (e.type === "down" && e.button === 0) {
+        used = this.pressed(inside) || used;
+      } else if (e.type === "down") {
+        used = inside || this.dropdown !== void 0;
+        if (this.dropdown && !inside) {
+          this.dropdown = void 0;
         }
-        used = used || this.downOn !== void 0;
-        this.downOn = void 0;
-      } else if (e.type === "wheel" && contains(this.list, this.mouse.x, this.mouse.y)) {
-        this.scrollBy(e.delta > 0 ? -1 : 1);
+      } else if (e.type === "up" && e.button === 0) {
+        used = this.released() || used;
+      } else if (e.type === "wheel") {
+        const step = e.delta > 0 ? -1 : 1;
+        if (this.parksRect && contains(this.parksRect, this.mouse.x, this.mouse.y)) {
+          this.parks.by(step, ed.parkNames.length, this.parkRows());
+        } else if (contains(this.listRect, this.mouse.x, this.mouse.y)) {
+          this.views.by(step, ed.rows().length, EDITOR.visibleRows);
+        } else if (this.pointsRect && contains(this.pointsRect, this.mouse.x, this.mouse.y)) {
+          this.points.by(step, ed.restorePoints().length, EDITOR.boxRows);
+        }
       }
       this.render();
       return used;
     }
-    /** Handles a mouse event on the park (off the panel and the bar, or during a drag that started on
+    moved() {
+      const t = this.thumbDrag;
+      if (t) {
+        t.scroll.dragTo(this.mouse.y, t.y0, t.first0, t.count(), t.visible);
+        return;
+      }
+      const r = this.rowDrag;
+      if (r && !r.moving && Math.abs(this.mouse.y - r.y0) + Math.abs(this.mouse.x - r.x0) >= EDITOR.dragStart) {
+        r.moving = r.list === "parks" ? this.dropdown?.persistent === true : this.editor.movable(r.from);
+        if (!r.moving && r.list === "views") {
+          this.rowDrag = void 0;
+        }
+      }
+      if (r?.moving) {
+        this.autoScroll(r);
+      }
+    }
+    /** A dragged row near its list's top or bottom edge scrolls the list. */
+    autoScroll(r) {
+      const ed = this.editor;
+      const rect = r.list === "views" ? this.listRect : this.parksRect;
+      if (!rect) {
+        return;
+      }
+      const rowsTop = rect.y + (r.list === "views" ? EDITOR.rowHeight : EDITOR.parkRow);
+      const step = this.mouse.y < rowsTop ? -1 : this.mouse.y > rect.y + rect.height ? 1 : 0;
+      if (step && r.list === "views") {
+        this.views.by(step, ed.rows().length, EDITOR.visibleRows);
+      } else if (step) {
+        this.parks.by(step, ed.parkNames.length, this.parkRows());
+      }
+    }
+    pressed(inside) {
+      const ed = this.editor;
+      const hit = this.hit();
+      if (this.dropdown && (!hit || !hit.startsWith("park.") && !hit.startsWith("parks."))) {
+        this.dropdown = void 0;
+        return true;
+      }
+      if (!inside && !hit) {
+        return false;
+      }
+      this.downOn = hit;
+      if (hit === "field") {
+        this.dropdown = { persistent: false, downAt: this.now() };
+        this.parks.first = Math.max(0, ed.playback.playOrder.indexOf(ed.parkIndex) - 2);
+      } else if (hit?.startsWith("row.") || hit?.startsWith("park.")) {
+        const views = hit.startsWith("row.");
+        this.rowDrag = { list: views ? "views" : "parks", from: Number(hit.slice(views ? 4 : 5)), x0: this.mouse.x, y0: this.mouse.y, moving: false };
+      } else if (hit?.endsWith(".thumb")) {
+        const which = hit.slice(0, -6);
+        const scroll = which === "parks" ? this.parks : which === "points" ? this.points : this.views;
+        const count = which === "parks" ? () => ed.parkNames.length : which === "points" ? () => ed.restorePoints().length : () => ed.rows().length;
+        const visible = which === "parks" ? this.parkRows() : which === "points" ? EDITOR.boxRows : EDITOR.visibleRows;
+        this.thumbDrag = { scroll, y0: this.mouse.y, first0: scroll.first, count, visible };
+      } else if (hit?.endsWith(".track")) {
+        const which = hit.slice(0, -6);
+        const scroll = which === "parks" ? this.parks : which === "points" ? this.points : this.views;
+        const page = which === "parks" ? this.parkRows() : which === "points" ? 3 : EDITOR.visibleRows;
+        const count = which === "parks" ? ed.parkNames.length : which === "points" ? ed.restorePoints().length : ed.rows().length;
+        scroll.by(this.mouse.y < (scroll.thumb?.y ?? 0) ? -page : page, count, page);
+      }
+      return true;
+    }
+    released() {
+      const ed = this.editor;
+      const hit = this.hit();
+      const down = this.downOn;
+      this.downOn = void 0;
+      this.thumbDrag = void 0;
+      const r = this.rowDrag;
+      this.rowDrag = void 0;
+      const dd = this.dropdown;
+      if (down === "field" && dd && !dd.persistent) {
+        if (hit?.startsWith("park.")) {
+          this.goToPark(Number(hit.slice(5)));
+          this.dropdown = void 0;
+        } else if (hit === "field" && this.now() - dd.downAt < EDITOR.holdOpen) {
+          dd.persistent = true;
+        } else {
+          this.dropdown = void 0;
+        }
+        return true;
+      }
+      if (r?.moving) {
+        const to = this.dropIndex(r);
+        if (r.list === "views") {
+          ed.moveTo(r.from, to);
+        } else {
+          ed.playback.moveParkInOrder(r.from, to);
+        }
+        return true;
+      }
+      if (down && hit === down && !this.off.has(hit)) {
+        this.activate(hit);
+      }
+      return down !== void 0;
+    }
+    /** Where a dragged row lands: the gap nearest the mouse, as an index after the row leaves its place. */
+    dropIndex(r) {
+      const ed = this.editor;
+      const views = r.list === "views";
+      const rect = views ? this.listRect : this.parksRect;
+      const rowH = views ? EDITOR.rowHeight : EDITOR.parkRow;
+      const count = views ? ed.rows().length : ed.parkNames.length;
+      const first = views ? this.views.first : this.parks.first;
+      const gap = Math.max(0, Math.min(count, Math.round((this.mouse.y - rect.y - rowH) / rowH) + first));
+      return gap > r.from ? gap - 1 : gap;
+    }
+    /** Handles a mouse event on the park (off the panes and the bar, or during a drag that started on
      * the park): a left drag moves the camera and with it the selected view, the wheel zooms it. */
     onPark(e) {
       const editor2 = this.editor;
       if (!editor2) {
         return false;
       }
+      this.wake();
       if (editor2.mapMode || this.map.dragging) {
         return this.map.onMouse(e, editor2);
       }
@@ -4480,39 +5157,76 @@
       return this.drag !== void 0 || this.map.dragging;
     }
     hit() {
+      let found;
       for (const [id, r] of this.boxes) {
         if (contains(r, this.mouse.x, this.mouse.y)) {
-          return id;
+          if (id.startsWith("park.") || id.startsWith("parks.")) {
+            return id;
+          }
+          if (this.parksRect && contains(this.parksRect, this.mouse.x, this.mouse.y)) {
+            continue;
+          }
+          found = found ?? id;
         }
       }
-      return void 0;
+      return found;
     }
-    scrollBy(rows) {
-      const count = this.editor?.rows().length ?? 0;
-      this.scroll = Math.max(0, Math.min(Math.max(0, count - EDITOR.visibleRows), this.scroll + rows));
+    goToPark(pos) {
+      const ed = this.editor;
+      const order = ed.playback.playOrder;
+      const n = order.length;
+      if (n > 0) {
+        ed.goToPark(order[(pos % n + n) % n]);
+      }
     }
     activate(id) {
       const e = this.editor;
       if (!e) {
         return;
       }
-      if (id === "scrollUp" || id === "scrollDown") {
-        this.scrollBy(id === "scrollUp" ? -1 : 1);
-        return;
-      }
       if (id.startsWith("row.")) {
         e.select(Number(id.slice(4)));
         return;
       }
+      if (id.startsWith("park.")) {
+        this.goToPark(Number(id.slice(5)));
+        return;
+      }
+      if (id.startsWith("point.")) {
+        this.picked = e.restorePoints()[Number(id.slice(6))]?.id;
+        return;
+      }
+      if (id.startsWith("seg.")) {
+        const [, key, i] = id.split(".");
+        const choice = CHOICES[key]?.[Number(i)];
+        if (choice) {
+          this.setProp(key, choice[1]);
+        }
+        return;
+      }
+      if (id.startsWith("step.")) {
+        const [, key, sign] = id.split(".");
+        const k = key;
+        const v = e.playback.playlistProps[k] + (sign === "more" ? EDITOR.holdStep : -EDITOR.holdStep);
+        this.setProp(k, Math.round(Math.max(0, Math.min(EDITOR.holdMax, v)) * 100) / 100);
+        return;
+      }
+      const pos = e.playback.playOrder.indexOf(e.parkIndex);
       switch (id) {
         case "close":
           e.close();
           break;
         case "prevPark":
-          e.goToPark(e.parkIndex - 1);
+          this.goToPark(pos - 1);
           break;
         case "nextPark":
-          e.goToPark(e.parkIndex + 1);
+          this.goToPark(pos + 1);
+          break;
+        case "frameMode":
+          if (e.mapMode) e.toggleMap();
+          break;
+        case "mapMode":
+          if (!e.mapMode) e.toggleMap();
           break;
         case "add":
           e.add();
@@ -4520,41 +5234,8 @@
         case "update":
           e.update();
           break;
-        case "undo":
-          e.undo();
-          break;
-        case "redo":
-          e.redo();
-          break;
         case "delete":
           e.remove();
-          break;
-        case "up":
-          e.move(-1);
-          break;
-        case "down":
-          e.move(1);
-          break;
-        case "revert":
-          e.revert();
-          break;
-        case "holdLess":
-          e.changeHold(-1);
-          break;
-        case "holdMore":
-          e.changeHold(1);
-          break;
-        case "panLess":
-          e.changePan(-PAN_SHARE_STEP2);
-          break;
-        case "panMore":
-          e.changePan(PAN_SHARE_STEP2);
-          break;
-        case "turn":
-          e.toggleTurn();
-          break;
-        case "inertia":
-          e.toggleInertia();
           break;
         case "rotl":
           e.rotate(-1);
@@ -4568,190 +5249,102 @@
         case "zoomout":
           e.zoom(1);
           break;
-        case "play":
-          e.togglePreview();
-          break;
-        case "map":
-          e.toggleMap();
-          break;
         case "lock":
           e.toggleEventLock();
           break;
+        case "holdLess":
+          e.changeHold(-1);
+          break;
+        case "holdMore":
+          e.changeHold(1);
+          break;
+        case "panLess":
+          e.changePan(-PAN_SHARE_STEP2);
+          break;
+        case "panMore":
+          e.changePan(PAN_SHARE_STEP2);
+          break;
+        case "undo":
+          e.undo();
+          break;
+        case "redo":
+          e.redo();
+          break;
+        case "reset":
+          e.resetView();
+          break;
+        case "pin":
+          e.togglePinned();
+          break;
+        case "play":
+          e.togglePreview();
+          break;
+        case "checkpoint":
+          e.saveCheckpoint();
+          break;
+        case "restore":
+          if (this.picked) e.restoreTo(this.picked);
+          break;
+        case "boxHead":
+          this.boxOpen = this.boxFolded();
+          break;
+        case "propsHead":
+          this.propsOpen = !this.propsOpen;
+          break;
+        case "save":
+          e.playback.savePlaylistProps();
+          break;
       }
     }
-    /** Places every control; rows of equal buttons fill the panel's width. */
-    layout(e) {
-      const s = EDITOR;
-      const inner = s.width - 2 * s.pad;
-      const x0 = s.x + s.pad;
-      let y = s.y + s.pad;
-      this.boxes.clear();
-      this.texts.clear();
-      const buttonRow = (ids, h = s.buttonHeight) => {
-        const w = (inner - s.gap * (ids.length - 1)) / ids.length;
-        ids.forEach((id, i) => this.boxes.set(id, {
-          x: Math.round(x0 + i * (w + s.gap)),
-          y,
-          width: Math.round(w),
-          height: h
-        }));
-        y += h + s.gap;
-      };
-      const t = s.titleHeight;
-      this.boxes.set("prevPark", { x: x0, y, width: t, height: t });
-      this.boxes.set("nextPark", { x: x0 + t + s.gap, y, width: t, height: t });
-      this.boxes.set("close", { x: x0 + inner - t, y, width: t, height: t });
-      const names = e.parkNames;
-      this.texts.set("park", {
-        text: names[e.parkIndex] ?? "No park",
-        bold: true,
-        r: { x: x0 + 2 * (t + s.gap) + 4, y, width: inner - 3 * (t + s.gap) - 4, height: t }
-      });
-      y += t + s.gap;
-      const rows = e.rows();
-      this.scroll = Math.max(0, Math.min(this.scroll, Math.max(0, rows.length - s.visibleRows)));
-      const sel = e.selectedIndex;
-      if (sel !== this.followed) {
-        this.followed = sel;
-        if (sel >= 0 && (sel < this.scroll || sel >= this.scroll + s.visibleRows)) {
-          this.scroll = Math.max(0, Math.min(sel, rows.length - s.visibleRows));
-        }
+    setProp(key, value) {
+      const p = this.editor.playback;
+      p.setPlaylistProp(key, value);
+      if (key === "titleMusic") {
+        this.mode.configure(modeSettings(p.liveSettings));
       }
-      const scrolls = rows.length > s.visibleRows;
-      const bar2 = scrolls ? s.scrollBar : 0;
-      this.list = { x: x0, y, width: inner - bar2, height: s.rowHeight * (s.visibleRows + 1) };
-      y += s.rowHeight;
-      for (let i = 0; i < s.visibleRows && this.scroll + i < rows.length; i++) {
-        this.boxes.set(`row.${this.scroll + i}`, { x: x0, y: y + i * s.rowHeight, width: inner - bar2, height: s.rowHeight });
+    }
+    // Layout
+    parkRows() {
+      return Math.max(1, Math.floor(((this.parksRect?.height ?? 0) - EDITOR.parkRow) / EDITOR.parkRow));
+    }
+    /** The top-right box shows only its header: by hand, else when the window is too narrow for it
+     *  beside the views pane (owner, 2026-11-10). */
+    boxFolded() {
+      if (this.boxOpen !== void 0) {
+        return !this.boxOpen;
       }
-      this.track = void 0;
-      if (scrolls) {
-        const bx = x0 + inner - bar2 + 2;
-        const rowsTop = y;
-        const rowsBottom = y + s.visibleRows * s.rowHeight;
-        this.boxes.set("scrollUp", { x: bx, y: rowsTop, width: bar2 - 2, height: bar2 - 2 });
-        this.boxes.set("scrollDown", { x: bx, y: rowsBottom - (bar2 - 2), width: bar2 - 2, height: bar2 - 2 });
-        this.track = { x: bx, y: rowsTop + bar2, width: bar2 - 2, height: rowsBottom - rowsTop - 2 * bar2 };
+      return ui.width < EDITOR.x + EDITOR.width + 2 * EDITOR.x + EDITOR.boxWidth + EDITOR.x;
+    }
+    place(id, r, tip, disabled = false) {
+      this.boxes.set(id, r);
+      if (tip) {
+        this.tips.set(id, tip);
       }
-      y = this.list.y + this.list.height + s.gap;
-      buttonRow(["add", "update", "delete"]);
-      buttonRow(["up", "down", "revert"]);
-      const half = Math.round((inner - s.sectionGap) / 2);
-      const step = (less, more, key, text, x, w) => {
-        const b = s.buttonHeight;
-        this.boxes.set(less, { x, y, width: b, height: b });
-        this.boxes.set(more, { x: x + w - b, y, width: b, height: b });
-        this.texts.set(key, { text, center: true, r: { x: x + b, y, width: w - 2 * b, height: b } });
-      };
-      step("holdLess", "holdMore", "hold", e.holdText(), x0, half);
-      step("panLess", "panMore", "pan", e.panText(), x0 + inner - half, half);
-      y += s.buttonHeight + s.gap;
-      this.boxes.set("turn", { x: x0, y, width: half, height: s.buttonHeight });
-      this.boxes.set("inertia", { x: x0 + inner - half, y, width: half, height: s.buttonHeight });
-      y += s.buttonHeight + s.gap;
-      buttonRow(["rotl", "rotr", "zoomin", "zoomout"]);
-      buttonRow(["map", "lock"]);
-      const small = Math.round((inner - 2 * s.gap) / 6);
-      this.boxes.set("undo", { x: x0, y, width: small, height: s.buttonHeight });
-      this.boxes.set("redo", { x: x0 + small + s.gap, y, width: small, height: s.buttonHeight });
-      const px = x0 + 2 * (small + s.gap);
-      this.boxes.set("play", { x: px, y, width: x0 + inner - px, height: s.buttonHeight });
-      y += s.buttonHeight + s.gap;
-      const status = e.status();
-      this.texts.set("status", { text: status.text, warning: status.warning, r: { x: x0, y, width: inner, height: s.lineHeight } });
-      y += s.lineHeight;
-      for (const [i, help] of (e.mapMode ? MAP_HELP : HELP).entries()) {
-        this.texts.set(`help${i}`, { text: help, r: { x: x0, y, width: inner, height: s.lineHeight } });
-        y += s.lineHeight;
+      if (disabled) {
+        this.off.add(id);
       }
-      this.frame = { x: s.x, y: s.y, width: s.width, height: y + s.pad - s.y };
+      return r;
     }
     render() {
       const e = this.editor;
       if (!e) {
         return;
       }
-      const overlay = this.mode.overlay;
-      const s = EDITOR;
-      this.layout(e);
+      this.boxes.clear();
+      this.tips.clear();
+      this.off.clear();
+      this.frames = [];
       const scene = /* @__PURE__ */ new Map();
-      backing(scene, "frame", this.frame, THEME.editorBacking);
+      this.viewsPane(e, scene);
+      this.toolbox(e, scene);
+      this.topRight(e, scene);
       const hover = this.hit();
-      const state = (id, on = false) => ({ hover: hover === id, down: this.downOn === id && hover === id, on });
-      const textButton = (id, text, on = false) => button(scene, id, this.boxes.get(id), state(id, on), { text, textSize: s.textSize }, overlay);
-      textButton("prevPark", "\u2039");
-      textButton("nextPark", "\u203A");
-      textButton("close", "\xD7");
-      const rows = e.rows();
-      const cols = columnStarts(this.list.width, rows, overlay);
-      const header = { x: this.list.x, y: this.list.y, width: this.list.width, height: s.rowHeight };
-      scene.set("list", { type: "rect", ...this.list, fill: THEME.editorList, z: Z.face });
-      EDITOR_COLUMNS.forEach((h, c) => label(
-        scene,
-        `head.${c}`,
-        h,
-        { x: header.x + cols[c] + 4, y: header.y, width: 0, height: header.height },
-        s.textSize,
-        overlay,
-        true
-      ));
-      for (let i = 0; i < s.visibleRows; i++) {
-        const index = this.scroll + i;
-        const row = rows[index];
-        if (!row) {
-          break;
-        }
-        const r = this.boxes.get(`row.${index}`);
-        const fill = index === e.selectedIndex ? THEME.faceOn : hover === `row.${index}` ? THEME.faceHover : i % 2 ? THEME.face : void 0;
-        scene.set(`row.${index}`, { type: "rect", ...r, fill: fill ?? "#00000000", z: Z.face });
-        row.forEach((cell, c) => label(
-          scene,
-          `cell.${i}.${c}`,
-          cell,
-          { x: r.x + cols[c] + 4, y: r.y, width: 0, height: r.height },
-          s.textSize,
-          overlay
-        ));
-      }
-      if (this.track) {
-        textButton("scrollUp", "\u25B2");
-        textButton("scrollDown", "\u25BC");
-        const t = this.track;
-        scene.set("track", { type: "rect", ...t, fill: THEME.editorList, z: Z.face });
-        const share = s.visibleRows / rows.length;
-        const h = Math.max(8, Math.round(t.height * share));
-        const top = t.y + Math.round((t.height - h) * this.scroll / Math.max(1, rows.length - s.visibleRows));
-        scene.set("thumb", { type: "rect", x: t.x, y: top, width: t.width, height: h, fill: THEME.face, z: Z.icon });
-      }
-      textButton("add", "Add view");
-      textButton("update", "Set to camera");
-      textButton("delete", "Delete");
-      textButton("up", "Move up");
-      textButton("down", "Move down");
-      textButton("revert", "Use playlist views");
-      textButton("holdLess", "\u2212");
-      textButton("holdMore", "+");
-      textButton("panLess", "\u2212");
-      textButton("panMore", "+");
-      textButton("turn", e.turnText());
-      textButton("inertia", e.inertiaText());
-      textButton("rotl", "Rotate left");
-      textButton("rotr", "Rotate right");
-      textButton("zoomin", "Zoom in");
-      textButton("zoomout", "Zoom out");
-      textButton("map", e.mapMode ? "Map (M): on" : "Map (M): off", e.mapMode);
-      textButton("lock", e.eventsLocked ? "Event views: locked" : "Event views: unlocked", !e.eventsLocked);
-      textButton("undo", "Undo");
-      textButton("redo", "Redo");
-      textButton("play", e.isPlaying ? "Play: on (moving the camera stops it)" : "Play: off", e.isPlaying);
-      for (const [key, t] of this.texts) {
-        label(scene, `text.${key}`, t.text, t.r, key === "park" ? s.titleSize : s.textSize, overlay, t.bold);
-        if (t.center) {
-          scene.set(`text.${key}`, { ...scene.get(`text.${key}`), x: t.r.x + t.r.width / 2, align: "center" });
-        }
-        if (t.warning) {
-          scene.set(`text.${key}`, { ...scene.get(`text.${key}`), colour: THEME.warning });
-        }
+      const tip = hover && !this.busy ? this.tips.get(hover) : void 0;
+      if (tip) {
+        const r = this.boxes.get(hover);
+        const below = r.y < 80;
+        const h = Math.ceil(measure(this.mode.overlay, tip, THEME.tipSize).height) + 2 * THEME.tipPad;
+        tooltip(scene, "tip", tip, r.x + r.width / 2, below ? r.y + r.height + 4 + h : r.y - 4, this.mode.overlay, ui.width);
       }
       this.layer.render(scene);
       if (e.mapMode) {
@@ -4760,12 +5353,556 @@
         this.map.clear();
       }
     }
+    state(id, on = false, alt = false) {
+      const hover = this.hit() === id;
+      return { hover, down: this.downOn === id && hover, on, alt, disabled: this.off.has(id) };
+    }
+    /** The views pane: the park's title row over its views, or the park list while it is open. */
+    viewsPane(e, scene) {
+      const s = EDITOR;
+      const overlay = this.mode.overlay;
+      const x0 = s.x + s.pad;
+      const inner = s.width - 2 * s.pad;
+      let y = s.y + s.pad;
+      const t = s.titleHeight;
+      const order = e.playback.playOrder;
+      const pos = order.indexOf(e.parkIndex);
+      const many = order.length > 1;
+      this.place("prevPark", { x: x0, y, width: t, height: t }, "Previous park", !many || e.playback.isLoading);
+      const closeX = x0 + inner - t;
+      const nextX = closeX - s.groupGap - t;
+      this.place("nextPark", { x: nextX, y, width: t, height: t }, "Next park", !many || e.playback.isLoading);
+      this.place("close", { x: closeX, y, width: t, height: t }, "Close the editor (E)");
+      const field = this.place(
+        "field",
+        { x: x0 + t + s.gap, y, width: nextX - s.gap - (x0 + t + s.gap), height: t },
+        many ? "Hold to pick a park; click for the playlist's order" : void 0
+      );
+      y += t + s.gap;
+      const rows = e.rows();
+      const sel = e.selectedIndex;
+      if (sel !== this.followed) {
+        this.followed = sel;
+        if (sel >= 0 && (sel < this.views.first || sel >= this.views.first + s.visibleRows)) {
+          this.views.first = sel;
+        }
+      }
+      const listH = s.rowHeight * (s.visibleRows + 1);
+      const bar2 = rows.length > s.visibleRows ? s.scrollBar + 2 : 0;
+      this.listRect = { x: x0, y, width: inner - bar2, height: listH };
+      this.views.layout({ x: x0 + inner - s.scrollBar, y: y + s.rowHeight, width: s.scrollBar, height: s.visibleRows * s.rowHeight }, rows.length, s.visibleRows);
+      this.paneViews = { x: s.x, y: s.y, width: s.width, height: y + listH + s.pad - s.y };
+      this.frames.push(this.paneViews);
+      backing(scene, "frame", this.paneViews, THEME.editorBacking);
+      button(scene, "prevPark", this.boxes.get("prevPark"), this.state("prevPark"), { icon: "prev-view", iconSize: s.toolIcon }, overlay);
+      button(scene, "nextPark", this.boxes.get("nextPark"), this.state("nextPark"), { icon: "next-view", iconSize: s.toolIcon }, overlay);
+      button(scene, "close", this.boxes.get("close"), this.state("close"), { icon: "close", iconSize: s.toolIcon }, overlay);
+      const fieldOpen = this.dropdown !== void 0;
+      scene.set("field", { type: "rect", ...field, fill: fieldOpen ? THEME.faceDown : this.hit() === "field" ? THEME.faceHover : THEME.editorList, z: Z.face });
+      bevel(scene, "field", field, THEME.bevelDark, THEME.bevelLight, THEME.bevel, Z.bevel);
+      const count = many ? `${pos + 1} / ${order.length}  \u25BE` : "";
+      const countW = count ? measure(overlay, count, s.textSize, true).width : 0;
+      const name = fit(overlay, e.parkNames[e.parkIndex] ?? "No park", s.titleSize, field.width - countW - 28, true);
+      label(scene, "text.park", name, { x: field.x + 8, y: field.y, width: 0, height: field.height }, s.titleSize, overlay, true);
+      if (count) {
+        label(scene, "text.count", count, { x: field.x + field.width - 8 - countW, y: field.y, width: 0, height: field.height }, s.textSize, overlay, true);
+      }
+      this.viewsList(e, scene, rows);
+      if (this.dropdown) {
+        this.parkList(e, scene);
+      } else {
+        this.parksRect = void 0;
+      }
+    }
+    viewsList(e, scene, rows) {
+      const s = EDITOR;
+      const overlay = this.mode.overlay;
+      const list = this.listRect;
+      scene.set("list", { type: "rect", ...list, fill: THEME.editorList, z: Z.face });
+      const cols = columnStarts(list.width - s.grip, rows, overlay).map((c) => c + s.grip);
+      EDITOR_COLUMNS.forEach((h, c) => label(
+        scene,
+        `head.${c}`,
+        h,
+        { x: list.x + cols[c] + 4, y: list.y, width: 0, height: s.rowHeight },
+        s.textSize,
+        overlay,
+        true
+      ));
+      const top = list.y + s.rowHeight;
+      const hover = this.hit();
+      const r = this.rowDrag?.list === "views" && this.rowDrag.moving ? this.rowDrag : void 0;
+      for (let i = 0; i < s.visibleRows; i++) {
+        const index = this.views.first + i;
+        const row = rows[index];
+        if (!row) {
+          break;
+        }
+        const box = this.place(`row.${index}`, { x: list.x, y: top + i * s.rowHeight, width: list.width, height: s.rowHeight });
+        const fill = index === e.selectedIndex ? THEME.faceOn : hover === `row.${index}` && !r ? THEME.faceHover : i % 2 ? THEME.face : void 0;
+        scene.set(`row.${index}`, { type: "rect", ...box, fill: fill ?? "#00000000", z: Z.face });
+        const cells = this.cells(e, row);
+        if (e.movable(index)) {
+          grip(scene, `grip.${i}`, box.x + 5, box.y + box.height / 2);
+        }
+        cells.forEach((cell, c) => label(
+          scene,
+          `cell.${i}.${c}`,
+          cell,
+          { x: box.x + cols[c] + 4, y: box.y, width: 0, height: box.height },
+          s.textSize,
+          overlay
+        ));
+        if (r && r.from === index) {
+          scene.set(`dim.${i}`, { type: "rect", ...box, fill: THEME.rowDimmed, z: Z.icon + 1 });
+        }
+      }
+      this.views.draw(scene, "views");
+      if (this.views.track) {
+        this.place("views.track", this.views.track);
+        this.place("views.thumb", this.views.thumb);
+      }
+      if (r) {
+        this.dragged(scene, list, s.rowHeight, this.views.first, rows.length, r, (ghost) => {
+          this.cells(e, rows[r.from]).forEach((cell, c) => label(
+            scene,
+            `ghost.${c}`,
+            cell,
+            { x: ghost.x + cols[c] + 4, y: ghost.y, width: 0, height: ghost.height },
+            s.textSize,
+            overlay
+          ));
+        });
+      }
+    }
+    /** A row's cells as shown: who set each view, event views marked locked while they are. */
+    cells(e, row) {
+      const by = row[6] === "auto" ? "generated" : row[6] === "event" && e.eventsLocked ? "event (locked)" : row[6];
+      return [...row.slice(0, 6), by];
+    }
+    /** A row being dragged: lifted under the mouse, with an orange line where it would go. */
+    dragged(scene, list, rowH, first, count, r, cells) {
+      const ghost = { x: list.x + 6, y: Math.round(this.mouse.y - rowH / 2), width: list.width - 6, height: rowH };
+      scene.set("ghost", { type: "rect", ...ghost, fill: THEME.dragGhost, z: DRAG_Z });
+      bevel(scene, "ghost", ghost, THEME.bevelLight, THEME.bevelDark, THEME.bevel, DRAG_Z);
+      grip(scene, "ghost.grip", ghost.x + 5, ghost.y + rowH / 2, DRAG_Z + 1);
+      const before = scene.size;
+      cells(ghost);
+      let k = 0;
+      for (const [id, el] of scene) {
+        if (k++ >= before) {
+          scene.set(id, { ...el, z: DRAG_Z + 1 });
+        }
+      }
+      const gap = Math.max(0, Math.min(count, Math.round((this.mouse.y - list.y - rowH) / rowH) + first));
+      const shown = Math.max(0, Math.min(EDITOR.visibleRows + 4, gap - first));
+      const lineY = list.y + rowH + shown * rowH - 1;
+      if (gap >= first && lineY <= list.y + list.height + 1) {
+        scene.set("dropline", { type: "rect", x: list.x, y: lineY, width: list.width, height: 3, fill: THEME.dragLine, z: DRAG_Z + 2 });
+      }
+    }
+    /** The park list, over the views list: the playlist's order, its rows dragged to reorder it. */
+    parkList(e, scene) {
+      const s = EDITOR;
+      const overlay = this.mode.overlay;
+      const order = e.playback.playOrder;
+      const area = { x: this.listRect.x, y: this.listRect.y, width: this.paneViews.width - 2 * s.pad, height: this.listRect.height };
+      this.parksRect = area;
+      const visible = this.parkRows();
+      const bar2 = order.length > visible ? s.scrollBar + 2 : 0;
+      this.parks.layout(
+        { x: area.x + area.width - s.scrollBar, y: area.y + s.parkRow, width: s.scrollBar, height: visible * s.parkRow },
+        order.length,
+        visible
+      );
+      const z = Z.tip - 4;
+      scene.set("parks", { type: "rect", ...area, fill: "#0b170fff", z });
+      bevel(scene, "parks", area, THEME.bevelDark, THEME.bevelLight, THEME.bevel, z);
+      const head = this.dropdown?.persistent ? "Playlist order" : "Release on a park to go there";
+      label(scene, "parks.head", head, { x: area.x + 8, y: area.y, width: 0, height: s.parkRow }, s.textSize, overlay, true);
+      scene.set("parks.head", { ...scene.get("parks.head"), z: z + 2 });
+      if (this.dropdown?.persistent) {
+        const help = "drag to reorder \xB7 click to go";
+        const w = measure(overlay, help, s.textSize - 2).width;
+        label(scene, "parks.help", help, { x: area.x + area.width - bar2 - 8 - w, y: area.y, width: 0, height: s.parkRow }, s.textSize - 2, overlay);
+        scene.set("parks.help", { ...scene.get("parks.help"), colour: THEME.textDim, z: z + 2 });
+      }
+      const width = area.width - bar2;
+      const top = area.y + s.parkRow;
+      const hover = this.hit();
+      const r = this.rowDrag?.list === "parks" && this.rowDrag.moving ? this.rowDrag : void 0;
+      const countW = measure(overlay, "000 views", s.textSize).width;
+      for (let i = 0; i < visible; i++) {
+        const p = this.parks.first + i;
+        const index = order[p];
+        if (index === void 0) {
+          break;
+        }
+        const box = this.place(`park.${p}`, { x: area.x, y: top + i * s.parkRow, width, height: s.parkRow });
+        const fill = index === e.parkIndex ? THEME.faceOn : hover === `park.${p}` && !r ? THEME.faceHover : i % 2 ? THEME.face : "#00000000";
+        scene.set(`park.${p}`, { type: "rect", ...box, fill, z: z + 1 });
+        if (this.dropdown?.persistent) {
+          grip(scene, `pgrip.${i}`, box.x + 5, box.y + box.height / 2, z + 2);
+        }
+        const n = e.playback.viewCountOf(index);
+        const texts = [
+          [`pn.${i}`, String(p + 1), box.x + s.grip + 4],
+          [`pname.${i}`, fit(overlay, e.parkNames[index] ?? "", s.textSize, width - s.grip - 40 - countW - 16), box.x + s.grip + 40],
+          [`pcount.${i}`, `${n} view${n === 1 ? "" : "s"}`, box.x + width - 8 - measure(overlay, `${n} view${n === 1 ? "" : "s"}`, s.textSize).width]
+        ];
+        for (const [id, text, x] of texts) {
+          label(scene, id, text, { x, y: box.y, width: 0, height: box.height }, s.textSize, overlay, id.startsWith("pname") && index === e.parkIndex);
+          scene.set(id, { ...scene.get(id), z: z + 2, ...id.startsWith("pcount") ? { colour: THEME.textDim } : {} });
+        }
+        if (r && r.from === p) {
+          scene.set(`pdim.${i}`, { type: "rect", ...box, fill: THEME.rowDimmed, z: z + 3 });
+        }
+      }
+      if (this.parks.track) {
+        scene.set("parks.track", { type: "rect", ...this.parks.track, fill: THEME.editorList, z: z + 1 });
+        scene.set("parks.thumb", { type: "rect", ...this.parks.thumb, fill: THEME.faceOn, z: z + 2 });
+        this.place("parks.track", this.parks.track);
+        this.place("parks.thumb", this.parks.thumb);
+      }
+      if (r) {
+        const list = { ...area, width };
+        this.dragged(scene, list, s.parkRow, this.parks.first, order.length, r, (ghost) => {
+          label(scene, "ghost.name", e.parkNames[order[r.from]] ?? "", { x: ghost.x + s.grip + 34, y: ghost.y, width: 0, height: ghost.height }, s.textSize, overlay, true);
+        });
+      }
+    }
+    /** The toolbox at the window's bottom left (owner's design, 2026-11-10). */
+    toolbox(e, scene) {
+      const s = EDITOR;
+      const overlay = this.mode.overlay;
+      const b = s.tool;
+      const inner = 8 * b + 5 * s.gap + 2 * s.groupGap;
+      const height = s.pad + s.switchHeight + 2 + s.hintHeight + 2 * (s.labelHeight + b) + 4 + 8 + b + s.pad;
+      const frame = { x: s.x, y: ui.height - s.y - height, width: inner + 2 * s.pad, height };
+      this.frames.push(frame);
+      backing(scene, "tools", frame, THEME.editorBacking);
+      const x0 = frame.x + s.pad;
+      let y = frame.y + s.pad;
+      const loading = e.playback.isLoading;
+      const noView = e.selectedIndex < 0 || loading;
+      const half = Math.floor((inner - s.gap) / 2);
+      this.place("frameMode", { x: x0, y, width: half, height: s.switchHeight }, "Frame: edit through the camera (M switches)", loading);
+      this.place("mapMode", { x: x0 + inner - half, y, width: half, height: s.switchHeight }, "Map: every view as a box (M)", loading);
+      button(
+        scene,
+        "frameMode",
+        this.boxes.get("frameMode"),
+        this.state("frameMode", !e.mapMode),
+        { icon: "frame", iconSize: s.toolIcon, text: "Frame", textSize: 15 },
+        overlay
+      );
+      button(
+        scene,
+        "mapMode",
+        this.boxes.get("mapMode"),
+        this.state("mapMode", e.mapMode, true),
+        { icon: "map", iconSize: s.toolIcon, text: "Map", textSize: 15, hint: "M" },
+        overlay
+      );
+      y += s.switchHeight + 2;
+      const hint = fit(overlay, e.mapMode ? HINT_MAP : HINT_FRAME, s.hintSize, inner);
+      label(scene, "hint", hint, { x: x0, y, width: 0, height: s.hintHeight }, s.hintSize, overlay);
+      scene.set("hint", { ...scene.get("hint"), colour: THEME.textDim });
+      y += s.hintHeight;
+      const groups = [
+        ["VIEW", [
+          ["add", "add", "Add a view (Insert)", loading || !e.playback.canEdit],
+          ["update", "set-camera", "Set to camera (C)", noView],
+          ["delete", "delete", "Delete the view (Delete)", noView]
+        ]],
+        ["CAMERA", [
+          ["rotl", "rotate-left", "Rotate left (Shift+Enter)", loading],
+          ["rotr", "rotate-right", "Rotate right (Enter)", loading],
+          ["zoomin", "zoom-in", "Zoom in (Page Up)", loading],
+          ["zoomout", "zoom-out", "Zoom out (Page Down)", loading]
+        ]],
+        ["EVENTS", [
+          [
+            "lock",
+            e.eventsLocked ? "events-locked" : "events-unlocked",
+            e.eventsLocked ? "Event views locked: unlock to move them on the map (L)" : "Event views unlocked (L)",
+            !e.mapMode,
+            !e.eventsLocked
+          ]
+        ]]
+      ];
+      let x = x0;
+      for (const [name, tools] of groups) {
+        this.sectionLabel(scene, `label.${name}`, name, x, y);
+        tools.forEach(([id, icon, tip, disabled, on], i) => {
+          const r = this.place(id, { x: x + i * (b + s.gap), y: y + s.labelHeight, width: b, height: b }, tip, disabled);
+          button(scene, id, r, this.state(id, on === true), { icon, iconSize: s.toolIcon }, overlay);
+        });
+        x += tools.length * (b + s.gap) - s.gap + s.groupGap;
+      }
+      y += s.labelHeight + b + 4;
+      const stepper = (name, less, more, text, sx, tips) => {
+        this.sectionLabel(scene, `label.${name}`, name, sx, y);
+        const ry = y + s.labelHeight;
+        const l = this.place(less, { x: sx, y: ry, width: b, height: b }, tips[0], noView);
+        const value = { x: sx + b + s.gap, y: ry, width: s.stepValue, height: b };
+        const m = this.place(more, { x: value.x + value.width + s.gap, y: ry, width: b, height: b }, tips[1], noView);
+        button(scene, less, l, this.state(less), { icon: "less", iconSize: s.toolIcon }, overlay);
+        button(scene, more, m, this.state(more), { icon: "add", iconSize: s.toolIcon }, overlay);
+        scene.set(`${name}.value`, { type: "rect", ...value, fill: THEME.editorList, z: Z.face });
+        bevel(scene, `${name}.value`, value, THEME.bevelDark, THEME.bevelLight, THEME.bevel, Z.bevel);
+        label(scene, `text.${name.toLowerCase()}`, text, { x: value.x + value.width / 2, y: ry, width: 0, height: b }, s.textSize, overlay);
+        scene.set(`text.${name.toLowerCase()}`, { ...scene.get(`text.${name.toLowerCase()}`), align: "center" });
+        return value.x + value.width + s.gap + b;
+      };
+      const view = noView ? void 0 : e.currentViews[e.selectedIndex];
+      const holdEnd = stepper("HOLD", "holdLess", "holdMore", view ? `${view.hold} s` : "-", x0, ["Shorter hold ([)", "Longer hold (])"]);
+      stepper(
+        "PAN",
+        "panLess",
+        "panMore",
+        view ? `${Math.round(e.playback.panOf(view) * 100)}%` : "-",
+        holdEnd + s.groupGap,
+        ["Less of the hold panning (Shift+[)", "More of the hold panning (Shift+])"]
+      );
+      y += s.labelHeight + b + 8;
+      const foot = [
+        ["undo", "undo", "Undo (Ctrl+Z)", !e.canUndo, x0],
+        ["redo", "redo", "Redo (Ctrl+Y)", !e.canRedo, x0 + b + s.gap],
+        ["reset", "reset-view", "Reset the view to the playlist's", !e.canResetView, x0 + 2 * b + s.gap + s.footerGap]
+      ];
+      for (const [id, icon, tip, disabled, fx] of foot) {
+        const r = this.place(id, { x: fx, y, width: b, height: b }, tip, disabled);
+        button(scene, id, r, this.state(id), { icon, iconSize: s.toolIcon }, overlay);
+      }
+      const play = this.place(
+        "play",
+        { x: x0 + inner - s.playWidth, y, width: s.playWidth, height: b },
+        e.isPlaying ? "Stop playing (P; moving the camera stops it too)" : "Play the park's views (P)",
+        loading
+      );
+      const pin = this.place(
+        "pin",
+        { x: play.x - s.gap - b, y, width: b, height: b },
+        e.pinned ? "Pinned: the editor stays shown" : "Unpinned: the editor hides with the cursor"
+      );
+      button(scene, "pin", pin, this.state("pin", e.pinned), { icon: "pin", iconSize: s.toolIcon }, overlay);
+      button(
+        scene,
+        "play",
+        play,
+        this.state("play", e.isPlaying),
+        { icon: e.isPlaying ? "pause" : "play", iconSize: s.toolIcon, text: e.isPlaying ? "Stop" : "Play", textSize: 15, hint: "P" },
+        overlay
+      );
+    }
+    sectionLabel(scene, id, text, x, y) {
+      label(scene, id, text, { x, y, width: 0, height: EDITOR.labelHeight }, EDITOR.labelSize, this.mode.overlay);
+      scene.set(id, { ...scene.get(id), colour: THEME.textDim });
+    }
+    /** The top-right box: the park's restore points, then the Playlist properties. */
+    topRight(e, scene) {
+      const s = EDITOR;
+      const overlay = this.mode.overlay;
+      const width = s.boxWidth;
+      const x0 = ui.width - s.x - width + s.pad;
+      const inner = width - 2 * s.pad;
+      const top = s.y;
+      let y = top + s.pad;
+      const folded = this.boxFolded();
+      const headH = 20;
+      const head = this.place("boxHead", { x: x0, y, width: inner, height: headH }, folded ? "Show the restore points and playlist" : "Fold this box");
+      scene.set("boxHead", { type: "rect", ...head, fill: this.hit() === "boxHead" ? THEME.face : "#00000000", z: Z.face });
+      const source = e.source();
+      const sw = measure(overlay, source.text, s.boxHead).width;
+      const title = `${folded ? "\u25B8" : "\u25BE"} RESTORE POINTS \xB7 ${(e.parkNames[e.parkIndex] ?? "").toUpperCase()}`;
+      label(scene, "box.title", fit(overlay, title, s.boxHead, inner - sw - 12), head, s.boxHead, overlay);
+      scene.set("box.title", { ...scene.get("box.title"), colour: THEME.textDim });
+      label(scene, "box.source", source.text, { x: x0 + inner - sw, y, width: 0, height: headH }, s.boxHead, overlay);
+      scene.set("box.source", { ...scene.get("box.source"), colour: source.warning ? THEME.warning : THEME.textGood });
+      y += headH + 2;
+      if (folded) {
+        this.pointsRect = void 0;
+        const frame2 = { x: x0 - s.pad, y: top, width, height: y - top + s.pad - 2 };
+        this.frames.push(frame2);
+        backing(scene, "box", frame2, THEME.editorBacking);
+        return;
+      }
+      const points = e.restorePoints();
+      if (this.picked && !points.some((p) => p.id === this.picked)) {
+        this.picked = void 0;
+      }
+      const listH = Math.round(s.boxRow * s.boxRows);
+      const bar2 = points.length > s.boxRows ? s.scrollBar + 2 : 0;
+      this.pointsRect = { x: x0, y, width: inner, height: listH };
+      this.points.layout({ x: x0 + inner - s.scrollBar, y, width: s.scrollBar, height: listH }, points.length, s.boxRows);
+      scene.set("points", { type: "rect", ...this.pointsRect, fill: THEME.editorList, z: Z.face });
+      const hover = this.hit();
+      const first = Math.floor(this.points.first);
+      for (let i = 0; first + i < points.length && i * s.boxRow < listH; i++) {
+        const p = points[first + i];
+        const h = Math.min(s.boxRow, listH - i * s.boxRow);
+        const box = this.place(`point.${first + i}`, { x: x0, y: y + i * s.boxRow, width: inner - bar2, height: h });
+        const fill = p.id === this.picked ? THEME.faceOn : hover === `point.${first + i}` ? THEME.faceHover : i % 2 ? void 0 : THEME.face;
+        scene.set(`point.${i}`, { type: "rect", ...box, fill: fill ?? "#00000000", z: Z.face });
+        if (h === s.boxRow) {
+          this.pointRow(scene, i, p, box);
+        }
+      }
+      this.points.draw(scene, "points");
+      if (this.points.track) {
+        this.place("points.track", this.points.track);
+        this.place("points.thumb", this.points.thumb);
+      }
+      y += listH + 4;
+      const halfW = Math.floor((inner - 4) / 2);
+      const btn = (id, icon, text, bx, w, tip, disabled) => {
+        const r = this.place(id, { x: bx, y, width: w, height: s.boxButton }, tip, disabled);
+        button(scene, id, r, this.state(id), { icon, iconSize: s.toolIcon, text, textSize: 14, left: true }, overlay);
+      };
+      const editable = e.playback.canEdit && !e.playback.isLoading;
+      btn("checkpoint", "checkpoint", "Save checkpoint", x0, halfW, "Keep the park's views as they are now (10 per park)", !editable);
+      btn(
+        "restore",
+        "restore",
+        "Restore selected",
+        x0 + inner - halfW,
+        halfW,
+        this.picked ? "Go back to the highlighted restore point (Undo returns)" : "Highlight a restore point first",
+        !editable || !this.picked
+      );
+      y += s.boxButton + 4;
+      btn("copy", "copy", "Copy views", x0, halfW, "Copy the park's views as text (later)", true);
+      btn("paste", "paste", "Paste views", x0 + inner - halfW, halfW, "Paste views from text (later)", true);
+      y += s.boxButton + 10;
+      const ph = this.place("propsHead", { x: x0, y, width: inner, height: s.propHeader }, this.propsOpen ? "Fold the playlist properties" : "Show the playlist properties");
+      scene.set("propsHead", { type: "rect", ...ph, fill: this.hit() === "propsHead" ? THEME.faceHover : "#00000000", z: Z.face });
+      bevel(scene, "propsHead", ph, THEME.backingLight, THEME.backingDark, THEME.bevel, Z.bevel);
+      const mark = this.propsOpen ? "\u25BE" : "\u25B8";
+      label(scene, "props.mark", mark, { x: x0 + 8, y, width: 0, height: s.propHeader }, 12, overlay, true);
+      label(scene, "props.title", "Playlist", { x: x0 + 24, y, width: 0, height: s.propHeader }, 16, overlay, true);
+      const tw = measure(overlay, "Playlist", 16, true).width;
+      label(scene, "props.sub", "properties", { x: x0 + 24 + tw + 8, y: y + 1, width: 0, height: s.propHeader }, 13, overlay);
+      scene.set("props.sub", { ...scene.get("props.sub"), colour: THEME.textDim });
+      const subW = measure(overlay, "properties", 13).width;
+      const seq = fit(overlay, e.playback.sequenceName, 13, inner - 24 - tw - 8 - subW - 24);
+      const qw = measure(overlay, seq, 13).width;
+      label(scene, "props.name", seq, { x: x0 + inner - 8 - qw, y, width: 0, height: s.propHeader }, 13, overlay);
+      y += s.propHeader + 4;
+      if (this.propsOpen) {
+        y = this.properties(e, scene, x0, y, inner);
+      }
+      const third = Math.floor((inner - 8) / 3);
+      const unsaved = e.playback.playlistPropsUnsaved;
+      btn("save", "save", "Save", x0, third, unsaved ? "Save the playlist properties in the game (the next install writes them to the playlist)" : "Nothing to save", !unsaved);
+      btn("import", "import", "Import", x0 + third + 4, third, "Import a playlist (later)", true);
+      btn("export", "export", "Export", x0 + inner - third, third, "Export the playlist (later)", true);
+      y += s.boxButton;
+      const frame = { x: x0 - s.pad, y: top, width, height: y - top + s.pad };
+      this.frames.push(frame);
+      backing(scene, "box", frame, THEME.editorBacking);
+    }
+    pointRow(scene, i, p, box) {
+      const overlay = this.mode.overlay;
+      const size = EDITOR.textSize;
+      label(scene, `pt.${i}`, p.label, { x: box.x + 8, y: box.y, width: 0, height: box.height }, size, overlay);
+      if (p.tag) {
+        const tx = box.x + 8 + measure(overlay, p.label, size).width + 8;
+        const tm = measure(overlay, p.tag, 10);
+        const chip = { x: tx, y: Math.round(box.y + (box.height - tm.height - 4) / 2), width: Math.ceil(tm.width) + 8, height: Math.ceil(tm.height) + 4 };
+        scene.set(`ptag.${i}`, { type: "rect", ...chip, fill: "#00000000", border: THEME.textDim, borderWidth: 1, z: Z.icon });
+        scene.set(`ptagt.${i}`, { type: "text", text: p.tag, size: 10, colour: THEME.textDim, x: chip.x + 4, y: chip.y + 2, z: Z.icon });
+      }
+      const when = p.time !== void 0 ? formatTime(p.time, Date.now()) : "-";
+      const ww = measure(overlay, when, size).width;
+      label(scene, `ptime.${i}`, when, { x: box.x + box.width - 8 - ww, y: box.y, width: 0, height: box.height }, size, overlay);
+      scene.set(`ptime.${i}`, { ...scene.get(`ptime.${i}`), colour: THEME.textDim });
+    }
+    /** Motion, timing and presentation; returns the y below them. */
+    properties(e, scene, x0, y, inner) {
+      const s = EDITOR;
+      const overlay = this.mode.overlay;
+      const props = e.playback.playlistProps;
+      const section = (name) => {
+        this.sectionLabel(scene, `sec.${name}`, name, x0, y);
+        y += s.labelHeight + 3;
+      };
+      const rowLabel = (key, text) => label(scene, `prop.${key}`, text, { x: x0, y, width: 0, height: s.propRow }, s.textSize, overlay);
+      const segments = (key, text) => {
+        rowLabel(key, text);
+        const choices = CHOICES[key];
+        const widths = choices.map(([t]) => Math.ceil(measure(overlay, t, 13, true).width) + 2 * s.segPad);
+        let sx = x0 + inner - widths.reduce((a, w) => a + w, 0) - s.gap * (choices.length - 1);
+        const sy = y + Math.round((s.propRow - s.segHeight) / 2);
+        choices.forEach(([t, value], i) => {
+          const id = `seg.${key}.${i}`;
+          const r = this.place(id, { x: sx, y: sy, width: widths[i], height: s.segHeight });
+          button(scene, id, r, this.state(id, props[key] === value), { text: t, textSize: 13 }, overlay);
+          sx += widths[i] + s.gap;
+        });
+        y += s.propRow;
+      };
+      const stepper = (key, text, tip) => {
+        rowLabel(key, text);
+        const w = s.stepButton;
+        const sy = y + Math.round((s.propRow - w) / 2);
+        const right = x0 + inner;
+        const more = this.place(`step.${key}.more`, { x: right - w, y: sy, width: w, height: w }, tip);
+        const value = { x: more.x - s.gap - s.stepValueBox, y: sy, width: s.stepValueBox, height: w };
+        const less = this.place(`step.${key}.less`, { x: value.x - s.gap - w, y: sy, width: w, height: w }, tip);
+        button(scene, `step.${key}.less`, less, this.state(`step.${key}.less`), { icon: "less", iconSize: 16 }, overlay);
+        button(scene, `step.${key}.more`, more, this.state(`step.${key}.more`), { icon: "add", iconSize: 16 }, overlay);
+        scene.set(`stepv.${key}`, { type: "rect", ...value, fill: THEME.editorList, z: Z.face });
+        const vid = `stept.${key}`;
+        label(scene, vid, `${props[key].toFixed(1)} s`, { x: value.x + value.width / 2, y: sy, width: 0, height: w }, 13, overlay);
+        scene.set(vid, { ...scene.get(vid), align: "center" });
+        y += s.propRow;
+      };
+      section("MOTION");
+      segments("inertia", "Inertia");
+      segments("panChanges", "Angle and zoom change");
+      section("TIMING");
+      if (props.panChanges !== "off") {
+        stepper("changeHold", "Change hold", "Still after an angle or zoom change");
+        stepper("arriveHold", "Arrival hold", "Rest at a view before its angle or zoom changes");
+      }
+      stepper("returnHold", "Return hold", "Hold at the first view after the return pan, before the next park");
+      section("PRESENTATION");
+      segments("titleMusic", "Title music");
+      segments("titles", "Show titles");
+      return y + 6;
+    }
   };
+  function grip(scene, id, x, cy, z = Z.icon) {
+    for (let r = 0; r < 3; r++) {
+      for (let c = 0; c < 2; c++) {
+        scene.set(`${id}.${r}${c}`, { type: "rect", x: x + c * 4, y: Math.round(cy - 5 + r * 4), width: 2, height: 2, fill: THEME.textDim, z });
+      }
+    }
+  }
+  function fit(overlay, text, size, width, bold = false) {
+    if (width <= 0 || measure(overlay, text, size, bold).width <= width) {
+      return text;
+    }
+    let t = text;
+    while (t.length > 1 && measure(overlay, t + "\u2026", size, bold).width > width) {
+      t = t.slice(0, -1);
+    }
+    return t.trimEnd() + "\u2026";
+  }
+  var MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  function formatTime(ms, now) {
+    const d = new Date(ms);
+    const n = new Date(now);
+    const hm = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+    const today = d.getFullYear() === n.getFullYear() && d.getMonth() === n.getMonth() && d.getDate() === n.getDate();
+    return today ? hm : `${MONTHS[d.getMonth()]} ${d.getDate()}, ${hm}`;
+  }
   function columnStarts(width, rows, overlay) {
     const size = EDITOR.textSize;
     const natural = EDITOR_COLUMNS.map((h, c) => Math.max(
       measure(overlay, h, size, true).width,
-      ...rows.map((r) => measure(overlay, r[c] ?? "", size).width)
+      ...rows.map((r) => measure(overlay, c === 6 ? "event (locked)" : r[c] ?? "", size).width)
     ) + EDITOR.cellMargin);
     const total = natural.reduce((a, b) => a + b, 0);
     const widths = total <= width ? natural.map((w) => w + (width - total) / natural.length) : natural.map((w) => w * width / total);
@@ -4864,6 +6001,7 @@
     player.update();
     bar?.update();
     captions?.update();
+    editorPanel?.update();
     if (player.debug && Date.now() - lastDebug >= DEBUG_INTERVAL_MS) {
       lastDebug = Date.now();
       log2(player.describe());
@@ -4913,7 +6051,44 @@
       ["map", "Map of the views on / off (view editor)", ["M"], either(() => {
       }, (e) => e.toggleMap())],
       ["redo", "Redo (view editor)", ["CTRL+Y", "CTRL+SHIFT+Z"], either(() => {
-      }, (e) => e.redo())]
+      }, (e) => e.redo())],
+      // The view editor's tools (owner, 2026-11-10; the toolbox's tooltips name them).
+      ["addview", "Add a view (view editor)", ["INSERT"], either(() => {
+      }, (e) => e.add())],
+      ["setview", "Set the view to the camera (view editor)", ["C"], either(() => {
+      }, (e) => e.update())],
+      ["deleteview", "Delete the view (view editor)", ["DELETE"], either(() => {
+      }, (e) => e.remove())],
+      ["viewup", "Move the view up (view editor)", ["CTRL+UP"], either(() => {
+      }, (e) => {
+        if (e.movable(e.selectedIndex)) e.move(-1);
+      })],
+      ["viewdown", "Move the view down (view editor)", ["CTRL+DOWN"], either(() => {
+      }, (e) => {
+        if (e.movable(e.selectedIndex)) e.move(1);
+      })],
+      ["rotateright", "Rotate right (view editor)", ["RETURN"], either(() => {
+      }, (e) => e.rotate(1))],
+      ["rotateleft", "Rotate left (view editor)", ["SHIFT+RETURN"], either(() => {
+      }, (e) => e.rotate(-1))],
+      ["zoomin", "Zoom in (view editor)", ["PAGEUP"], either(() => {
+      }, (e) => e.zoom(-1))],
+      ["zoomout", "Zoom out (view editor)", ["PAGEDOWN"], either(() => {
+      }, (e) => e.zoom(1))],
+      ["eventlock", "Lock / unlock event views on the map (view editor)", ["L"], either(() => {
+      }, (e) => {
+        if (e.mapMode) e.toggleEventLock();
+      })],
+      ["play", "Play / stop the park's views (view editor)", ["P"], either(() => {
+      }, (e) => e.togglePreview())],
+      ["holdless", "Shorter hold (view editor)", ["["], either(() => {
+      }, (e) => e.changeHold(-1))],
+      ["holdmore", "Longer hold (view editor)", ["]"], either(() => {
+      }, (e) => e.changeHold(1))],
+      ["panless", "Less of the hold panning (view editor)", ["SHIFT+["], either(() => {
+      }, (e) => e.changePan(-0.1))],
+      ["panmore", "More of the hold panning (view editor)", ["SHIFT+]"], either(() => {
+      }, (e) => e.changePan(0.1))]
     ];
     for (const [id, text, bindings, action] of shortcuts) {
       ui.registerShortcut({

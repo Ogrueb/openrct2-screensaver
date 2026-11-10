@@ -87,7 +87,7 @@ const sandbox = {
           mainViewport: viewport },
     registerPlugin: p => { plugin = p; },
     console: { log: m => { logs.push(m); if (process.env.VERBOSE) process.stdout.write(m + "\n"); } },
-    Date: { now: () => now },
+    Date: class extends Date { static now() { return now; } },
 };
 vm.createContext(sandbox);
 vm.runInContext(fs.readFileSync(new URL("../dist/rct-screensaver.js", import.meta.url), "utf8"), sandbox);

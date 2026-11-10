@@ -80,6 +80,25 @@ Live editing (screensaver mode only, `docs/screensaver-ui.md` "Live editing"):
 - [ ] With Play on, a drag stops Play and moves no view.
 - [ ] With the settings panel open, a click on the park closes it (no drag).
 
+Editing UI (`docs/screensaver-ui.md` "Editing UI"):
+- [ ] Three panes: views top left, toolbox bottom left (clear of the bar), restore points and Playlist
+      properties top right. Every icon shows; hovering a button shows its name and key.
+- [ ] Inactive buttons are flat and gray: Redo with nothing to redo, Reset view on a playlist view, Restore
+      selected with no row highlighted, Copy, Paste, Import, Export, Save with nothing changed.
+- [ ] Drag a view row by its grip: an orange line shows where it lands, the row moves there; Ctrl+Z undoes.
+      An event row doesn't drag while the lock is on.
+- [ ] Hold the park field and release on another park: it loads. Click the field: the playlist order stays
+      open; drag a park to another place, then close and step through the parks: they follow the new order.
+- [ ] Move a view, select it, Reset view: it goes back.
+- [ ] Save checkpoint, change things, highlight the checkpoint, Restore selected: the views come back.
+- [ ] Playlist properties: Angle and zoom change Off makes turning pans cut and hides two holds; Title
+      music Theme plays the theme at once; Save, restart the game: they are still in force.
+- [ ] The pin off: the panes fade after the mouse rests; a move brings them back.
+- [ ] A 1080p window at scale 2 (960x540 game pixels): the top-right box shows folded; its header unfolds it.
+- [ ] Close the game, run `--install`: the park order and saved properties are now in the playlist file
+      (comments kept, `.toml.bak` beside it) and still play.
+- [ ] The keys: Insert, C, Delete, Enter/Shift+Enter, Page Up/Down, L (map), P, [ ], Shift+[ ].
+
 The map (M or the Map button; `docs/screensaver-ui.md` "The map"):
 - [ ] M steps the camera out; each view at this angle is a numbered box the size of its window, views at
       other angles are numbered markers; dotted lines join the views in play order (dense yellow: a pan,

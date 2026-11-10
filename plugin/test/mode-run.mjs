@@ -83,7 +83,7 @@ const sandbox = {
           mainViewport: viewport },
     registerPlugin: p => { plugin = p; },
     console: { log: m => { logs.push(m); if (process.env.VERBOSE) process.stdout.write(m + "\n"); } },
-    Date: { now: () => now },
+    Date: class extends Date { static now() { return now; } },
 };
 vm.createContext(sandbox);
 vm.runInContext(fs.readFileSync(new URL("../dist/rct-screensaver.js", import.meta.url), "utf8"), sandbox);
@@ -236,15 +236,37 @@ assert.ok(scene.get("rcts.bar.titles.icon").src.includes("titles-off"), "on -> o
     const edClick = id => { const e = ed(id); const x = e.x + e.width / 2, y = e.y + e.height / 2; mouse("move", x, y); mouse("down", x, y); mouse("up", x, y); };
     click("edit");
     assert.ok(ed("frame"), "the edit button opens the editor panel");
-    assert.ok(ed("frame").y + ed("frame").height < 1080 - 120, "the panel fits above the bar in a 1080 window");
+    // Three panes (owner's design, 2026-11-10): views top left, toolbox bottom left, the box top right.
+    assert.deepEqual([ed("frame").x, ed("frame").y], [16, 16], "the views pane at the top left");
+    assert.equal(ed("tools").x, 16, "the toolbox at the left");
+    assert.equal(ed("tools").y + ed("tools").height, 1080 - 16, "and the bottom");
+    assert.ok(ed("tools").x + ed("tools").width < scene.get("rcts.bar.strip").x, "beside the bar");
+    assert.equal(ed("box").x + ed("box").width, 1920 - 16, "the restore points and playlist at the top right");
+    assert.ok(ed("tools").y > ed("frame").y + ed("frame").height, "the toolbox clear of the views pane");
+    for (const [id, e] of scene) {
+        if (id.startsWith("rcts.ed.") && e.type === "image") {
+            assert.ok(fs.existsSync(new URL("../icons/" + e.src.split("/").pop(), import.meta.url)), `${id}: icon ${e.src} exists`);
+        }
+    }
+    assert.equal(ed("redo").fill, "#2a2e2c80", "an inactive tool is flat and gray (nothing to redo)");
+    assert.equal(ed("redo.icon").opacity, 0.35, "its icon dimmed");
+    assert.equal(ed("copy").fill, "#2a2e2c80", "Copy views waits for later");
+    dump("editor");
     assert.ok(scene.get("rcts.bar.edit.icon").src.includes("/edit-"), "edit icon");
     const rows = [...scene.keys()].filter(k => /^rcts\.ed\.cell\.\d+\.0$/.test(k)).length;
     assert.ok(rows > 0, "the park's views are listed");
     assert.equal(ed("text.park").text.length > 0, true, "the park's name heads the panel");
     edClick("row.0");
-    assert.ok(ed("text.hold").text.startsWith("Hold view 1:"), "a click on a row selects its view");
+    const hold0 = parseFloat(ed("text.hold").text);
+    assert.ok(hold0 > 0, "a click on a row selects its view");
     edClick("holdMore");
-    assert.ok(ed("text.hold").text.startsWith("Hold view 1:"), "the hold changes on the selected view");
+    assert.equal(parseFloat(ed("text.hold").text), Math.round(hold0) + 1, "the hold changes on the selected view");
+    {
+        // The tooltip of a tool names it and its key.
+        const a = ed("add");
+        mouse("move", a.x + 5, a.y + 5);
+        assert.equal(ed("tip.text").text, "Add a view (Insert)", "tooltips name the key");
+    }
     edClick("add");
     const after = [...scene.keys()].filter(k => /^rcts\.ed\.cell\.\d+\.0$/.test(k)).length;
     assert.equal(after, Math.min(rows + 1, 10), "Add view adds a row");
@@ -252,29 +274,39 @@ assert.ok(scene.get("rcts.bar.titles.icon").src.includes("titles-off"), "on -> o
     tick(40);
     assert.equal(shown("strip"), true, "the bar stays up while the editor is open");
     shortcuts["rctscreensaver.hold"]();
-    assert.ok(ed("play.text").text.startsWith("Play: on"), "Space starts Play in the editor");
+    assert.equal(ed("play.text").text, "Stop", "Space starts Play in the editor");
     shortcuts["rctscreensaver.hold"]();
-    assert.equal(ed("play.text").text, "Play: off", "and stops it");
+    assert.equal(ed("play.text").text, "Play", "and stops it");
+    shortcuts["rctscreensaver.play"]();
+    assert.equal(ed("play.text").text, "Stop", "P starts Play too");
+    shortcuts["rctscreensaver.play"]();
     assert.equal(ed("text.hold").y, ed("text.pan").y, "hold and pan share a line");
-    // Past ten views: a scroll bar (arrows, thumb) beside the list; the arrows and the wheel scroll.
-    for (let i = 0; i < 12 && !ed("scrollDown"); i++) edClick("add");
-    assert.ok(ed("scrollDown") && ed("scrollUp") && ed("thumb"), "more than ten views get a scroll bar");
+    // Past ten views: a scroll bar beside the list; the wheel and the bar's track scroll it.
+    for (let i = 0; i < 12 && !ed("views.thumb"); i++) edClick("add");
+    assert.ok(ed("views.thumb"), "more than ten views get a scroll bar");
     edClick("row.0"); // select the first view, so the list is at the top
     assert.equal(ed("cell.0.0").text, "1");
-    edClick("scrollDown");
-    assert.equal(ed("cell.0.0").text, "2", "the down arrow scrolls the list");
-    edClick("scrollUp");
-    assert.equal(ed("cell.0.0").text, "1", "the up arrow scrolls back");
     const c = ed("cell.3.0");
     mouse("move", c.x + 2, c.y + 4);
     mouse("wheel", c.x + 2, c.y + 4, 0, -1);
     assert.equal(ed("cell.0.0").text, "2", "the wheel scrolls the list");
-    assert.ok(![...scene.keys()].some(k => k.startsWith("rcts.ed.") && /wheel/.test(scene.get(k).text ?? "")),
+    mouse("wheel", c.x + 2, c.y + 4, 0, 1);
+    assert.equal(ed("cell.0.0").text, "1", "and back");
+    {
+        const t = ed("views.track");
+        mouse("move", t.x + 2, t.y + t.height - 2); mouse("down", t.x + 2, t.y + t.height - 2); mouse("up", t.x + 2, t.y + t.height - 2);
+        assert.notEqual(ed("cell.0.0").text, "1", "a click on the track pages down");
+        mouse("move", c.x + 2, c.y + 4);
+        for (let i = 0; i < 20; i++) mouse("wheel", c.x + 2, c.y + 4, 0, 1);
+        mouse("wheel", c.x + 2, c.y + 4, 0, -1);
+    }
+    assert.equal(ed("cell.0.0").text, "2", "the wheel scrolls the list");
+    assert.ok(![...scene.keys()].some(k => k.startsWith("rcts.ed.") && k !== "rcts.ed.hint" && /wheel/.test(scene.get(k).text ?? "")),
         "no counter text over the list");
     // Live editing: a drag on the park moves the camera, and the selected view goes where it ends.
     const edits = () => Object.values(saved["RCTScreensaver.edits"] ?? {})[0]?.views ?? [];
     const editsCount = () => edits().length;
-    edClick("scrollUp");
+    mouse("wheel", c.x + 2, c.y + 4, 0, 1);
     edClick("row.0");
     const tile = () => ed("cell.0.1").text;
     const before = tile();
@@ -330,11 +362,11 @@ assert.ok(scene.get("rcts.bar.titles.icon").src.includes("titles-off"), "on -> o
     shortcuts["rctscreensaver.hold"]();
     const playing = tile();
     mouse("move", 1400, 700); mouse("down", 1400, 700); mouse("move", 1000, 500); mouse("up", 1000, 500);
-    assert.equal(ed("play.text").text, "Play: off", "a drag stops Play");
+    assert.equal(ed("play.text").text, "Play", "a drag stops Play");
     assert.equal(tile(), playing, "and moves no view");
     // Undo goes back through every change to the playlist's own views.
     for (let i = 0; i < 40; i++) shortcuts["rctscreensaver.undo"]();
-    assert.equal(ed("cell.0.6").text, "auto", "undoing every change brings the playlist's views back");
+    assert.equal(ed("cell.0.6").text, "generated", "undoing every change brings the playlist's views back");
     // The map (M): the camera steps out two levels, every view at its angle a box, the rest markers.
     {
         const map = id => scene.get("rcts.map." + id);
@@ -343,7 +375,8 @@ assert.ok(scene.get("rcts.bar.titles.icon").src.includes("titles-off"), "on -> o
         const zoom0 = Number(ed("cell.0.3").text);
         shortcuts["rctscreensaver.map"]();
         assert.equal(viewport.zoom, Math.min(3, zoom0 + 2), "the map steps out two levels");
-        assert.ok(ed("map.text").text.endsWith("on"), "the Map button shows it on");
+        assert.equal(ed("mapMode").fill, "#8a7a2eb3", "the Map switch shows it on, olive");
+        assert.notEqual(ed("lock").fill, "#2a2e2c80", "the event lock works on the map");
         const box = map("box.0");
         assert.ok(box, "the selected view is a box");
         assert.ok(Math.abs(box.x + box.width / 2 - 960) <= 1 && Math.abs(box.y + box.height / 2 - 540) <= 1,
@@ -371,7 +404,7 @@ assert.ok(scene.get("rcts.bar.titles.icon").src.includes("titles-off"), "on -> o
         mouse("up", b.x + b.width / 2 + b.width, b.y + b.height / 2 + b.height);
         assert.equal(Number(ed("cell.0.3").text), Math.min(3, zoom0 + 1), "the handle zooms the view out a level");
         // A drag on empty park pans the camera.
-        mouse("move", 1800, 150); mouse("down", 1800, 150); mouse("move", 1700, 150); mouse("up", 1700, 150);
+        mouse("move", 1300, 150); mouse("down", 1300, 150); mouse("move", 1700, 150); mouse("up", 1700, 150);
         assert.notEqual(JSON.stringify(viewport.centre), cam, "a drag on empty park pans");
         // At the map's scroll limit the engine holds the view where it is (on its next frame): the
         // camera follows the view instead of running on, so the boxes stay on their spots.
@@ -380,7 +413,7 @@ assert.ok(scene.get("rcts.bar.titles.icon").src.includes("titles-off"), "on -> o
             const [a, bb] = [[c.x, c.y], [c.y, -c.x], [-c.x, -c.y], [-c.y, c.x]][r];
             const sx = bb - a, sy = (a + bb) / 2 - c.z;
             Object.assign(viewport, { left: sx - 960 * s, right: sx + 960 * s, top: sy - 540 * s, bottom: sy + 540 * s });
-            const drag = () => { mouse("move", 1800, 150); mouse("down", 1800, 150); mouse("move", 1700, 150); mouse("up", 1700, 150); };
+            const drag = () => { mouse("move", 1300, 150); mouse("down", 1300, 150); mouse("move", 1700, 150); mouse("up", 1700, 150); };
             drag();
             const once = JSON.stringify(viewport.centre), boxOnce = JSON.stringify(map("box.0"));
             for (let i = 0; i < 5; i++) drag();
@@ -390,7 +423,7 @@ assert.ok(scene.get("rcts.bar.titles.icon").src.includes("titles-off"), "on -> o
         }
         // A right click on empty park adds a view there.
         const count = editsCount();
-        mouse("move", 1800, 150); mouse("down", 1800, 150, 1); mouse("up", 1800, 150, 1);
+        mouse("move", 1300, 150); mouse("down", 1300, 150, 1); mouse("up", 1300, 150, 1);
         assert.equal(editsCount(), count + 1, "a right click adds a view");
         assert.ok(map("box.1"), "the new view is a box at the camera's angle");
         shortcuts["rctscreensaver.undo"]();
@@ -407,6 +440,163 @@ assert.ok(scene.get("rcts.bar.titles.icon").src.includes("titles-off"), "on -> o
         assert.ok(mapKeys("box.").length > 0, "M opens the map again");
         shortcuts["rctscreensaver.map"]();
         assert.equal(mapKeys("").length, 0, "and closes it");
+    }
+    // Drag reordering (owner, 2026-11-10): a row dragged by its grip goes where the orange line shows.
+    {
+        mouse("wheel", 100, 200, 0, 1);
+        edClick("row.0");
+        const t1 = ed("cell.1.1").text, t0 = ed("cell.0.1").text;
+        const r1 = ed("row.1"), r3 = ed("row.3");
+        mouse("move", r1.x + 6, r1.y + 10); mouse("down", r1.x + 6, r1.y + 10);
+        mouse("move", r1.x + 6, r1.y + 30);
+        assert.ok(ed("ghost") && ed("dropline"), "a dragged row lifts, with a line where it goes");
+        mouse("move", r1.x + 6, r1.y + 50);
+        dump("rowdrag");
+        assert.equal(ed("dropline").fill, "#ff6a1a", "the line is orange");
+        assert.ok(ed("dim.1"), "and its place dims");
+        mouse("move", r3.x + 6, r3.y + r3.height + 2);
+        mouse("up", r3.x + 6, r3.y + r3.height + 2);
+        assert.equal(ed("ghost"), undefined, "dropped");
+        assert.equal(ed("cell.3.1").text, t1, "the view moved to the line");
+        assert.equal(ed("cell.0.1").text, t0, "the rest stay in order");
+        assert.equal(ed("row.3").fill, "#3d7a50b3", "the moved view is selected");
+        shortcuts["rctscreensaver.undo"]();
+        assert.equal(ed("cell.1.1").text, t1, "undone");
+        shortcuts["rctscreensaver.viewdown"]();
+        assert.equal(ed("cell.1.1").text, t0, "Ctrl+Down moves the selected view down");
+        shortcuts["rctscreensaver.undo"]();
+    }
+    // Reset view: a view moved by hand goes back to its playlist place; the button is inactive otherwise.
+    {
+        for (let i = 0; i < 40; i++) shortcuts["rctscreensaver.undo"]();
+        edClick("row.0");
+        assert.equal(ed("reset").fill, "#2a2e2c80", "nothing to reset on a playlist view");
+        const t = ed("cell.0.1").text;
+        mouse("move", 1400, 700); mouse("down", 1400, 700); mouse("move", 1000, 600); mouse("up", 1000, 600);
+        assert.notEqual(ed("cell.0.1").text, t, "moved by hand");
+        edClick("row.0");
+        edClick("reset");
+        assert.equal(ed("cell.0.1").text, t, "Reset view puts it back");
+        assert.equal(ed("reset").fill, "#2a2e2c80", "and goes inactive");
+    }
+    // The park field: clicked, the playlist's order stays open; held, it jumps to the park released on.
+    {
+        const f = ed("field");
+        const fx = f.x + 20, fy = f.y + 10;
+        const name0 = ed("text.park").text;
+        mouse("move", fx, fy); mouse("down", fx, fy); mouse("up", fx, fy);
+        assert.ok(ed("park.0") && ed("park.2"), "a click opens the park list");
+        assert.equal(ed("parks.head").text, "Playlist order", "as the playlist's order");
+        dump("parks");
+        assert.ok(ed("pname.1").text.length > 0 && ed("pcount.0").text.endsWith("views"), "names and view counts");
+        // Drag the first park below the third: the order changes, saved at once.
+        const p0 = ed("park.0"), p2 = ed("park.2");
+        mouse("move", p0.x + 6, p0.y + 8); mouse("down", p0.x + 6, p0.y + 8);
+        mouse("move", p0.x + 6, p0.y + 30); mouse("move", p2.x + 6, p2.y + p2.height + 2);
+        mouse("up", p2.x + 6, p2.y + p2.height + 2);
+        const order = saved["RCTScreensaver.playlistProps"]?.[playlist.sequence]?.order;
+        assert.deepEqual(JSON.parse(JSON.stringify(order)), [playlist.parks[1].key, playlist.parks[2].key, playlist.parks[0].key], "the park order is saved");
+        assert.equal(ed("pname.2").text, playlist.parks[0].name, "and shown");
+        assert.equal(ed("text.park").text, name0, "the park on screen stays");
+        assert.ok(ed("text.count").text.startsWith("3 / 3"), "now third in the order");
+        // A click on a park goes there; the list stays; another click outside closes it.
+        const p1 = ed("park.0");
+        mouse("move", p1.x + 60, p1.y + 8); mouse("down", p1.x + 60, p1.y + 8); mouse("up", p1.x + 60, p1.y + 8);
+        assert.ok(ed("park.0"), "the list stays open after a click on a park");
+        tick(30);
+        assert.equal(ed("text.park").text, playlist.parks[1].name, "and the park changes");
+        mouse("move", 1200, 650); mouse("down", 1200, 650); mouse("up", 1200, 650);
+        assert.equal(ed("park.0"), undefined, "a click elsewhere closes the list");
+        // Held: the list opens while the button is down and jumps on release.
+        mouse("move", fx, fy); mouse("down", fx, fy);
+        now += 500;
+        const q = ed("park.2");
+        mouse("move", q.x + 60, q.y + 8); mouse("up", q.x + 60, q.y + 8);
+        assert.equal(ed("park.0"), undefined, "the held list closes on release");
+        tick(30);
+        assert.equal(ed("text.park").text, playlist.parks[0].name, "on the park released on");
+        mouse("move", fx, fy); mouse("down", fx, fy); mouse("up", fx, fy);
+        const back = ed("park.0");
+        mouse("move", back.x + 60, back.y + 8); mouse("down", back.x + 60, back.y + 8); mouse("up", back.x + 60, back.y + 8);
+        mouse("move", 1200, 650); mouse("down", 1200, 650); mouse("up", 1200, 650);
+        tick(30);
+    }
+    // Restore points: Editor opened, checkpoints, Generated; Restore works with one highlighted.
+    {
+        assert.equal(ed("pt.0").text, "Editor opened", "the session's start is a restore point");
+        assert.ok([...scene.keys()].some(k => k.startsWith("rcts.ed.pt.") && scene.get(k).text === "Generated"), "and the build");
+        assert.equal(ed("restore").fill, "#2a2e2c80", "Restore waits for a highlighted point");
+        edClick("row.0");
+        const t = ed("cell.0.1").text;
+        edClick("checkpoint");
+        assert.equal(saved["RCTScreensaver.checkpoints"]?.[playlist.parks[1].key]?.length, 1, "Save checkpoint keeps the views");
+        assert.equal(ed("pt.1").text, "Checkpoint 1", "listed after Editor opened");
+        mouse("move", 1400, 700); mouse("down", 1400, 700); mouse("move", 1000, 600); mouse("up", 1000, 600);
+        assert.notEqual(ed("cell.0.1").text, t);
+        edClick("point.1");
+        assert.notEqual(ed("restore").fill, "#2a2e2c80", "a highlighted point enables Restore");
+        edClick("restore");
+        assert.equal(ed("cell.0.1").text, t, "Restore selected brings the checkpoint back");
+        for (let i = 0; i < 11; i++) edClick("checkpoint");
+        assert.equal(saved["RCTScreensaver.checkpoints"][playlist.parks[1].key].length, 10, "ten checkpoints a park at most");
+        assert.ok(ed("points.thumb"), "the list scrolls past three and a half rows");
+        dump("points");
+    }
+    // Playlist properties: applied at once, Save keeps them; Off hides the change and arrival holds.
+    {
+        assert.equal(ed("save").fill, "#2a2e2c80", "nothing to save yet");
+        assert.ok(ed("step.changeHold.less"), "the change hold shows");
+        edClick("seg.panChanges.0");
+        assert.equal(ed("step.changeHold.less"), undefined, "Angle and zoom change Off hides the change hold");
+        assert.equal(ed("step.arriveHold.less"), undefined, "and the arrival hold");
+        assert.ok(ed("step.returnHold.less"), "the return hold stays");
+        mouse("move", 1200, 650);
+        assert.equal(ed("seg.panChanges.0").fill, "#3d7a50b3", "Off shows on");
+        edClick("step.returnHold.more");
+        assert.equal(ed("stept.returnHold").text, "2.5 s", "the return hold steps by half a second");
+        edClick("seg.titleMusic.1");
+        assert.equal(mode.configured.at(-1).titleMusic, 2, "Title music Theme applies at once");
+        edClick("seg.titles.3");
+        assert.notEqual(ed("save").fill, "#2a2e2c80", "Save is ready");
+        edClick("save");
+        const props = saved["RCTScreensaver.playlistProps"][playlist.sequence];
+        assert.equal(props.panChanges, "off");
+        assert.equal(props.returnHold, 2.5);
+        assert.equal(props.titleMusic, "theme");
+        assert.equal(props.titles, null, "Unset titles saved as null");
+        assert.equal(props.order.length, 3, "the park order kept");
+        assert.equal(ed("save").fill, "#2a2e2c80", "saved");
+        edClick("propsHead");
+        assert.equal(ed("seg.inertia.0"), undefined, "the Playlist header folds the properties");
+        edClick("propsHead");
+        edClick("seg.panChanges.2");
+        edClick("save");
+    }
+    // The pin: off, the panes hide once the mouse rests; a move brings them back.
+    {
+        edClick("pin");
+        assert.equal(saved["RCTScreensaver.settings"].editorPinned, false, "the pin is a setting");
+        mouse("move", 1200, 650);
+        tick(40);
+        assert.equal(ed("frame").opacity, 0, "unpinned, the panes hide with the cursor");
+        mouse("move", 1210, 650);
+        assert.equal(ed("frame").opacity, 1, "and come back on a move");
+        edClick("pin");
+        tick(40);
+        assert.equal(ed("frame").opacity, 1, "pinned, they stay");
+    }
+    // A narrow window folds the top-right box to its header; a click on it unfolds it.
+    {
+        sandbox.ui.width = 960;
+        mouse("move", 500, 900);
+        assert.equal(ed("checkpoint"), undefined, "folded at 960 wide");
+        edClick("boxHead");
+        assert.ok(ed("checkpoint"), "unfolded by hand");
+        edClick("boxHead");
+        sandbox.ui.width = 1920;
+        mouse("move", 500, 900);
+        edClick("boxHead");
+        assert.ok(ed("checkpoint"));
     }
     edClick("close");
     assert.equal(ed("frame"), undefined, "the close button closes the panel");

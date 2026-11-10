@@ -170,7 +170,8 @@ A playlist is a TOML file naming the parks to play and the options for generatin
   arriving as that view's hold starts (`pan = 0`, the default, holds still and cuts; `1` keeps
   moving). `motion = "static"` holds every view still, with no ride pans, beads or nudges.
 - **Angle and zoom changes** happen only as a pan arrives (`pan_changes = "end"`, the default) or
-  as it sets off (`"start"`), never mid-pan; opposite angles and zooms two or more levels apart
+  as it sets off (`"start"`), never mid-pan (`"off"`: a pan that would turn or zoom cuts instead,
+  overviews excepted); opposite angles and zooms two or more levels apart
   change half at each end. The camera rests `arrive_hold` (1 s) at the next view's spot before a
   change on arrival and stays still `change_hold` (2 s) after each change, both added to the
   view's time. `inertia = true` makes a pan start and stop slowly instead of moving at one speed.

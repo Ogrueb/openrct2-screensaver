@@ -24,9 +24,12 @@ export interface View {
     fixed?: boolean; // shown as placed: fitting neither moves nor merges it (a tower view)
     pan?: number; // share of the hold spent panning on to the next view (absent: 0, held still); a show
                   // view with a path never pans on: its path moves for this share of the path's time
-    panChanges?: PanChanges; // angle and zoom change as the pan sets off or arrives (absent: settings)
+    panChanges?: PanChanges | "off"; // angle and zoom change as the pan sets off or arrives (absent: settings);
+                                     // off: a pan that changes them cuts instead (the playlist's pan_changes)
     inertia?: boolean; // the pan starts and stops slowly instead of at one speed (absent: settings)
     zoomThreshold?: number; // screen px/s above which the pan travels zoomed out, any zoom (absent: the tolerance)
+    origin?: number; // the view editor: which of the park's playlist views this one started as (its Reset view);
+                     // absent on views added by hand (install drops it)
 }
 
 /** A point on a show view's camera path, reached `ticks` game ticks after the one before. */
@@ -137,7 +140,54 @@ export interface Playlist {
     arriveHold?: number;
     returnHold?: number;
     titles?: Titles; // the playlist's Show titles: overrides the viewer's setting each time playback starts
+    inertia?: boolean; // the playlist's [views] inertia and pan_changes, as built (the view editor shows them)
+    panChanges?: PanChanges | "off";
+    built?: number; // when the playlist was built and installed (ms since 1970): the editor's restore points
+    installed?: number;
     parks: ParkEntry[];
+}
+
+/** The view editor's Playlist properties (owner, 2026-11-10), by sequence name: they apply over the
+ *  installed playlist until the next install moves them into the playlist file (mksequence.py
+ *  pull_props). `order` lists park keys in play order; `titles` null is Unset (the viewer's own). */
+export interface PlaylistProps {
+    order?: string[];
+    inertia?: boolean;
+    panChanges?: PanChanges | "off"; // off: a pan that would change the angle or zoom cuts instead (not overviews)
+    changeHold?: number;
+    arriveHold?: number;
+    returnHold?: number;
+    titleMusic?: "ride" | "theme" | "keep";
+    titles?: Titles | null;
+}
+
+export function loadPlaylistProps(sequence: string): PlaylistProps {
+    const all = context.sharedStorage.get<Record<string, PlaylistProps>>(NAMESPACE + ".playlistProps", {});
+    return { ...(all[sequence] ?? {}) };
+}
+
+export function savePlaylistProps(sequence: string, props: PlaylistProps): void {
+    const all = context.sharedStorage.get<Record<string, PlaylistProps>>(NAMESPACE + ".playlistProps", {});
+    all[sequence] = props;
+    context.sharedStorage.set(NAMESPACE + ".playlistProps", all);
+}
+
+/** A park's saved views to go back to (the view editor's restore points), newest last. */
+export interface Checkpoint {
+    n: number; // its number: "Checkpoint n"
+    time: number; // ms since 1970
+    views: View[];
+    screen?: [number, number]; // the window they were saved in
+}
+
+export const CHECKPOINTS_PER_PARK = 10; // the oldest goes past this (owner, 2026-11-10)
+
+export function loadCheckpoints(): Record<string, Checkpoint[]> {
+    return context.sharedStorage.get<Record<string, Checkpoint[]>>(NAMESPACE + ".checkpoints", {});
+}
+
+export function saveCheckpoints(all: Record<string, Checkpoint[]>): void {
+    context.sharedStorage.set(NAMESPACE + ".checkpoints", all);
 }
 
 export type Titles = "overview" | "on" | "off";
@@ -182,6 +232,7 @@ export interface Settings {
     drawingEngine: "software" | "opengl" | null; // the renderer in the mode; null: the game's own (Options)
     multiThreading: boolean | null; // multithreaded rendering in the mode; null: the game's own (Options)
     // Performance tests (tools/perfrun.py writes these into a sandbox's plugin.store.json):
+    editorPinned: boolean; // the view editor's panes stay shown; off, they hide with the cursor like the bar
     bench: boolean; // same camera path every run: first order of every park (visit counter left alone), no shuffle,
                     // mouse input ignored (marked in the perf log instead of showing the controls bar)
     profilerExport: string; // when set: start OpenRCT2's function profiler and export it to this file every minute
@@ -192,7 +243,7 @@ const DEFAULT_SETTINGS: Settings = {
     panTolerance: 500, panToleranceStep: 100, panChanges: "end", inertia: false, changeHold: 2, arriveHold: 1, returnHold: 2, cameraLog: false, scaleToWindow: true,
     window: "borderless", titleMusic: "keep", titles: "overview", captionPlace: "topLeft", captionFrame: "gold", captionBand: "green", lightEffects: false, weatherGloom: false, weather: false, timeOfDay: "day",
     masterVolume: null, soundVolume: null, musicVolume: null, drawingEngine: null, multiThreading: null,
-    bench: false, profilerExport: "",
+    editorPinned: true, bench: false, profilerExport: "",
 };
 
 export function loadSettings(): Settings {

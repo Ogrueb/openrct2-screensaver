@@ -13,7 +13,7 @@
 
 import { toScreen, toWorld } from "./fit";
 import { Player } from "./player";
-import { View } from "./storage";
+import { CHECKPOINTS_PER_PARK, View, isPinned, loadCheckpoints, saveCheckpoints, saveSettings } from "./storage";
 
 const CLASSIFICATION = "rctscreensaver.editor";
 const WIDTH = 300;
@@ -55,6 +55,14 @@ export interface Camera {
 
 function round2(n: number): number {
     return Math.round(n * 100) / 100;
+}
+
+/** A row of the restore points list (the editing UI's top-right box), newest first. */
+export interface RestorePoint {
+    id: string; // "session", "checkpoint.<n>", "install", "generated"
+    label: string;
+    tag?: string; // "session", "install", "build": a chip after the label
+    time?: number; // ms since 1970
 }
 
 /** A park's views before a change, to go back to. */
@@ -121,6 +129,9 @@ export class Editor {
     private gesture: { commit: boolean; moved: boolean } | undefined; // a drag on the park
     private map = false; // the map: every view a box on a camera stepped out
     private eventsUnlocked = false; // the map lets event views be dragged
+    private opened = new Map<string, { time: number; snapshot: Snapshot }>(); // each park's views as the editor first showed it
+    private base: { park: number; views: View[] } | undefined; // the current park's playlist views (Reset view)
+    private checkpoints = loadCheckpoints(); // by park key, as saved
 
     constructor(private readonly player: Player, private readonly view: EditorView = new WindowView()) {}
 
@@ -142,8 +153,20 @@ export class Editor {
         } else {
             this.cameraFromViewport();
         }
+        this.noteOpened();
         this.view.open(this);
         this.refresh();
+    }
+
+    /** Remembers the current park's views the first time the editor shows them ("Editor opened"). */
+    private noteOpened(): void {
+        const key = this.player.parkKey;
+        if (this.base && this.base.park !== this.player.parkIndex) {
+            this.base = undefined;
+        }
+        if (key !== undefined && !this.player.isLoading && !this.opened.has(key)) {
+            this.opened.set(key, { time: Date.now(), snapshot: this.snapshot() });
+        }
     }
 
     close(): void {
@@ -245,7 +268,8 @@ export class Editor {
     }
 
     private snapshot(): Snapshot {
-        return { views: this.views(), selected: this.selected, edited: this.player.isEdited };
+        const views = this.player.isLoading ? [] : this.player.currentViews.map(v => ({ ...v }));
+        return { views, selected: this.selected, edited: this.player.isEdited };
     }
 
     private sameAs(s: Snapshot): boolean {
@@ -504,7 +528,12 @@ export class Editor {
     /** The views to change: the park's current views, copied (generated ones are fitted).
      * Empty while a park is loading, so nothing is changed until its views are on screen. */
     private views(): View[] {
-        return this.player.isLoading ? [] : this.player.currentViews.map(v => ({ ...v }));
+        if (this.player.isLoading) {
+            return [];
+        }
+        // A park's first edit starts from its playlist views: each remembers which it was (Reset view).
+        const first = !this.player.isEdited;
+        return this.player.currentViews.map((v, i) => first ? { ...v, origin: i } : { ...v });
     }
 
     private cameraView(hold: number): View {
@@ -604,6 +633,161 @@ export class Editor {
         this.togglePan(v => ({ inertia: !this.player.inertiaOf(v) }));
     }
 
+    /** Moves a view to another place in the list (a row dragged in the editing UI). */
+    moveTo(from: number, to: number): void {
+        this.change(() => {
+            const views = this.views();
+            if (!views[from] || to < 0 || to >= views.length || from === to) {
+                return;
+            }
+            const [moved] = views.splice(from, 1);
+            views.splice(to, 0, moved);
+            this.save(views, to, true);
+        });
+    }
+
+    /** Whether a view can be dragged or moved: event views only with the lock off. */
+    movable(index: number): boolean {
+        const v = this.player.currentViews[index];
+        return !!v && (!this.isEvent(v) || this.eventsUnlocked);
+    }
+
+    isEvent(v: View): boolean {
+        return isPinned(v) || v.animation !== undefined;
+    }
+
+    /** The current park's playlist views, as reverting would give them (kept until the park changes). */
+    private baseViews(): View[] {
+        if (!this.base || this.base.park !== this.player.parkIndex) {
+            this.base = { park: this.player.parkIndex, views: this.player.baseViews() };
+        }
+        return this.base.views;
+    }
+
+    /** The selected view's playlist version, if it differs from the view (Reset view). */
+    private resetTarget(): View | undefined {
+        const v = this.player.currentViews[this.selected];
+        if (!v || v.origin === undefined || !this.player.isEdited || this.player.isLoading) {
+            return undefined;
+        }
+        const base = this.baseViews()[v.origin];
+        if (!base) {
+            return undefined;
+        }
+        const { origin: _, ...rest } = v;
+        return JSON.stringify(rest) === JSON.stringify(base) ? undefined : base;
+    }
+
+    get canResetView(): boolean {
+        return this.resetTarget() !== undefined;
+    }
+
+    /** Puts the selected view back as the playlist has it (the rest of the list unchanged). */
+    resetView(): void {
+        const base = this.resetTarget();
+        if (!base) {
+            return;
+        }
+        this.change(() => {
+            const views = this.views();
+            views[this.selected] = { ...base, origin: views[this.selected].origin };
+            this.save(views, this.selected);
+        });
+    }
+
+    // Restore points (the editing UI's top-right box).
+
+    restorePoints(): RestorePoint[] {
+        const key = this.player.parkKey;
+        if (key === undefined) {
+            return [];
+        }
+        const points: RestorePoint[] = [];
+        const opened = this.opened.get(key);
+        if (opened) {
+            points.push({ id: "session", label: "Editor opened", tag: "session", time: opened.time });
+        }
+        for (const c of [...(this.checkpoints[key] ?? [])].reverse()) {
+            points.push({ id: `checkpoint.${c.n}`, label: `Checkpoint ${c.n}`, time: c.time });
+        }
+        if (this.player.installedHandSet) {
+            points.push({ id: "install", label: "Last install", tag: "install", time: this.player.installedAt });
+        }
+        points.push({ id: "generated", label: "Generated", tag: "build", time: this.player.builtAt });
+        return points;
+    }
+
+    /** Saves the current park's views as a checkpoint (at most CHECKPOINTS_PER_PARK, the oldest goes). */
+    saveCheckpoint(): void {
+        const key = this.player.parkKey;
+        if (key === undefined || this.player.isLoading) {
+            return;
+        }
+        const all = this.checkpoints;
+        const list = all[key] ?? [];
+        const n = list.reduce((m, c) => Math.max(m, c.n), 0) + 1;
+        list.push({ n, time: Date.now(), views: this.player.currentViews.map(v => ({ ...v })), screen: [ui.width, ui.height] });
+        all[key] = list.slice(-CHECKPOINTS_PER_PARK);
+        saveCheckpoints(all);
+        this.refresh();
+    }
+
+    /** Goes back to a restore point; one change, so Undo returns. */
+    restoreTo(id: string): void {
+        const key = this.player.parkKey;
+        if (key === undefined) {
+            return;
+        }
+        this.change(() => {
+            if (id === "session") {
+                const opened = this.opened.get(key);
+                if (opened) {
+                    this.restore(opened.snapshot);
+                }
+            } else if (id === "install") {
+                this.player.restoreInstalled();
+            } else if (id === "generated") {
+                this.player.revertViews();
+            } else if (id.startsWith("checkpoint.")) {
+                const c = (this.checkpoints[key] ?? []).find(cp => `checkpoint.${cp.n}` === id);
+                if (c) {
+                    this.selected = 0;
+                    this.player.setViews(c.views.map(v => ({ ...v })), 0, true);
+                }
+            }
+            this.selected = this.player.viewIndex;
+            this.refresh();
+        });
+    }
+
+    /** The panes stay shown (the pin); off, they hide with the cursor like the controls bar. */
+    get pinned(): boolean {
+        return this.player.liveSettings.editorPinned !== false;
+    }
+
+    togglePinned(): void {
+        const settings = this.player.liveSettings;
+        settings.editorPinned = !this.pinned;
+        saveSettings(settings);
+        this.refresh();
+    }
+
+    /** The playback, for the editing UI's park order and Playlist properties. */
+    get playback(): Player {
+        return this.player;
+    }
+
+    /** Where the park's views come from, for the restore points' header. */
+    source(): { text: string; warning: boolean } {
+        if (this.player.isLoading) {
+            return { text: "loading park...", warning: false };
+        }
+        if (!this.player.canEdit) {
+            return { text: "can't edit: re-run --install", warning: true };
+        }
+        return { text: this.player.isEdited ? "edited · saved in the game" : "playlist views", warning: false };
+    }
+
     goToPark(index: number): void {
         const n = this.player.parkNames.length;
         if (n > 0) {
@@ -650,6 +834,7 @@ export class Editor {
     /** A view was shown (selected, the park finished loading, or Play moved on): follow it, so
      * the list highlights the view on screen and edits apply to it. */
     private viewShown(view: View | undefined): void {
+        this.noteOpened();
         if (this.map && !this.player.isPreviewing) {
             this.selected = this.player.viewIndex;
             this.applyCamera(); // the map keeps its camera

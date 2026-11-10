@@ -1,30 +1,91 @@
-// The view editor in the screensaver mode (docs/screensaver-ui.md, "Editor"): the stock window's
-// controls (editor.ts, WindowView) on the overlay, in the controls bar's style. It stays shown while
-// open, at the window's top left. Arrow keys pan the camera as with the window (main.ts). Live editing
-// (docs/screensaver-ui.md): a drag on the park moves the selected view, the wheel zooms it.
+// The view editor in the screensaver mode (docs/screensaver-ui.md, "Editor"): three panes on the overlay,
+// in the controls bar's style (owner's design, 2026-11-10):
+// - the views pane, top left: the park (previous, a dropdown field, next; held, the field's list jumps on
+//   release; clicked, it stays open as the playlist's order, its rows dragged to reorder the parks) over
+//   the park's views, each row dragged by its grip to reorder them;
+// - the toolbox, bottom left: Frame | Map, a hint, the view, camera and event tools, hold and pan, then
+//   undo, redo, Reset view, the pin (the panes stay shown) and Play; tooltips name each tool and its key;
+// - the top-right box: the park's restore points and the Playlist properties (motion, timing,
+//   presentation), folded to its header when the window is too narrow for it beside the views pane.
+// Live editing (docs/screensaver-ui.md): a drag on the park moves the selected view, the wheel zooms it.
 
-import type { Editor, EditorView } from "../editor";
+import type { Editor, EditorView, RestorePoint } from "../editor";
 import { EDITOR_COLUMNS } from "../editor";
+import { modeSettings } from "../mode";
 import type { MouseEvent, Overlay, ScreensaverApi } from "../mode";
-import { Layer, Rect, Scene, backing, button, contains, label, measure } from "./kit";
+import type { PlaylistProps } from "../storage";
+import { Layer, Rect, Scene, backing, bevel, button, contains, label, measure, tooltip } from "./kit";
 import { EDITOR, THEME, TIMING, Z } from "./theme";
 import { ViewMap } from "./view-map";
 
-type HitId =
-    | "close" | "prevPark" | "nextPark" | `row.${number}` | "scrollUp" | "scrollDown"
-    | "add" | "update" | "delete" | "up" | "down" | "revert" | "undo" | "redo"
-    | "holdLess" | "holdMore" | "panLess" | "panMore" | "turn" | "inertia"
-    | "rotl" | "rotr" | "zoomin" | "zoomout" | "play" | "map" | "lock";
-
 const PAN_SHARE_STEP = 0.1;
-const HELP = [
-    "Drag the park: moves the selected view. Wheel: zooms it.",
-    "Arrows pan the camera (Shift: faster). Ctrl+Z undoes. E closes.",
-];
-const MAP_HELP = [
-    "Drag a box: moves it; its corner: zooms it. Drag the park: pans.",
-    "Right-click: adds a view. Double-click a box: frames it. M closes.",
-];
+const HINT_FRAME = "Drag the park: moves the view. Wheel: zooms it.";
+const HINT_MAP = "Drag a box or its corner. Right-click: adds a view.";
+const DRAG_Z = Z.tip - 2; // a dragged row over the rest of the pane
+
+/** A Playlist property's choices, as the segmented buttons show them. */
+type Choice = [label: string, value: unknown];
+const CHOICES: Partial<Record<keyof PlaylistProps, Choice[]>> = {
+    inertia: [["Off", false], ["On", true]],
+    panChanges: [["Off", "off"], ["Start", "start"], ["End", "end"]],
+    titleMusic: [["Ride", "ride"], ["Theme", "theme"], ["Unset", "keep"]],
+    titles: [["Overview", "overview"], ["On", "on"], ["Off", "off"], ["Unset", null]],
+};
+
+/** A list that scrolls: its first row shown, and the thumb's drag. */
+class Scroll {
+    first = 0;
+    track: Rect | undefined;
+    thumb: Rect | undefined;
+
+    clamp(count: number, visible: number): void {
+        this.first = Math.max(0, Math.min(this.first, Math.max(0, Math.ceil(count - visible))));
+    }
+
+    by(rows: number, count: number, visible: number): void {
+        this.first += rows;
+        this.clamp(count, visible);
+    }
+
+    /** Lays the bar out in `track` (none when everything shows). */
+    layout(track: Rect, count: number, visible: number): void {
+        this.clamp(count, visible);
+        if (count <= visible) {
+            this.track = this.thumb = undefined;
+            return;
+        }
+        const h = Math.max(12, Math.round(track.height * visible / count));
+        const span = Math.max(1, Math.ceil(count - visible));
+        this.track = track;
+        this.thumb = { x: track.x, y: track.y + Math.round((track.height - h) * this.first / span), width: track.width, height: h };
+    }
+
+    draw(scene: Scene, id: string): void {
+        if (this.track && this.thumb) {
+            scene.set(`${id}.track`, { type: "rect", ...this.track, fill: THEME.editorList, z: Z.face });
+            scene.set(`${id}.thumb`, { type: "rect", ...this.thumb, fill: THEME.faceOn, z: Z.icon });
+        }
+    }
+
+    /** The first row for the thumb dragged to `y` (from a press at y0 when the first row was first0). */
+    dragTo(y: number, y0: number, first0: number, count: number, visible: number): void {
+        if (!this.track || !this.thumb) {
+            return;
+        }
+        const span = Math.max(1, this.track.height - this.thumb.height);
+        this.first = first0 + Math.round((y - y0) / span * Math.max(0, count - visible));
+        this.clamp(count, visible);
+    }
+}
+
+/** A row press that becomes a drag once the mouse moves (views or parks). */
+interface RowDrag {
+    list: "views" | "parks";
+    from: number;
+    x0: number;
+    y0: number;
+    moving: boolean;
+}
 
 export class EditorPanel implements EditorView {
     readonly supportsMap = true;
@@ -32,17 +93,30 @@ export class EditorPanel implements EditorView {
     private readonly map: ViewMap;
     private editor: Editor | undefined;
     private mouse = { x: -1, y: -1 };
-    private downOn: HitId | undefined;
-    private boxes = new Map<HitId, Rect>();
-    private texts = new Map<string, { text: string; r: Rect; bold?: boolean; warning?: boolean; center?: boolean }>();
-    private frame: Rect = { x: 0, y: 0, width: 0, height: 0 };
-    private list: Rect = { x: 0, y: 0, width: 0, height: 0 };
-    private scroll = 0; // first row shown
-    private followed = -1; // the selection the list last scrolled to (a new one scrolls into view)
-    private track: Rect | undefined; // the scroll bar between its arrows, when the list scrolls
+    private downOn: string | undefined;
+    private boxes = new Map<string, Rect>();
+    private tips = new Map<string, string>();
+    private off = new Set<string>(); // inactive buttons
+    private frames: Rect[] = []; // the panes shown, for what the mouse is over
+    private paneViews: Rect = { x: 0, y: 0, width: 0, height: 0 };
+    private listRect: Rect = { x: 0, y: 0, width: 0, height: 0 }; // the views' rows
+    private parksRect: Rect | undefined; // the park list, while open
+    private pointsRect: Rect | undefined; // the restore points' rows
+    private readonly views = new Scroll();
+    private readonly parks = new Scroll();
+    private readonly points = new Scroll();
+    private followed = -1; // the selection the views list last scrolled to
     private drag: { x: number; y: number } | undefined; // a left drag on the park: where the mouse last was
+    private rowDrag: RowDrag | undefined;
+    private thumbDrag: { scroll: Scroll; y0: number; first0: number; count: () => number; visible: number } | undefined;
+    private dropdown: { persistent: boolean; downAt: number } | undefined; // the park list
+    private picked: string | undefined; // the restore point highlighted
+    private propsOpen = true; // the Playlist properties unfolded
+    private boxOpen: boolean | undefined; // the top-right box unfolded by hand (undefined: by the window's width)
+    private lastMove = 0; // the pin off: the panes hide this long after the mouse last moved
+    private hidden = false;
 
-    constructor(private readonly mode: ScreensaverApi) {
+    constructor(private readonly mode: ScreensaverApi, private readonly now: () => number = () => Date.now()) {
         this.layer = new Layer(mode.overlay, "rcts.ed.");
         this.map = new ViewMap(mode.overlay);
     }
@@ -53,7 +127,11 @@ export class EditorPanel implements EditorView {
 
     open(editor: Editor): void {
         this.editor = editor;
-        this.scroll = 0;
+        this.views.first = 0;
+        this.dropdown = undefined;
+        this.picked = undefined;
+        this.hidden = false;
+        this.lastMove = this.now();
         this.render();
         this.layer.show(true, TIMING.fadeIn);
         this.render();
@@ -63,6 +141,9 @@ export class EditorPanel implements EditorView {
         this.editor = undefined;
         this.downOn = undefined;
         this.drag = undefined;
+        this.rowDrag = undefined;
+        this.thumbDrag = undefined;
+        this.dropdown = undefined;
         this.layer.clear();
         this.map.clear();
     }
@@ -71,39 +152,197 @@ export class EditorPanel implements EditorView {
         this.render();
     }
 
-    /** Handles a mouse event over the panel (or a press that started on it); false lets it through. */
+    /** Called every update: with the pin off the panes hide once the mouse has rested a while. */
+    update(): void {
+        const e = this.editor;
+        if (!e || e.pinned || this.hidden || this.busy || this.over(this.mouse.x, this.mouse.y)) {
+            return;
+        }
+        if (this.now() - this.lastMove >= TIMING.hideAfter) {
+            this.hidden = true;
+            this.layer.show(false, TIMING.fadeOut);
+        }
+    }
+
+    private get busy(): boolean {
+        return this.downOn !== undefined || this.rowDrag !== undefined || this.thumbDrag !== undefined || this.dropdown !== undefined;
+    }
+
+    private over(x: number, y: number): boolean {
+        return this.frames.some(f => contains(f, x, y));
+    }
+
+    private wake(): void {
+        this.lastMove = this.now();
+        if (this.hidden) {
+            this.hidden = false;
+            this.layer.show(true, TIMING.fadeIn);
+        }
+    }
+
+    /** Handles a mouse event over the panes (or a press that started on them); false lets it through. */
     onMouse(e: MouseEvent): boolean {
-        if (!this.editor || this.drag || this.map.dragging) {
-            return false; // a drag on the park keeps the mouse over the panel too
+        const ed = this.editor;
+        if (!ed || this.drag || this.map.dragging) {
+            return false; // a drag on the park keeps the mouse over the panes too
         }
         if (e.type !== "wheel") {
+            if (e.x !== this.mouse.x || e.y !== this.mouse.y) {
+                this.wake();
+            }
             this.mouse = { x: e.x, y: e.y }; // a wheel step is taken where the mouse last was
         }
-        const inside = contains(this.frame, this.mouse.x, this.mouse.y);
-        let used = inside || this.downOn !== undefined;
-        if (e.type === "down" && e.button === 0 && inside) {
-            this.downOn = this.hit();
-        } else if (e.type === "up" && e.button === 0) {
-            const hit = this.hit();
-            if (this.downOn && hit === this.downOn) {
-                this.activate(hit);
+        const inside = this.over(this.mouse.x, this.mouse.y);
+        let used = inside || this.busy;
+        if (e.type === "move") {
+            this.moved();
+        } else if (e.type === "down" && e.button === 0) {
+            used = this.pressed(inside) || used;
+        } else if (e.type === "down") {
+            used = inside || this.dropdown !== undefined; // a right click on a pane does nothing
+            if (this.dropdown && !inside) {
+                this.dropdown = undefined;
             }
-            used = used || this.downOn !== undefined;
-            this.downOn = undefined;
-        } else if (e.type === "wheel" && contains(this.list, this.mouse.x, this.mouse.y)) {
-            this.scrollBy(e.delta > 0 ? -1 : 1); // a step away from the user (delta > 0) scrolls up
+        } else if (e.type === "up" && e.button === 0) {
+            used = this.released() || used;
+        } else if (e.type === "wheel") {
+            const step = e.delta > 0 ? -1 : 1; // a step away from the user (delta > 0) scrolls up
+            if (this.parksRect && contains(this.parksRect, this.mouse.x, this.mouse.y)) {
+                this.parks.by(step, ed.parkNames.length, this.parkRows());
+            } else if (contains(this.listRect, this.mouse.x, this.mouse.y)) {
+                this.views.by(step, ed.rows().length, EDITOR.visibleRows);
+            } else if (this.pointsRect && contains(this.pointsRect, this.mouse.x, this.mouse.y)) {
+                this.points.by(step, ed.restorePoints().length, EDITOR.boxRows);
+            }
         }
         this.render();
         return used;
     }
 
-    /** Handles a mouse event on the park (off the panel and the bar, or during a drag that started on
+    private moved(): void {
+        const t = this.thumbDrag;
+        if (t) {
+            t.scroll.dragTo(this.mouse.y, t.y0, t.first0, t.count(), t.visible);
+            return;
+        }
+        const r = this.rowDrag;
+        if (r && !r.moving && Math.abs(this.mouse.y - r.y0) + Math.abs(this.mouse.x - r.x0) >= EDITOR.dragStart) {
+            r.moving = r.list === "parks" ? this.dropdown?.persistent === true : this.editor!.movable(r.from);
+            if (!r.moving && r.list === "views") {
+                this.rowDrag = undefined; // a locked event view: the press only selects it
+            }
+        }
+        if (r?.moving) {
+            this.autoScroll(r);
+        }
+    }
+
+    /** A dragged row near its list's top or bottom edge scrolls the list. */
+    private autoScroll(r: RowDrag): void {
+        const ed = this.editor!;
+        const rect = r.list === "views" ? this.listRect : this.parksRect;
+        if (!rect) {
+            return;
+        }
+        const rowsTop = rect.y + (r.list === "views" ? EDITOR.rowHeight : EDITOR.parkRow);
+        const step = this.mouse.y < rowsTop ? -1 : this.mouse.y > rect.y + rect.height ? 1 : 0;
+        if (step && r.list === "views") {
+            this.views.by(step, ed.rows().length, EDITOR.visibleRows);
+        } else if (step) {
+            this.parks.by(step, ed.parkNames.length, this.parkRows());
+        }
+    }
+
+    private pressed(inside: boolean): boolean {
+        const ed = this.editor!;
+        const hit = this.hit();
+        if (this.dropdown && (!hit || (!hit.startsWith("park.") && !hit.startsWith("parks.")))) {
+            // Another click closes the open list (a click on the field too); it does nothing else.
+            this.dropdown = undefined;
+            return true;
+        }
+        if (!inside && !hit) {
+            return false;
+        }
+        this.downOn = hit;
+        if (hit === "field") {
+            this.dropdown = { persistent: false, downAt: this.now() };
+            this.parks.first = Math.max(0, ed.playback.playOrder.indexOf(ed.parkIndex) - 2);
+        } else if (hit?.startsWith("row.") || hit?.startsWith("park.")) {
+            const views = hit.startsWith("row.");
+            this.rowDrag = { list: views ? "views" : "parks", from: Number(hit.slice(views ? 4 : 5)), x0: this.mouse.x, y0: this.mouse.y, moving: false };
+        } else if (hit?.endsWith(".thumb")) {
+            const which = hit.slice(0, -6);
+            const scroll = which === "parks" ? this.parks : which === "points" ? this.points : this.views;
+            const count = which === "parks" ? () => ed.parkNames.length : which === "points" ? () => ed.restorePoints().length : () => ed.rows().length;
+            const visible = which === "parks" ? this.parkRows() : which === "points" ? EDITOR.boxRows : EDITOR.visibleRows;
+            this.thumbDrag = { scroll, y0: this.mouse.y, first0: scroll.first, count, visible };
+        } else if (hit?.endsWith(".track")) {
+            const which = hit.slice(0, -6);
+            const scroll = which === "parks" ? this.parks : which === "points" ? this.points : this.views;
+            const page = which === "parks" ? this.parkRows() : which === "points" ? 3 : EDITOR.visibleRows;
+            const count = which === "parks" ? ed.parkNames.length : which === "points" ? ed.restorePoints().length : ed.rows().length;
+            scroll.by(this.mouse.y < (scroll.thumb?.y ?? 0) ? -page : page, count, page);
+        }
+        return true;
+    }
+
+    private released(): boolean {
+        const ed = this.editor!;
+        const hit = this.hit();
+        const down = this.downOn;
+        this.downOn = undefined;
+        this.thumbDrag = undefined;
+        const r = this.rowDrag;
+        this.rowDrag = undefined;
+        const dd = this.dropdown;
+        if (down === "field" && dd && !dd.persistent) {
+            // Held: jump to the park released on. Clicked: the list stays open as the playlist's order.
+            if (hit?.startsWith("park.")) {
+                this.goToPark(Number(hit.slice(5)));
+                this.dropdown = undefined;
+            } else if (hit === "field" && this.now() - dd.downAt < EDITOR.holdOpen) {
+                dd.persistent = true;
+            } else {
+                this.dropdown = undefined;
+            }
+            return true;
+        }
+        if (r?.moving) {
+            const to = this.dropIndex(r);
+            if (r.list === "views") {
+                ed.moveTo(r.from, to);
+            } else {
+                ed.playback.moveParkInOrder(r.from, to);
+            }
+            return true;
+        }
+        if (down && hit === down && !this.off.has(hit)) {
+            this.activate(hit);
+        }
+        return down !== undefined;
+    }
+
+    /** Where a dragged row lands: the gap nearest the mouse, as an index after the row leaves its place. */
+    private dropIndex(r: RowDrag): number {
+        const ed = this.editor!;
+        const views = r.list === "views";
+        const rect = views ? this.listRect : this.parksRect!;
+        const rowH = views ? EDITOR.rowHeight : EDITOR.parkRow;
+        const count = views ? ed.rows().length : ed.parkNames.length;
+        const first = views ? this.views.first : this.parks.first;
+        const gap = Math.max(0, Math.min(count, Math.round((this.mouse.y - rect.y - rowH) / rowH) + first));
+        return gap > r.from ? gap - 1 : gap;
+    }
+
+    /** Handles a mouse event on the park (off the panes and the bar, or during a drag that started on
      * the park): a left drag moves the camera and with it the selected view, the wheel zooms it. */
     onPark(e: MouseEvent): boolean {
         const editor = this.editor;
         if (!editor) {
             return false;
         }
+        this.wake();
         if (editor.mapMode || this.map.dragging) {
             return this.map.onMouse(e, editor);
         }
@@ -134,148 +373,128 @@ export class EditorPanel implements EditorView {
         return this.drag !== undefined || this.map.dragging;
     }
 
-    private hit(): HitId | undefined {
+    private hit(): string | undefined {
+        // The open park list lies over the views list: its rows first.
+        let found: string | undefined;
         for (const [id, r] of this.boxes) {
             if (contains(r, this.mouse.x, this.mouse.y)) {
-                return id;
+                if (id.startsWith("park.") || id.startsWith("parks.")) {
+                    return id;
+                }
+                if (this.parksRect && contains(this.parksRect, this.mouse.x, this.mouse.y)) {
+                    continue; // under the park list
+                }
+                found = found ?? id;
             }
         }
-        return undefined;
+        return found;
     }
 
-    private scrollBy(rows: number): void {
-        const count = this.editor?.rows().length ?? 0;
-        this.scroll = Math.max(0, Math.min(Math.max(0, count - EDITOR.visibleRows), this.scroll + rows));
+    private goToPark(pos: number): void {
+        const ed = this.editor!;
+        const order = ed.playback.playOrder;
+        const n = order.length;
+        if (n > 0) {
+            ed.goToPark(order[((pos % n) + n) % n]);
+        }
     }
 
-    private activate(id: HitId): void {
+    private activate(id: string): void {
         const e = this.editor;
         if (!e) {
-            return;
-        }
-        if (id === "scrollUp" || id === "scrollDown") {
-            this.scrollBy(id === "scrollUp" ? -1 : 1);
             return;
         }
         if (id.startsWith("row.")) {
             e.select(Number(id.slice(4)));
             return;
         }
+        if (id.startsWith("park.")) {
+            this.goToPark(Number(id.slice(5))); // a click in the open list: the list stays
+            return;
+        }
+        if (id.startsWith("point.")) {
+            this.picked = e.restorePoints()[Number(id.slice(6))]?.id;
+            return;
+        }
+        if (id.startsWith("seg.")) {
+            const [, key, i] = id.split(".");
+            const choice = CHOICES[key as keyof PlaylistProps]?.[Number(i)];
+            if (choice) {
+                this.setProp(key as keyof PlaylistProps, choice[1]);
+            }
+            return;
+        }
+        if (id.startsWith("step.")) {
+            const [, key, sign] = id.split(".");
+            const k = key as "changeHold" | "arriveHold" | "returnHold";
+            const v = e.playback.playlistProps[k] + (sign === "more" ? EDITOR.holdStep : -EDITOR.holdStep);
+            this.setProp(k, Math.round(Math.max(0, Math.min(EDITOR.holdMax, v)) * 100) / 100);
+            return;
+        }
+        const pos = e.playback.playOrder.indexOf(e.parkIndex);
         switch (id) {
             case "close": e.close(); break;
-            case "prevPark": e.goToPark(e.parkIndex - 1); break;
-            case "nextPark": e.goToPark(e.parkIndex + 1); break;
+            case "prevPark": this.goToPark(pos - 1); break;
+            case "nextPark": this.goToPark(pos + 1); break;
+            case "frameMode": if (e.mapMode) e.toggleMap(); break;
+            case "mapMode": if (!e.mapMode) e.toggleMap(); break;
             case "add": e.add(); break;
             case "update": e.update(); break;
-            case "undo": e.undo(); break;
-            case "redo": e.redo(); break;
             case "delete": e.remove(); break;
-            case "up": e.move(-1); break;
-            case "down": e.move(1); break;
-            case "revert": e.revert(); break;
-            case "holdLess": e.changeHold(-1); break;
-            case "holdMore": e.changeHold(1); break;
-            case "panLess": e.changePan(-PAN_SHARE_STEP); break;
-            case "panMore": e.changePan(PAN_SHARE_STEP); break;
-            case "turn": e.toggleTurn(); break;
-            case "inertia": e.toggleInertia(); break;
             case "rotl": e.rotate(-1); break;
             case "rotr": e.rotate(1); break;
             case "zoomin": e.zoom(-1); break;
             case "zoomout": e.zoom(1); break;
-            case "play": e.togglePreview(); break;
-            case "map": e.toggleMap(); break;
             case "lock": e.toggleEventLock(); break;
+            case "holdLess": e.changeHold(-1); break;
+            case "holdMore": e.changeHold(1); break;
+            case "panLess": e.changePan(-PAN_SHARE_STEP); break;
+            case "panMore": e.changePan(PAN_SHARE_STEP); break;
+            case "undo": e.undo(); break;
+            case "redo": e.redo(); break;
+            case "reset": e.resetView(); break;
+            case "pin": e.togglePinned(); break;
+            case "play": e.togglePreview(); break;
+            case "checkpoint": e.saveCheckpoint(); break;
+            case "restore": if (this.picked) e.restoreTo(this.picked); break;
+            case "boxHead": this.boxOpen = this.boxFolded(); break;
+            case "propsHead": this.propsOpen = !this.propsOpen; break;
+            case "save": e.playback.savePlaylistProps(); break;
         }
     }
 
-    /** Places every control; rows of equal buttons fill the panel's width. */
-    private layout(e: Editor): void {
-        const s = EDITOR;
-        const inner = s.width - 2 * s.pad;
-        const x0 = s.x + s.pad;
-        let y = s.y + s.pad;
-        this.boxes.clear();
-        this.texts.clear();
-        const buttonRow = (ids: HitId[], h = s.buttonHeight) => {
-            const w = (inner - s.gap * (ids.length - 1)) / ids.length;
-            ids.forEach((id, i) => this.boxes.set(id, {
-                x: Math.round(x0 + i * (w + s.gap)), y, width: Math.round(w), height: h,
-            }));
-            y += h + s.gap;
-        };
-        // Title: the park, with previous/next park and close buttons.
-        const t = s.titleHeight;
-        this.boxes.set("prevPark", { x: x0, y, width: t, height: t });
-        this.boxes.set("nextPark", { x: x0 + t + s.gap, y, width: t, height: t });
-        this.boxes.set("close", { x: x0 + inner - t, y, width: t, height: t });
-        const names = e.parkNames;
-        this.texts.set("park", {
-            text: names[e.parkIndex] ?? "No park", bold: true,
-            r: { x: x0 + 2 * (t + s.gap) + 4, y, width: inner - 3 * (t + s.gap) - 4, height: t },
-        });
-        y += t + s.gap;
-        // The views list: a header row, then up to visibleRows rows; past that a scroll bar at the
-        // right (arrows, and the wheel over the list).
-        const rows = e.rows();
-        this.scroll = Math.max(0, Math.min(this.scroll, Math.max(0, rows.length - s.visibleRows)));
-        const sel = e.selectedIndex;
-        if (sel !== this.followed) {
-            this.followed = sel; // scroll to a newly selected view only, so the wheel can move away
-            if (sel >= 0 && (sel < this.scroll || sel >= this.scroll + s.visibleRows)) {
-                this.scroll = Math.max(0, Math.min(sel, rows.length - s.visibleRows));
-            }
+    private setProp<K extends keyof PlaylistProps>(key: K, value: unknown): void {
+        const p = this.editor!.playback;
+        p.setPlaylistProp(key, value as PlaylistProps[K]);
+        if (key === "titleMusic") {
+            this.mode.configure(modeSettings(p.liveSettings)); // the music changes at once
         }
-        const scrolls = rows.length > s.visibleRows;
-        const bar = scrolls ? s.scrollBar : 0;
-        this.list = { x: x0, y, width: inner - bar, height: s.rowHeight * (s.visibleRows + 1) };
-        y += s.rowHeight;
-        for (let i = 0; i < s.visibleRows && this.scroll + i < rows.length; i++) {
-            this.boxes.set(`row.${this.scroll + i}`, { x: x0, y: y + i * s.rowHeight, width: inner - bar, height: s.rowHeight });
+    }
+
+    // Layout
+
+    private parkRows(): number {
+        return Math.max(1, Math.floor(((this.parksRect?.height ?? 0) - EDITOR.parkRow) / EDITOR.parkRow));
+    }
+
+    /** The top-right box shows only its header: by hand, else when the window is too narrow for it
+     *  beside the views pane (owner, 2026-11-10). */
+    private boxFolded(): boolean {
+        if (this.boxOpen !== undefined) {
+            return !this.boxOpen;
         }
-        this.track = undefined;
-        if (scrolls) {
-            const bx = x0 + inner - bar + 2;
-            const rowsTop = y;
-            const rowsBottom = y + s.visibleRows * s.rowHeight;
-            this.boxes.set("scrollUp", { x: bx, y: rowsTop, width: bar - 2, height: bar - 2 });
-            this.boxes.set("scrollDown", { x: bx, y: rowsBottom - (bar - 2), width: bar - 2, height: bar - 2 });
-            this.track = { x: bx, y: rowsTop + bar, width: bar - 2, height: rowsBottom - rowsTop - 2 * bar };
+        return ui.width < EDITOR.x + EDITOR.width + 2 * EDITOR.x + EDITOR.boxWidth + EDITOR.x;
+    }
+
+    private place(id: string, r: Rect, tip?: string, disabled = false): Rect {
+        this.boxes.set(id, r);
+        if (tip) {
+            this.tips.set(id, tip);
         }
-        y = this.list.y + this.list.height + s.gap;
-        buttonRow(["add", "update", "delete"]);
-        buttonRow(["up", "down", "revert"]);
-        // Hold and pan on one line, each a value centred between its − and + (owner, 2026-11-02).
-        const half = Math.round((inner - s.sectionGap) / 2);
-        const step = (less: HitId, more: HitId, key: string, text: string, x: number, w: number) => {
-            const b = s.buttonHeight;
-            this.boxes.set(less, { x, y, width: b, height: b });
-            this.boxes.set(more, { x: x + w - b, y, width: b, height: b });
-            this.texts.set(key, { text, center: true, r: { x: x + b, y, width: w - 2 * b, height: b } });
-        };
-        step("holdLess", "holdMore", "hold", e.holdText(), x0, half);
-        step("panLess", "panMore", "pan", e.panText(), x0 + inner - half, half);
-        y += s.buttonHeight + s.gap;
-        this.boxes.set("turn", { x: x0, y, width: half, height: s.buttonHeight });
-        this.boxes.set("inertia", { x: x0 + inner - half, y, width: half, height: s.buttonHeight });
-        y += s.buttonHeight + s.gap;
-        buttonRow(["rotl", "rotr", "zoomin", "zoomout"]);
-        buttonRow(["map", "lock"]);
-        // Undo and redo, then Play taking the rest of the row.
-        const small = Math.round((inner - 2 * s.gap) / 6);
-        this.boxes.set("undo", { x: x0, y, width: small, height: s.buttonHeight });
-        this.boxes.set("redo", { x: x0 + small + s.gap, y, width: small, height: s.buttonHeight });
-        const px = x0 + 2 * (small + s.gap);
-        this.boxes.set("play", { x: px, y, width: x0 + inner - px, height: s.buttonHeight });
-        y += s.buttonHeight + s.gap;
-        const status = e.status();
-        this.texts.set("status", { text: status.text, warning: status.warning, r: { x: x0, y, width: inner, height: s.lineHeight } });
-        y += s.lineHeight;
-        for (const [i, help] of (e.mapMode ? MAP_HELP : HELP).entries()) {
-            this.texts.set(`help${i}`, { text: help, r: { x: x0, y, width: inner, height: s.lineHeight } });
-            y += s.lineHeight;
+        if (disabled) {
+            this.off.add(id);
         }
-        this.frame = { x: s.x, y: s.y, width: s.width, height: y + s.pad - s.y };
+        return r;
     }
 
     private render(): void {
@@ -283,77 +502,22 @@ export class EditorPanel implements EditorView {
         if (!e) {
             return;
         }
-        const overlay = this.mode.overlay;
-        const s = EDITOR;
-        this.layout(e);
+        this.boxes.clear();
+        this.tips.clear();
+        this.off.clear();
+        this.frames = [];
         const scene: Scene = new Map();
-        backing(scene, "frame", this.frame, THEME.editorBacking);
+        this.viewsPane(e, scene);
+        this.toolbox(e, scene);
+        this.topRight(e, scene);
+        // The tooltip of the button under the mouse: above it, or below near the window's top.
         const hover = this.hit();
-        const state = (id: HitId, on = false) => ({ hover: hover === id, down: this.downOn === id && hover === id, on });
-        const textButton = (id: HitId, text: string, on = false) =>
-            button(scene, id, this.boxes.get(id)!, state(id, on), { text, textSize: s.textSize }, overlay);
-        textButton("prevPark", "‹");
-        textButton("nextPark", "›");
-        textButton("close", "×");
-        // The list: column headers, striped rows, the selected one in the "on" colour.
-        const rows = e.rows();
-        const cols = columnStarts(this.list.width, rows, overlay);
-        const header = { x: this.list.x, y: this.list.y, width: this.list.width, height: s.rowHeight };
-        scene.set("list", { type: "rect", ...this.list, fill: THEME.editorList, z: Z.face });
-        EDITOR_COLUMNS.forEach((h, c) => label(scene, `head.${c}`, h,
-            { x: header.x + cols[c] + 4, y: header.y, width: 0, height: header.height }, s.textSize, overlay, true));
-        for (let i = 0; i < s.visibleRows; i++) {
-            const index = this.scroll + i;
-            const row = rows[index];
-            if (!row) {
-                break;
-            }
-            const r = this.boxes.get(`row.${index}`)!;
-            const fill = index === e.selectedIndex ? THEME.faceOn
-                : hover === `row.${index}` ? THEME.faceHover : i % 2 ? THEME.face : undefined;
-            scene.set(`row.${index}`, { type: "rect", ...r, fill: fill ?? "#00000000", z: Z.face });
-            row.forEach((cell, c) => label(scene, `cell.${i}.${c}`, cell,
-                { x: r.x + cols[c] + 4, y: r.y, width: 0, height: r.height }, s.textSize, overlay));
-        }
-        if (this.track) {
-            textButton("scrollUp", "▲");
-            textButton("scrollDown", "▼");
-            const t = this.track;
-            scene.set("track", { type: "rect", ...t, fill: THEME.editorList, z: Z.face });
-            const share = s.visibleRows / rows.length;
-            const h = Math.max(8, Math.round(t.height * share));
-            const top = t.y + Math.round((t.height - h) * this.scroll / Math.max(1, rows.length - s.visibleRows));
-            scene.set("thumb", { type: "rect", x: t.x, y: top, width: t.width, height: h, fill: THEME.face, z: Z.icon });
-        }
-        textButton("add", "Add view");
-        textButton("update", "Set to camera");
-        textButton("delete", "Delete");
-        textButton("up", "Move up");
-        textButton("down", "Move down");
-        textButton("revert", "Use playlist views");
-        textButton("holdLess", "−");
-        textButton("holdMore", "+");
-        textButton("panLess", "−");
-        textButton("panMore", "+");
-        textButton("turn", e.turnText());
-        textButton("inertia", e.inertiaText());
-        textButton("rotl", "Rotate left");
-        textButton("rotr", "Rotate right");
-        textButton("zoomin", "Zoom in");
-        textButton("zoomout", "Zoom out");
-        textButton("map", e.mapMode ? "Map (M): on" : "Map (M): off", e.mapMode);
-        textButton("lock", e.eventsLocked ? "Event views: locked" : "Event views: unlocked", !e.eventsLocked);
-        textButton("undo", "Undo");
-        textButton("redo", "Redo");
-        textButton("play", e.isPlaying ? "Play: on (moving the camera stops it)" : "Play: off", e.isPlaying);
-        for (const [key, t] of this.texts) {
-            label(scene, `text.${key}`, t.text, t.r, key === "park" ? s.titleSize : s.textSize, overlay, t.bold);
-            if (t.center) {
-                scene.set(`text.${key}`, { ...scene.get(`text.${key}`)!, x: t.r.x + t.r.width / 2, align: "center" });
-            }
-            if (t.warning) {
-                scene.set(`text.${key}`, { ...scene.get(`text.${key}`)!, colour: THEME.warning });
-            }
+        const tip = hover && !this.busy ? this.tips.get(hover) : undefined;
+        if (tip) {
+            const r = this.boxes.get(hover!)!;
+            const below = r.y < 80;
+            const h = Math.ceil(measure(this.mode.overlay, tip, THEME.tipSize).height) + 2 * THEME.tipPad;
+            tooltip(scene, "tip", tip, r.x + r.width / 2, below ? r.y + r.height + 4 + h : r.y - 4, this.mode.overlay, ui.width);
         }
         this.layer.render(scene);
         if (e.mapMode) {
@@ -362,6 +526,512 @@ export class EditorPanel implements EditorView {
             this.map.clear();
         }
     }
+
+    private state(id: string, on = false, alt = false): { hover: boolean; down: boolean; on: boolean; alt: boolean; disabled: boolean } {
+        const hover = this.hit() === id;
+        return { hover, down: this.downOn === id && hover, on, alt, disabled: this.off.has(id) };
+    }
+
+    /** The views pane: the park's title row over its views, or the park list while it is open. */
+    private viewsPane(e: Editor, scene: Scene): void {
+        const s = EDITOR;
+        const overlay = this.mode.overlay;
+        const x0 = s.x + s.pad;
+        const inner = s.width - 2 * s.pad;
+        let y = s.y + s.pad;
+        const t = s.titleHeight;
+        const order = e.playback.playOrder;
+        const pos = order.indexOf(e.parkIndex);
+        const many = order.length > 1;
+        this.place("prevPark", { x: x0, y, width: t, height: t }, "Previous park", !many || e.playback.isLoading);
+        const closeX = x0 + inner - t;
+        const nextX = closeX - s.groupGap - t;
+        this.place("nextPark", { x: nextX, y, width: t, height: t }, "Next park", !many || e.playback.isLoading);
+        this.place("close", { x: closeX, y, width: t, height: t }, "Close the editor (E)");
+        const field = this.place("field", { x: x0 + t + s.gap, y, width: nextX - s.gap - (x0 + t + s.gap), height: t },
+            many ? "Hold to pick a park; click for the playlist's order" : undefined);
+        y += t + s.gap;
+        // The views list: a header row, then up to visibleRows rows, a scroll bar past that.
+        const rows = e.rows();
+        const sel = e.selectedIndex;
+        if (sel !== this.followed) {
+            this.followed = sel; // scroll to a newly selected view only, so the wheel can move away
+            if (sel >= 0 && (sel < this.views.first || sel >= this.views.first + s.visibleRows)) {
+                this.views.first = sel;
+            }
+        }
+        const listH = s.rowHeight * (s.visibleRows + 1);
+        const bar = rows.length > s.visibleRows ? s.scrollBar + 2 : 0;
+        this.listRect = { x: x0, y, width: inner - bar, height: listH };
+        this.views.layout({ x: x0 + inner - s.scrollBar, y: y + s.rowHeight, width: s.scrollBar, height: s.visibleRows * s.rowHeight }, rows.length, s.visibleRows);
+        this.paneViews = { x: s.x, y: s.y, width: s.width, height: y + listH + s.pad - s.y };
+        this.frames.push(this.paneViews);
+        backing(scene, "frame", this.paneViews, THEME.editorBacking);
+        // Title row
+        button(scene, "prevPark", this.boxes.get("prevPark")!, this.state("prevPark"), { icon: "prev-view", iconSize: s.toolIcon }, overlay);
+        button(scene, "nextPark", this.boxes.get("nextPark")!, this.state("nextPark"), { icon: "next-view", iconSize: s.toolIcon }, overlay);
+        button(scene, "close", this.boxes.get("close")!, this.state("close"), { icon: "close", iconSize: s.toolIcon }, overlay);
+        const fieldOpen = this.dropdown !== undefined;
+        scene.set("field", { type: "rect", ...field, fill: fieldOpen ? THEME.faceDown : this.hit() === "field" ? THEME.faceHover : THEME.editorList, z: Z.face });
+        bevel(scene, "field", field, THEME.bevelDark, THEME.bevelLight, THEME.bevel, Z.bevel);
+        const count = many ? `${pos + 1} / ${order.length}  ▾` : "";
+        const countW = count ? measure(overlay, count, s.textSize, true).width : 0;
+        const name = fit(overlay, e.parkNames[e.parkIndex] ?? "No park", s.titleSize, field.width - countW - 28, true);
+        label(scene, "text.park", name, { x: field.x + 8, y: field.y, width: 0, height: field.height }, s.titleSize, overlay, true);
+        if (count) {
+            label(scene, "text.count", count, { x: field.x + field.width - 8 - countW, y: field.y, width: 0, height: field.height }, s.textSize, overlay, true);
+        }
+        this.viewsList(e, scene, rows);
+        if (this.dropdown) {
+            this.parkList(e, scene);
+        } else {
+            this.parksRect = undefined;
+        }
+    }
+
+    private viewsList(e: Editor, scene: Scene, rows: string[][]): void {
+        const s = EDITOR;
+        const overlay = this.mode.overlay;
+        const list = this.listRect;
+        scene.set("list", { type: "rect", ...list, fill: THEME.editorList, z: Z.face });
+        const cols = columnStarts(list.width - s.grip, rows, overlay).map(c => c + s.grip);
+        EDITOR_COLUMNS.forEach((h, c) => label(scene, `head.${c}`, h,
+            { x: list.x + cols[c] + 4, y: list.y, width: 0, height: s.rowHeight }, s.textSize, overlay, true));
+        const top = list.y + s.rowHeight;
+        const hover = this.hit();
+        const r = this.rowDrag?.list === "views" && this.rowDrag.moving ? this.rowDrag : undefined;
+        for (let i = 0; i < s.visibleRows; i++) {
+            const index = this.views.first + i;
+            const row = rows[index];
+            if (!row) {
+                break;
+            }
+            const box = this.place(`row.${index}`, { x: list.x, y: top + i * s.rowHeight, width: list.width, height: s.rowHeight });
+            const fill = index === e.selectedIndex ? THEME.faceOn : hover === `row.${index}` && !r ? THEME.faceHover : i % 2 ? THEME.face : undefined;
+            scene.set(`row.${index}`, { type: "rect", ...box, fill: fill ?? "#00000000", z: Z.face });
+            const cells = this.cells(e, row);
+            if (e.movable(index)) {
+                grip(scene, `grip.${i}`, box.x + 5, box.y + box.height / 2);
+            }
+            cells.forEach((cell, c) => label(scene, `cell.${i}.${c}`, cell,
+                { x: box.x + cols[c] + 4, y: box.y, width: 0, height: box.height }, s.textSize, overlay));
+            if (r && r.from === index) {
+                scene.set(`dim.${i}`, { type: "rect", ...box, fill: THEME.rowDimmed, z: Z.icon + 1 });
+            }
+        }
+        this.views.draw(scene, "views");
+        if (this.views.track) {
+            this.place("views.track", this.views.track);
+            this.place("views.thumb", this.views.thumb!);
+        }
+        if (r) {
+            this.dragged(scene, list, s.rowHeight, this.views.first, rows.length, r, ghost => {
+                this.cells(e, rows[r.from]).forEach((cell, c) => label(scene, `ghost.${c}`, cell,
+                    { x: ghost.x + cols[c] + 4, y: ghost.y, width: 0, height: ghost.height }, s.textSize, overlay));
+            });
+        }
+    }
+
+    /** A row's cells as shown: who set each view, event views marked locked while they are. */
+    private cells(e: Editor, row: string[]): string[] {
+        const by = row[6] === "auto" ? "generated" : row[6] === "event" && e.eventsLocked ? "event (locked)" : row[6];
+        return [...row.slice(0, 6), by];
+    }
+
+    /** A row being dragged: lifted under the mouse, with an orange line where it would go. */
+    private dragged(scene: Scene, list: Rect, rowH: number, first: number, count: number, r: RowDrag, cells: (ghost: Rect) => void): void {
+        const ghost = { x: list.x + 6, y: Math.round(this.mouse.y - rowH / 2), width: list.width - 6, height: rowH };
+        scene.set("ghost", { type: "rect", ...ghost, fill: THEME.dragGhost, z: DRAG_Z });
+        bevel(scene, "ghost", ghost, THEME.bevelLight, THEME.bevelDark, THEME.bevel, DRAG_Z);
+        grip(scene, "ghost.grip", ghost.x + 5, ghost.y + rowH / 2, DRAG_Z + 1);
+        const before = scene.size;
+        cells(ghost);
+        let k = 0;
+        for (const [id, el] of scene) {
+            if (k++ >= before) {
+                scene.set(id, { ...el, z: DRAG_Z + 1 });
+            }
+        }
+        const gap = Math.max(0, Math.min(count, Math.round((this.mouse.y - list.y - rowH) / rowH) + first));
+        const shown = Math.max(0, Math.min(EDITOR.visibleRows + 4, gap - first));
+        const lineY = list.y + rowH + shown * rowH - 1;
+        if (gap >= first && lineY <= list.y + list.height + 1) {
+            scene.set("dropline", { type: "rect", x: list.x, y: lineY, width: list.width, height: 3, fill: THEME.dragLine, z: DRAG_Z + 2 });
+        }
+    }
+
+    /** The park list, over the views list: the playlist's order, its rows dragged to reorder it. */
+    private parkList(e: Editor, scene: Scene): void {
+        const s = EDITOR;
+        const overlay = this.mode.overlay;
+        const order = e.playback.playOrder;
+        const area = { x: this.listRect.x, y: this.listRect.y, width: this.paneViews.width - 2 * s.pad, height: this.listRect.height };
+        this.parksRect = area;
+        const visible = this.parkRows();
+        const bar = order.length > visible ? s.scrollBar + 2 : 0;
+        this.parks.layout({ x: area.x + area.width - s.scrollBar, y: area.y + s.parkRow, width: s.scrollBar, height: visible * s.parkRow },
+            order.length, visible);
+        const z = Z.tip - 4; // over the views list
+        scene.set("parks", { type: "rect", ...area, fill: "#0b170fff", z });
+        bevel(scene, "parks", area, THEME.bevelDark, THEME.bevelLight, THEME.bevel, z);
+        const head = this.dropdown?.persistent ? "Playlist order" : "Release on a park to go there";
+        label(scene, "parks.head", head, { x: area.x + 8, y: area.y, width: 0, height: s.parkRow }, s.textSize, overlay, true);
+        scene.set("parks.head", { ...scene.get("parks.head")!, z: z + 2 });
+        if (this.dropdown?.persistent) {
+            const help = "drag to reorder · click to go";
+            const w = measure(overlay, help, s.textSize - 2).width;
+            label(scene, "parks.help", help, { x: area.x + area.width - bar - 8 - w, y: area.y, width: 0, height: s.parkRow }, s.textSize - 2, overlay);
+            scene.set("parks.help", { ...scene.get("parks.help")!, colour: THEME.textDim, z: z + 2 });
+        }
+        const width = area.width - bar;
+        const top = area.y + s.parkRow;
+        const hover = this.hit();
+        const r = this.rowDrag?.list === "parks" && this.rowDrag.moving ? this.rowDrag : undefined;
+        const countW = measure(overlay, "000 views", s.textSize).width;
+        for (let i = 0; i < visible; i++) {
+            const p = this.parks.first + i;
+            const index = order[p];
+            if (index === undefined) {
+                break;
+            }
+            const box = this.place(`park.${p}`, { x: area.x, y: top + i * s.parkRow, width, height: s.parkRow });
+            const fill = index === e.parkIndex ? THEME.faceOn : hover === `park.${p}` && !r ? THEME.faceHover : i % 2 ? THEME.face : "#00000000";
+            scene.set(`park.${p}`, { type: "rect", ...box, fill, z: z + 1 });
+            if (this.dropdown?.persistent) {
+                grip(scene, `pgrip.${i}`, box.x + 5, box.y + box.height / 2, z + 2);
+            }
+            const n = e.playback.viewCountOf(index);
+            const texts: [string, string, number][] = [
+                [`pn.${i}`, String(p + 1), box.x + s.grip + 4],
+                [`pname.${i}`, fit(overlay, e.parkNames[index] ?? "", s.textSize, width - s.grip - 40 - countW - 16), box.x + s.grip + 40],
+                [`pcount.${i}`, `${n} view${n === 1 ? "" : "s"}`, box.x + width - 8 - measure(overlay, `${n} view${n === 1 ? "" : "s"}`, s.textSize).width],
+            ];
+            for (const [id, text, x] of texts) {
+                label(scene, id, text, { x, y: box.y, width: 0, height: box.height }, s.textSize, overlay, id.startsWith("pname") && index === e.parkIndex);
+                scene.set(id, { ...scene.get(id)!, z: z + 2, ...(id.startsWith("pcount") ? { colour: THEME.textDim } : {}) });
+            }
+            if (r && r.from === p) {
+                scene.set(`pdim.${i}`, { type: "rect", ...box, fill: THEME.rowDimmed, z: z + 3 });
+            }
+        }
+        if (this.parks.track) {
+            scene.set("parks.track", { type: "rect", ...this.parks.track, fill: THEME.editorList, z: z + 1 });
+            scene.set("parks.thumb", { type: "rect", ...this.parks.thumb!, fill: THEME.faceOn, z: z + 2 });
+            this.place("parks.track", this.parks.track);
+            this.place("parks.thumb", this.parks.thumb!);
+        }
+        if (r) {
+            const list = { ...area, width };
+            this.dragged(scene, list, s.parkRow, this.parks.first, order.length, r, ghost => {
+                label(scene, "ghost.name", e.parkNames[order[r.from]] ?? "", { x: ghost.x + s.grip + 34, y: ghost.y, width: 0, height: ghost.height }, s.textSize, overlay, true);
+            });
+        }
+    }
+
+    /** The toolbox at the window's bottom left (owner's design, 2026-11-10). */
+    private toolbox(e: Editor, scene: Scene): void {
+        const s = EDITOR;
+        const overlay = this.mode.overlay;
+        const b = s.tool;
+        const inner = 8 * b + 5 * s.gap + 2 * s.groupGap;
+        const height = s.pad + s.switchHeight + 2 + s.hintHeight + 2 * (s.labelHeight + b) + 4 + 8 + b + s.pad;
+        const frame = { x: s.x, y: ui.height - s.y - height, width: inner + 2 * s.pad, height };
+        this.frames.push(frame);
+        backing(scene, "tools", frame, THEME.editorBacking);
+        const x0 = frame.x + s.pad;
+        let y = frame.y + s.pad;
+        const loading = e.playback.isLoading;
+        const noView = e.selectedIndex < 0 || loading;
+        // Frame | Map: the map changes the whole approach, so it stands out (olive while on).
+        const half = Math.floor((inner - s.gap) / 2);
+        this.place("frameMode", { x: x0, y, width: half, height: s.switchHeight }, "Frame: edit through the camera (M switches)", loading);
+        this.place("mapMode", { x: x0 + inner - half, y, width: half, height: s.switchHeight }, "Map: every view as a box (M)", loading);
+        button(scene, "frameMode", this.boxes.get("frameMode")!, this.state("frameMode", !e.mapMode),
+            { icon: "frame", iconSize: s.toolIcon, text: "Frame", textSize: 15 }, overlay);
+        button(scene, "mapMode", this.boxes.get("mapMode")!, this.state("mapMode", e.mapMode, true),
+            { icon: "map", iconSize: s.toolIcon, text: "Map", textSize: 15, hint: "M" }, overlay);
+        y += s.switchHeight + 2;
+        const hint = fit(overlay, e.mapMode ? HINT_MAP : HINT_FRAME, s.hintSize, inner);
+        label(scene, "hint", hint, { x: x0, y, width: 0, height: s.hintHeight }, s.hintSize, overlay);
+        scene.set("hint", { ...scene.get("hint")!, colour: THEME.textDim });
+        y += s.hintHeight;
+        // View, camera and event tools under their labels.
+        const groups: [string, [string, string, string, boolean, boolean?][]][] = [
+            ["VIEW", [
+                ["add", "add", "Add a view (Insert)", loading || !e.playback.canEdit],
+                ["update", "set-camera", "Set to camera (C)", noView],
+                ["delete", "delete", "Delete the view (Delete)", noView],
+            ]],
+            ["CAMERA", [
+                ["rotl", "rotate-left", "Rotate left (Shift+Enter)", loading],
+                ["rotr", "rotate-right", "Rotate right (Enter)", loading],
+                ["zoomin", "zoom-in", "Zoom in (Page Up)", loading],
+                ["zoomout", "zoom-out", "Zoom out (Page Down)", loading],
+            ]],
+            ["EVENTS", [
+                ["lock", e.eventsLocked ? "events-locked" : "events-unlocked",
+                    e.eventsLocked ? "Event views locked: unlock to move them on the map (L)" : "Event views unlocked (L)", !e.mapMode, !e.eventsLocked],
+            ]],
+        ];
+        let x = x0;
+        for (const [name, tools] of groups) {
+            this.sectionLabel(scene, `label.${name}`, name, x, y);
+            tools.forEach(([id, icon, tip, disabled, on], i) => {
+                const r = this.place(id, { x: x + i * (b + s.gap), y: y + s.labelHeight, width: b, height: b }, tip, disabled);
+                button(scene, id, r, this.state(id, on === true), { icon, iconSize: s.toolIcon }, overlay);
+            });
+            x += tools.length * (b + s.gap) - s.gap + s.groupGap;
+        }
+        y += s.labelHeight + b + 4;
+        // Hold and pan of the selected view, each a value between its - and +.
+        const stepper = (name: string, less: string, more: string, text: string, sx: number, tips: [string, string]) => {
+            this.sectionLabel(scene, `label.${name}`, name, sx, y);
+            const ry = y + s.labelHeight;
+            const l = this.place(less, { x: sx, y: ry, width: b, height: b }, tips[0], noView);
+            const value = { x: sx + b + s.gap, y: ry, width: s.stepValue, height: b };
+            const m = this.place(more, { x: value.x + value.width + s.gap, y: ry, width: b, height: b }, tips[1], noView);
+            button(scene, less, l, this.state(less), { icon: "less", iconSize: s.toolIcon }, overlay);
+            button(scene, more, m, this.state(more), { icon: "add", iconSize: s.toolIcon }, overlay);
+            scene.set(`${name}.value`, { type: "rect", ...value, fill: THEME.editorList, z: Z.face });
+            bevel(scene, `${name}.value`, value, THEME.bevelDark, THEME.bevelLight, THEME.bevel, Z.bevel);
+            label(scene, `text.${name.toLowerCase()}`, text, { x: value.x + value.width / 2, y: ry, width: 0, height: b }, s.textSize, overlay);
+            scene.set(`text.${name.toLowerCase()}`, { ...scene.get(`text.${name.toLowerCase()}`)!, align: "center" });
+            return value.x + value.width + s.gap + b;
+        };
+        const view = noView ? undefined : e.currentViews[e.selectedIndex];
+        const holdEnd = stepper("HOLD", "holdLess", "holdMore", view ? `${view.hold} s` : "-", x0, ["Shorter hold ([)", "Longer hold (])"]);
+        stepper("PAN", "panLess", "panMore", view ? `${Math.round(e.playback.panOf(view) * 100)}%` : "-", holdEnd + s.groupGap,
+            ["Less of the hold panning (Shift+[)", "More of the hold panning (Shift+])"]);
+        y += s.labelHeight + b + 8;
+        // Undo, redo, Reset view; the pin and Play at the right.
+        const foot: [string, string, string, boolean, number][] = [
+            ["undo", "undo", "Undo (Ctrl+Z)", !e.canUndo, x0],
+            ["redo", "redo", "Redo (Ctrl+Y)", !e.canRedo, x0 + b + s.gap],
+            ["reset", "reset-view", "Reset the view to the playlist's", !e.canResetView, x0 + 2 * b + s.gap + s.footerGap],
+        ];
+        for (const [id, icon, tip, disabled, fx] of foot) {
+            const r = this.place(id, { x: fx, y, width: b, height: b }, tip, disabled);
+            button(scene, id, r, this.state(id), { icon, iconSize: s.toolIcon }, overlay);
+        }
+        const play = this.place("play", { x: x0 + inner - s.playWidth, y, width: s.playWidth, height: b },
+            e.isPlaying ? "Stop playing (P; moving the camera stops it too)" : "Play the park's views (P)", loading);
+        const pin = this.place("pin", { x: play.x - s.gap - b, y, width: b, height: b },
+            e.pinned ? "Pinned: the editor stays shown" : "Unpinned: the editor hides with the cursor");
+        button(scene, "pin", pin, this.state("pin", e.pinned), { icon: "pin", iconSize: s.toolIcon }, overlay);
+        button(scene, "play", play, this.state("play", e.isPlaying),
+            { icon: e.isPlaying ? "pause" : "play", iconSize: s.toolIcon, text: e.isPlaying ? "Stop" : "Play", textSize: 15, hint: "P" }, overlay);
+    }
+
+    private sectionLabel(scene: Scene, id: string, text: string, x: number, y: number): void {
+        label(scene, id, text, { x, y, width: 0, height: EDITOR.labelHeight }, EDITOR.labelSize, this.mode.overlay);
+        scene.set(id, { ...scene.get(id)!, colour: THEME.textDim });
+    }
+
+    /** The top-right box: the park's restore points, then the Playlist properties. */
+    private topRight(e: Editor, scene: Scene): void {
+        const s = EDITOR;
+        const overlay = this.mode.overlay;
+        const width = s.boxWidth;
+        const x0 = ui.width - s.x - width + s.pad;
+        const inner = width - 2 * s.pad;
+        const top = s.y;
+        let y = top + s.pad;
+        const folded = this.boxFolded();
+        // Header: RESTORE POINTS · PARK, with where the views come from at the right.
+        const headH = 20;
+        const head = this.place("boxHead", { x: x0, y, width: inner, height: headH }, folded ? "Show the restore points and playlist" : "Fold this box");
+        scene.set("boxHead", { type: "rect", ...head, fill: this.hit() === "boxHead" ? THEME.face : "#00000000", z: Z.face });
+        const source = e.source();
+        const sw = measure(overlay, source.text, s.boxHead).width;
+        const title = `${folded ? "▸" : "▾"} RESTORE POINTS · ${(e.parkNames[e.parkIndex] ?? "").toUpperCase()}`;
+        label(scene, "box.title", fit(overlay, title, s.boxHead, inner - sw - 12), head, s.boxHead, overlay);
+        scene.set("box.title", { ...scene.get("box.title")!, colour: THEME.textDim });
+        label(scene, "box.source", source.text, { x: x0 + inner - sw, y, width: 0, height: headH }, s.boxHead, overlay);
+        scene.set("box.source", { ...scene.get("box.source")!, colour: source.warning ? THEME.warning : THEME.textGood });
+        y += headH + 2;
+        if (folded) {
+            this.pointsRect = undefined;
+            const frame = { x: x0 - s.pad, y: top, width, height: y - top + s.pad - 2 };
+            this.frames.push(frame);
+            backing(scene, "box", frame, THEME.editorBacking);
+            return;
+        }
+        // The restore points, 3.5 rows: a half row says there are more.
+        const points = e.restorePoints();
+        if (this.picked && !points.some(p => p.id === this.picked)) {
+            this.picked = undefined;
+        }
+        const listH = Math.round(s.boxRow * s.boxRows);
+        const bar = points.length > s.boxRows ? s.scrollBar + 2 : 0;
+        this.pointsRect = { x: x0, y, width: inner, height: listH };
+        this.points.layout({ x: x0 + inner - s.scrollBar, y, width: s.scrollBar, height: listH }, points.length, s.boxRows);
+        scene.set("points", { type: "rect", ...this.pointsRect, fill: THEME.editorList, z: Z.face });
+        const hover = this.hit();
+        const first = Math.floor(this.points.first);
+        for (let i = 0; first + i < points.length && i * s.boxRow < listH; i++) {
+            const p = points[first + i];
+            const h = Math.min(s.boxRow, listH - i * s.boxRow);
+            const box = this.place(`point.${first + i}`, { x: x0, y: y + i * s.boxRow, width: inner - bar, height: h });
+            const fill = p.id === this.picked ? THEME.faceOn : hover === `point.${first + i}` ? THEME.faceHover : i % 2 ? undefined : THEME.face;
+            scene.set(`point.${i}`, { type: "rect", ...box, fill: fill ?? "#00000000", z: Z.face });
+            if (h === s.boxRow) {
+                this.pointRow(scene, i, p, box);
+            }
+        }
+        this.points.draw(scene, "points");
+        if (this.points.track) {
+            this.place("points.track", this.points.track);
+            this.place("points.thumb", this.points.thumb!);
+        }
+        y += listH + 4;
+        const halfW = Math.floor((inner - 4) / 2);
+        const btn = (id: string, icon: string, text: string, bx: number, w: number, tip: string, disabled: boolean) => {
+            const r = this.place(id, { x: bx, y, width: w, height: s.boxButton }, tip, disabled);
+            button(scene, id, r, this.state(id), { icon, iconSize: s.toolIcon, text, textSize: 14, left: true }, overlay);
+        };
+        const editable = e.playback.canEdit && !e.playback.isLoading;
+        btn("checkpoint", "checkpoint", "Save checkpoint", x0, halfW, "Keep the park's views as they are now (10 per park)", !editable);
+        btn("restore", "restore", "Restore selected", x0 + inner - halfW, halfW,
+            this.picked ? "Go back to the highlighted restore point (Undo returns)" : "Highlight a restore point first", !editable || !this.picked);
+        y += s.boxButton + 4;
+        btn("copy", "copy", "Copy views", x0, halfW, "Copy the park's views as text (later)", true);
+        btn("paste", "paste", "Paste views", x0 + inner - halfW, halfW, "Paste views from text (later)", true);
+        y += s.boxButton + 10;
+        // Playlist properties, folded under their header.
+        const ph = this.place("propsHead", { x: x0, y, width: inner, height: s.propHeader }, this.propsOpen ? "Fold the playlist properties" : "Show the playlist properties");
+        scene.set("propsHead", { type: "rect", ...ph, fill: this.hit() === "propsHead" ? THEME.faceHover : "#00000000", z: Z.face });
+        bevel(scene, "propsHead", ph, THEME.backingLight, THEME.backingDark, THEME.bevel, Z.bevel);
+        const mark = this.propsOpen ? "▾" : "▸";
+        label(scene, "props.mark", mark, { x: x0 + 8, y, width: 0, height: s.propHeader }, 12, overlay, true);
+        label(scene, "props.title", "Playlist", { x: x0 + 24, y, width: 0, height: s.propHeader }, 16, overlay, true);
+        const tw = measure(overlay, "Playlist", 16, true).width;
+        label(scene, "props.sub", "properties", { x: x0 + 24 + tw + 8, y: y + 1, width: 0, height: s.propHeader }, 13, overlay);
+        scene.set("props.sub", { ...scene.get("props.sub")!, colour: THEME.textDim });
+        const subW = measure(overlay, "properties", 13).width;
+        const seq = fit(overlay, e.playback.sequenceName, 13, inner - 24 - tw - 8 - subW - 24);
+        const qw = measure(overlay, seq, 13).width;
+        label(scene, "props.name", seq, { x: x0 + inner - 8 - qw, y, width: 0, height: s.propHeader }, 13, overlay);
+        y += s.propHeader + 4;
+        if (this.propsOpen) {
+            y = this.properties(e, scene, x0, y, inner);
+        }
+        // Save; Import and Export wait for a way to pick files.
+        const third = Math.floor((inner - 8) / 3);
+        const unsaved = e.playback.playlistPropsUnsaved;
+        btn("save", "save", "Save", x0, third, unsaved ? "Save the playlist properties in the game (the next install writes them to the playlist)" : "Nothing to save", !unsaved);
+        btn("import", "import", "Import", x0 + third + 4, third, "Import a playlist (later)", true);
+        btn("export", "export", "Export", x0 + inner - third, third, "Export the playlist (later)", true);
+        y += s.boxButton;
+        const frame = { x: x0 - s.pad, y: top, width, height: y - top + s.pad };
+        this.frames.push(frame);
+        backing(scene, "box", frame, THEME.editorBacking);
+    }
+
+    private pointRow(scene: Scene, i: number, p: RestorePoint, box: Rect): void {
+        const overlay = this.mode.overlay;
+        const size = EDITOR.textSize;
+        label(scene, `pt.${i}`, p.label, { x: box.x + 8, y: box.y, width: 0, height: box.height }, size, overlay);
+        if (p.tag) {
+            const tx = box.x + 8 + measure(overlay, p.label, size).width + 8;
+            const tm = measure(overlay, p.tag, 10);
+            const chip = { x: tx, y: Math.round(box.y + (box.height - tm.height - 4) / 2), width: Math.ceil(tm.width) + 8, height: Math.ceil(tm.height) + 4 };
+            scene.set(`ptag.${i}`, { type: "rect", ...chip, fill: "#00000000", border: THEME.textDim, borderWidth: 1, z: Z.icon });
+            scene.set(`ptagt.${i}`, { type: "text", text: p.tag, size: 10, colour: THEME.textDim, x: chip.x + 4, y: chip.y + 2, z: Z.icon });
+        }
+        const when = p.time !== undefined ? formatTime(p.time, Date.now()) : "-";
+        const ww = measure(overlay, when, size).width;
+        label(scene, `ptime.${i}`, when, { x: box.x + box.width - 8 - ww, y: box.y, width: 0, height: box.height }, size, overlay);
+        scene.set(`ptime.${i}`, { ...scene.get(`ptime.${i}`)!, colour: THEME.textDim });
+    }
+
+    /** Motion, timing and presentation; returns the y below them. */
+    private properties(e: Editor, scene: Scene, x0: number, y: number, inner: number): number {
+        const s = EDITOR;
+        const overlay = this.mode.overlay;
+        const props = e.playback.playlistProps;
+        const section = (name: string) => {
+            this.sectionLabel(scene, `sec.${name}`, name, x0, y);
+            y += s.labelHeight + 3;
+        };
+        const rowLabel = (key: string, text: string) =>
+            label(scene, `prop.${key}`, text, { x: x0, y, width: 0, height: s.propRow }, s.textSize, overlay);
+        const segments = (key: keyof PlaylistProps, text: string) => {
+            rowLabel(key, text);
+            const choices = CHOICES[key]!;
+            const widths = choices.map(([t]) => Math.ceil(measure(overlay, t, 13, true).width) + 2 * s.segPad);
+            let sx = x0 + inner - widths.reduce((a, w) => a + w, 0) - s.gap * (choices.length - 1);
+            const sy = y + Math.round((s.propRow - s.segHeight) / 2);
+            choices.forEach(([t, value], i) => {
+                const id = `seg.${key}.${i}`;
+                const r = this.place(id, { x: sx, y: sy, width: widths[i], height: s.segHeight });
+                button(scene, id, r, this.state(id, props[key as keyof typeof props] === value), { text: t, textSize: 13 }, overlay);
+                sx += widths[i] + s.gap;
+            });
+            y += s.propRow;
+        };
+        const stepper = (key: "changeHold" | "arriveHold" | "returnHold", text: string, tip: string) => {
+            rowLabel(key, text);
+            const w = s.stepButton;
+            const sy = y + Math.round((s.propRow - w) / 2);
+            const right = x0 + inner;
+            const more = this.place(`step.${key}.more`, { x: right - w, y: sy, width: w, height: w }, tip);
+            const value = { x: more.x - s.gap - s.stepValueBox, y: sy, width: s.stepValueBox, height: w };
+            const less = this.place(`step.${key}.less`, { x: value.x - s.gap - w, y: sy, width: w, height: w }, tip);
+            button(scene, `step.${key}.less`, less, this.state(`step.${key}.less`), { icon: "less", iconSize: 16 }, overlay);
+            button(scene, `step.${key}.more`, more, this.state(`step.${key}.more`), { icon: "add", iconSize: 16 }, overlay);
+            scene.set(`stepv.${key}`, { type: "rect", ...value, fill: THEME.editorList, z: Z.face });
+            const vid = `stept.${key}`;
+            label(scene, vid, `${props[key].toFixed(1)} s`, { x: value.x + value.width / 2, y: sy, width: 0, height: w }, 13, overlay);
+            scene.set(vid, { ...scene.get(vid)!, align: "center" });
+            y += s.propRow;
+        };
+        section("MOTION");
+        segments("inertia", "Inertia");
+        segments("panChanges", "Angle and zoom change");
+        section("TIMING");
+        if (props.panChanges !== "off") {
+            // Off: no pan turns or zooms, so these do not apply (owner, 2026-11-10).
+            stepper("changeHold", "Change hold", "Still after an angle or zoom change");
+            stepper("arriveHold", "Arrival hold", "Rest at a view before its angle or zoom changes");
+        }
+        stepper("returnHold", "Return hold", "Hold at the first view after the return pan, before the next park");
+        section("PRESENTATION");
+        segments("titleMusic", "Title music");
+        segments("titles", "Show titles");
+        return y + 6;
+    }
+}
+
+/** Six dots: the drag handle of a row. */
+function grip(scene: Scene, id: string, x: number, cy: number, z: number = Z.icon): void {
+    for (let r = 0; r < 3; r++) {
+        for (let c = 0; c < 2; c++) {
+            scene.set(`${id}.${r}${c}`, { type: "rect", x: x + c * 4, y: Math.round(cy - 5 + r * 4), width: 2, height: 2, fill: THEME.textDim, z });
+        }
+    }
+}
+
+/** `text` cut with an ellipsis to fit `width`. */
+function fit(overlay: Overlay, text: string, size: number, width: number, bold = false): string {
+    if (width <= 0 || measure(overlay, text, size, bold).width <= width) {
+        return text;
+    }
+    let t = text;
+    while (t.length > 1 && measure(overlay, t + "…", size, bold).width > width) {
+        t = t.slice(0, -1);
+    }
+    return t.trimEnd() + "…";
+}
+
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/** A restore point's time: the hour today, else with its date (local time). */
+export function formatTime(ms: number, now: number): string {
+    const d = new Date(ms);
+    const n = new Date(now);
+    const hm = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+    const today = d.getFullYear() === n.getFullYear() && d.getMonth() === n.getMonth() && d.getDate() === n.getDate();
+    return today ? hm : `${MONTHS[d.getMonth()]} ${d.getDate()}, ${hm}`;
 }
 
 /**
@@ -372,7 +1042,7 @@ function columnStarts(width: number, rows: string[][], overlay: Overlay): number
     const size = EDITOR.textSize;
     const natural = EDITOR_COLUMNS.map((h, c) => Math.max(
         measure(overlay, h, size, true).width,
-        ...rows.map(r => measure(overlay, r[c] ?? "", size).width),
+        ...rows.map(r => measure(overlay, c === 6 ? "event (locked)" : r[c] ?? "", size).width),
     ) + EDITOR.cellMargin);
     const total = natural.reduce((a, b) => a + b, 0);
     const widths = total <= width

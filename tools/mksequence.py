@@ -27,7 +27,7 @@ Layouts:
           drives views and park changes. Without the plugin this shows one view per park.
   stock   Every view is written as LOCATION/WAIT steps, for OpenRCT2 without the plugin.
 """
-import argparse, collections, hashlib, json, pickle, math, statistics, os, random, re, shutil, subprocess, sys, tempfile, tomllib
+import argparse, collections, hashlib, json, pickle, math, statistics, os, random, re, shutil, subprocess, sys, tempfile, time, tomllib
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import companions, parkinfo, profiles, userdata  # noqa: E402
@@ -113,7 +113,8 @@ VIEW_DEFAULTS = {
     "return_pan": True,  # a park's last view pans back to its first (false: it cuts to the next park)
     "companion_pans": "run",  # "pause": the park's companion plugins hold their tick handlers while the camera
                               # moves (each companion's pause_during_pans; a profile's [companion.X] can still set it)
-    "pan_changes": "end",  # a pan's angle and zoom change as it arrives ("end") or sets off ("start")
+    "pan_changes": "end",  # a pan's angle and zoom change as it arrives ("end") or sets off ("start"); "off": a
+                           # pan that changes them is a cut instead (the plugin decides; overviews keep their own)
     "inertia": False,   # pans start and stop slowly (cubic ease) instead of moving at one speed
     "overview_pan": 0.1,  # an overview's pan share (to the first close-up), whatever `pan` is
     "overview_pan_changes": "end",  # and its angle and zoom change on arrival
@@ -210,6 +211,7 @@ ANIMATION_VIEWS = 4  # `animations = true`: at most this many views per park (`a
 CUE_WAIT = 30.0  # an animation view with a cue waits at most this long past its hold for it (`cue_wait`)
 CUE_HOLD = 5.0  # and its hold, the least it plays: the effect deciding the rest (`cue_hold`)
 CUE_MOVE = 4.0  # with `pan` > 0, seconds it pans on to the next view after the effect (`cue_move`)
+PAN_CHANGES = ("start", "end", "off")  # [views] pan_changes ("off": the plugin cuts where a pan would change them)
 TITLE_MUSIC = ("keep", "ride", "theme", "off")  # a playlist's title_music (settings UI "Ride music as title music")
 TITLES = ("overview", "on", "off")  # a playlist's titles (settings UI "Show titles"): the park name captions
 STORE_NAMESPACE = "RCTScreensaver"        # plugin shared storage namespace
@@ -2296,8 +2298,8 @@ def resolve_park(entry, index, base_dir, defaults, layout, edits=None, library=N
     if not opts["events"]:
         # No views on companions' animations or shows; companions still run (unless companions = false)
         entry = dict(entry, animations=False, show=None)
-    if opts["pan_changes"] not in ("start", "end"):
-        raise ValueError("%s: pan_changes must be \"start\" or \"end\"" % name)
+    if opts["pan_changes"] not in PAN_CHANGES:
+        raise ValueError("%s: pan_changes must be \"start\", \"end\" or \"off\"" % name)
     if opts["track_activity"] != "all":
         still_track(heights, parkinfo.track_rides(parkinfo.chunk_reader(chunks, body, 0x30)),
                     parkinfo.parse_vehicles(parkinfo.chunk_reader(chunks, body, 0x31)),
@@ -2381,8 +2383,8 @@ def resolve_park(entry, index, base_dir, defaults, layout, edits=None, library=N
                 # editor or drawviews keep what they set)
                 opt = "overview_pan_changes" if overview else "pan_changes"
                 changes = v.get("panChanges", v.get("pan_changes", opts[opt]))  # editor files: panChanges
-                if changes not in ("start", "end"):
-                    raise ValueError("%s: pan_changes must be \"start\" or \"end\"" % name)
+                if changes not in PAN_CHANGES or (overview and changes == "off"):
+                    raise ValueError("%s: pan_changes must be \"start\", \"end\" or (not for overviews) \"off\"" % name)
                 if changes != "end":
                     view["panChanges"] = changes
                 if opts["inertia"]:
@@ -2610,6 +2612,10 @@ def playlist_data(name, parks, screen=None, defaults=None, titles=None):
         scale = float(defaults["time_scale"])
         for key, opt in (("changeHold", "change_hold"), ("arriveHold", "arrive_hold"), ("returnHold", "return_hold")):
             data[key] = round(float(defaults[opt]) * scale, 2)
+        # The playlist-wide motion settings, as the view editor's Playlist properties show them
+        data["inertia"] = bool(defaults["inertia"])
+        data["panChanges"] = defaults["pan_changes"]
+    data["built"] = int(time.time() * 1000)  # the view editor's "Generated" restore point
     if screen:
         data["screen"] = [int(screen[0]), int(screen[1])]
     if titles:
@@ -2966,11 +2972,122 @@ def pull_edits(playlist_path, store_path):
     return sorted((k, bool(v.get("reset"))) for k, v in moved.items())
 
 
-def update_plugin_store(store_path, result, pulled=(), camera_log=False):
+def playlist_name(playlist_path, playlist=None):
+    """The title sequence's name: the playlist's `name`, else its file name."""
+    if playlist is None:
+        with open(playlist_path, "rb") as f:
+            playlist = tomllib.load(f)
+    return playlist.get("name") or os.path.splitext(os.path.basename(playlist_path))[0]
+
+
+# The view editor's Playlist properties (plugin RCTScreensaver.playlistProps, by sequence name) and
+# the playlist keys they set: (plugin key, table or None for the top level, playlist key).
+PROPS = (("inertia", "views", "inertia"), ("panChanges", "views", "pan_changes"),
+         ("changeHold", "views", "change_hold"), ("arriveHold", "views", "arrive_hold"),
+         ("returnHold", "views", "return_hold"), ("titleMusic", None, "title_music"), ("titles", None, "titles"))
+
+
+def apply_props(playlist, props):
+    """The playlist (as tomllib reads it) with the editor's properties and park order applied:
+    holds back to unscaled seconds (the plugin's are times time_scale), Unset titles and title music
+    removed, parks reordered by key (parks the order does not name keep their place after it)."""
+    data = json.loads(json.dumps(playlist))
+    views = data.setdefault("views", {})
+    scale = float(views.get("time_scale", VIEW_DEFAULTS["time_scale"])) or 1.0
+    for key, table, opt in PROPS:
+        if key not in props:
+            continue
+        value = props[key]
+        target = views if table == "views" else data
+        if key in ("changeHold", "arriveHold", "returnHold"):
+            target[opt] = round(float(value) / scale, 2)
+        elif key == "panChanges" and value not in PAN_CHANGES:
+            raise ValueError("panChanges must be one of: %s" % ", ".join(PAN_CHANGES))
+        elif (key == "titles" and value is None) or (key == "titleMusic" and value == "keep"):
+            target.pop(opt, None)  # Unset: the viewer's own setting
+        else:
+            target[opt] = value
+    if not views:
+        del data["views"]
+    order = props.get("order")
+    if isinstance(order, list) and data.get("park"):
+        rank = {k: i for i, k in enumerate(order)}
+        parks = data["park"]
+        data["park"] = sorted(parks, key=lambda e: (rank.get(park_key(e), len(order)), parks.index(e)))
+    return data
+
+
+def reorder_parks(text, parks):
+    """The playlist's text with its [[park]] sections (each with its subtables, up to the next section)
+    moved into the order of `parks`, comments and layout kept; None when the text can't be split so."""
+    lines = text.splitlines(keepends=True)
+    header = re.compile(r"^\s*\[\[\s*park\s*\]\]")
+    sub = re.compile(r"^\s*\[{1,2}\s*park\s*\.")
+    other = re.compile(r"^\s*\[")
+    starts = [i for i, line in enumerate(lines) if header.match(line)]
+    if not starts:
+        return None
+    blocks, end = [], starts[0]
+    for k, start in enumerate(starts):
+        stop = starts[k + 1] if k + 1 < len(starts) else len(lines)
+        j = start + 1
+        while j < stop and not (other.match(lines[j]) and not sub.match(lines[j])):
+            j += 1
+        if k + 1 < len(starts) and j < stop:
+            return None  # another table between two parks: not one run of sections
+        blocks.append(lines[start:j])
+        end = j
+    body = ["".join(b).rstrip("\n") + "\n" for b in blocks]  # blank lines go between the sections
+    try:
+        current = [tomllib.loads(b)["park"][0] for b in body]
+    except (tomllib.TOMLDecodeError, KeyError, IndexError):
+        return None
+    order = []
+    for park in parks:
+        if park not in current:
+            return None
+        i = current.index(park)
+        order.append(body[i])
+        current[i] = None  # the same entry twice: each block once
+    rest = "".join(lines[end:])
+    out = "".join(lines[:starts[0]]) + "\n".join(order) + ("\n" + rest if rest.strip() else "")
+    try:
+        return out if tomllib.loads(out).get("park") == parks else None
+    except tomllib.TOMLDecodeError:
+        return None
+
+
+def pull_props(playlist_path, store_path):
+    """Move the view editor's Playlist properties and park order for this playlist from the store into
+    the playlist file (comments kept where tomlwrite can; the old file in <playlist>.toml.bak). Returns
+    (whether the store had an entry for it, the names of what changed); the entry is removed on install."""
+    with open(playlist_path, "rb") as f:
+        raw = f.read()
+    playlist = tomllib.loads(raw.decode("utf-8"))
+    name = playlist_name(playlist_path, playlist)
+    stored = read_store(store_path).get(STORE_NAMESPACE, {})
+    props = (stored.get("playlistProps") or {}).get(name) if isinstance(stored, dict) else None
+    if not isinstance(props, dict):
+        return False, []
+    data = apply_props(playlist, props)
+    if data == playlist:
+        return True, []
+    changed = [k for k, _, _ in PROPS if k in props] + (["park order"] if data.get("park") != playlist.get("park") else [])
+    import tomlwrite
+    text = reorder_parks(raw.decode("utf-8"), data.get("park")) if data.get("park") != playlist.get("park") else raw.decode("utf-8")
+    out = (tomlwrite.patch(text, data) if text is not None else None) or tomlwrite.dumps(data)
+    shutil.copy2(playlist_path, playlist_path + ".bak")
+    with open(playlist_path, "w", encoding="utf-8", newline="\n") as f:
+        f.write(out)
+    return True, changed
+
+
+def update_plugin_store(store_path, result, pulled=(), camera_log=False, props_pulled=False):
     """Set (plugin layout) or clear (stock layout, same sequence) RCTScreensaver.playlist and
-    drop the editor's views that were pulled into the playlist's views file, leaving every
-    other plugin's data untouched. Sets the plugin's camera log on or off and the screensaver
-    mode's title music. Keeps a .bak copy of the previous file."""
+    drop the editor's views that were pulled into the playlist's views file (and its Playlist
+    properties, with `props_pulled`), leaving every other plugin's data untouched. Sets the plugin's
+    camera log on or off and the screensaver mode's title music, and stamps the playlist with the
+    install time (the view editor's "Last install"). Keeps a .bak copy of the previous file."""
     store = read_store(store_path)
     if os.path.exists(store_path):
         shutil.copy2(store_path, store_path + ".bak")
@@ -2978,12 +3095,14 @@ def update_plugin_store(store_path, result, pulled=(), camera_log=False):
     if not isinstance(ours, dict):
         ours = {}
     if result["playlist"] is not None:
-        ours["playlist"] = result["playlist"]
+        ours["playlist"] = dict(result["playlist"], installed=int(time.time() * 1000))
     elif isinstance(ours.get("playlist"), dict) and ours["playlist"].get("sequence") == result["name"]:
         del ours["playlist"]
     if isinstance(ours.get("edits"), dict):
         for key, _ in pulled:
             ours["edits"].pop(key, None)
+    if props_pulled and isinstance(ours.get("playlistProps"), dict):
+        ours["playlistProps"].pop(result["name"], None)
     settings = ours.setdefault("settings", {})
     if isinstance(settings, dict):
         settings["cameraLog"] = bool(camera_log)
@@ -3005,7 +3124,7 @@ def check_installable(user_dir, force=False):
                          "or pass --force")
 
 
-def install(result, user_dir, pulled=(), camera_log=False):
+def install(result, user_dir, pulled=(), camera_log=False, props_pulled=False):
     steps = []
     target = os.path.join(user_dir, "sequence", result["name"])
     if os.path.isdir(target):
@@ -3013,7 +3132,7 @@ def install(result, user_dir, pulled=(), camera_log=False):
     shutil.copytree(result["dir"], target)
     steps.append("sequence -> " + target)
     store_path = os.path.join(user_dir, "plugin.store.json")
-    update_plugin_store(store_path, result, pulled, camera_log)
+    update_plugin_store(store_path, result, pulled, camera_log, props_pulled)
     steps.append(("playlist -> " if result["playlist"] else "cleared playlist in ") + store_path)
     if os.path.exists(PLUGIN_FILE):
         os.makedirs(os.path.join(user_dir, "plugin"), exist_ok=True)
@@ -3104,6 +3223,7 @@ def main():
         if not args.playlist:
             ap.error("a playlist is needed (or --install-built)")
         pulled = []
+        props_found = False
         if args.install:
             check_installable(user_dir, args.force)
             pulled = pull_edits(args.playlist, os.path.join(user_dir, "plugin.store.json"))
@@ -3111,6 +3231,10 @@ def main():
                 print(("reset to playlist views, old views kept in %s.views.bak.json (%s)" if reset else
                        "views from the editor -> %s.views.json (%s)")
                       % (os.path.splitext(args.playlist)[0], key))
+            props_found, props_changed = pull_props(args.playlist, os.path.join(user_dir, "plugin.store.json"))
+            if props_changed:
+                print("playlist properties from the editor -> %s (%s; the old file in %s.bak)"
+                      % (args.playlist, ", ".join(props_changed), args.playlist))
         result = build(args.playlist, args.out, args.seed, args.layout, not args.ignore_edits, overrides,
                        not args.ignore_profiles, args.cache)
         for park in result["parks"]:
@@ -3156,7 +3280,7 @@ def main():
                                                       file_name, ", ".join(park_names)))
         print("wrote %s (%s layout)" % (result["dir"], result["layout"]))
         if args.install:
-            for step in install(result, user_dir, pulled, args.camera_log):
+            for step in install(result, user_dir, pulled, args.camera_log, props_found):
                 print("installed", step)
     except (ValueError, OSError) as e:
         sys.exit("error: %s" % e)
