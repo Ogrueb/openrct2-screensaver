@@ -156,8 +156,11 @@ element (a small patch in the mode group). Stages, one PR each:
 2. Map mode: boxes, other-angle markers, drag, a corner handle for zoom, right-click add, double-click
    to frame. **Done 2026-11-10** (built on without a test round, owner's call), on M rather than Tab
    (OpenRCT2 binds Tab to its map window) and with the corner handle instead of Shift+wheel (mouse events
-   carry no modifier keys). Still to do: a perf-log run while panning in Map mode (the overlay unites
-   changes into one dirty rect, so moving boxes redraw the whole window).
+   carry no modifier keys). Perf-log run 2026-11-10 (Tin Train held, OpenGL,
+   1920x1200): an idle map costs nothing; panning on the map keeps 40 fps but the median frame's work
+   rises from about 8 to 20 ms of the 25 ms budget (plugin 3.3 ms, paint 6.6, present 9), p95 38 ms.
+   Box drags were not measured (the run hit the camera running past the map's scroll limit, fixed the
+   same day); a run on a large park and with box drags is still to do.
 3. Pan lines. **Done 2026-11-10** as dotted lines from overlay rects (no engine change); the `line`
    element waits for the perf run.
 4. Event views (locked boxes with labels, an unlock button): **done 2026-11-10**. Requirement 6 settled:
