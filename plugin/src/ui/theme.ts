@@ -23,6 +23,8 @@ export const THEME = {
     // of day's cycle): the game's translucent olive/yellow.
     faceAlt: "#8a7a2eb3",
     faceAltHover: "#a8963ac0",
+    // The border of a field whose list is open (the park dropdown).
+    fieldOpen: "#e0c860",
     // The speed button's face, green at 1× to orange at 8× in even steps (owner, 2026-11-02).
     speedSlow: "#3d7a50b3",
     speedFast: "#c8782ab3",
@@ -105,6 +107,8 @@ export const EDITOR = {
     titleSize: 17,
     rowHeight: 24,
     visibleRows: 10,
+    eventRows: 4, // the event list's rows shown, a scroll bar past that
+    eventsGap: 8, // between the route list and the event list
     textSize: 14,
     cellMargin: 14, // added to each list column's widest text
     scrollBar: 12, // a list's scroll bar, when it overflows

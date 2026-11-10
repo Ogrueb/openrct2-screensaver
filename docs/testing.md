@@ -87,6 +87,13 @@ Editing UI (`docs/screensaver-ui.md` "Editing UI"):
       selected with no row highlighted, Copy, Paste, Import, Export, Save with nothing changed.
 - [ ] Drag a view row by its grip: an orange line shows where it lands, the row moves there; Ctrl+Z undoes.
       An event row doesn't drag while the lock is on.
+- [ ] On a park with event views, select one with the lock on: Set to camera, Delete, Hold, Pan and Reset
+      view are gray, the hint says it's locked, and a drag on the park moves only the camera. Unlock on the
+      map: the same tools work. During Play, add or delete a view above a cut-in that has played: it doesn't
+      play again on that visit.
+- [ ] On a park with timed events: they're in the Events list under the route (E1, E2, ...), not among the
+      route rows; Plays counts down for a clock cut-in; clicking one selects it; its row doesn't drag. On
+      the map they're labeled E1, E2 and no pan line leads to them.
 - [ ] Hold the park field and release on another park: it loads. Click the field: the playlist order stays
       open; drag a park to another place, then close and step through the parks: they follow the new order.
 - [ ] Move a view, select it, Reset view: it goes back.

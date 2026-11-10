@@ -13,7 +13,7 @@
 
 import { toScreen, toWorld } from "./fit";
 import { Player } from "./player";
-import { CHECKPOINTS_PER_PARK, View, isPinned, loadCheckpoints, saveCheckpoints, saveSettings } from "./storage";
+import { CHECKPOINTS_PER_PARK, View, isCut, isPinned, loadCheckpoints, saveCheckpoints, saveSettings } from "./storage";
 
 const CLASSIFICATION = "rctscreensaver.editor";
 const WIDTH = 300;
@@ -43,6 +43,14 @@ export interface EditorView {
 /** One view's row in the list. */
 export type EditorRow = [index: string, tile: string, angle: string, zoom: string, hold: string, pan: string, setBy: string];
 export const EDITOR_COLUMNS = ["#", "Tile", "Angle", "Zoom", "Hold", "Pan", "Set by"];
+export const EVENT_COLUMNS = ["#", "Kind", "Name", "Trigger", "Hold", "Plays"];
+const TICKS_PER_SECOND = 40;
+
+/** m:ss for a count of game ticks. */
+function clock(ticks: number): string {
+    const s = Math.max(0, Math.round(ticks / TICKS_PER_SECOND));
+    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
 
 /** Camera position: world coordinates of the screen centre, as the plugin moves it. */
 export interface Camera {
@@ -128,6 +136,7 @@ export class Editor {
     private undoStacks = new Map<number, { undo: Snapshot[]; redo: Snapshot[] }>(); // by park index
     private gesture: { commit: boolean; moved: boolean } | undefined; // a drag on the park
     private map = false; // the map: every view a box on a camera stepped out
+    private mapPark = -1; // the park the map's camera was set on
     private eventsUnlocked = false; // the map lets event views be dragged
     private opened = new Map<string, { time: number; snapshot: Snapshot }>(); // each park's views as the editor first showed it
     private base: { park: number; views: View[] } | undefined; // the current park's playlist views (Reset view)
@@ -200,7 +209,7 @@ export class Editor {
     /** A press on the park: a drag starts. It edits the selected view only if Play was off (a
      * drag during Play just stops it where it is). */
     dragStart(): void {
-        this.gesture = { commit: !this.player.isPreviewing && this.selectedIndex >= 0, moved: false };
+        this.gesture = { commit: !this.player.isPreviewing && this.selectedIndex >= 0 && !this.selectedLocked, moved: false };
         this.stopPreview();
     }
 
@@ -229,7 +238,7 @@ export class Editor {
     /** The wheel over the park: zooms the camera a level (delta > 0 in) and the selected view with
      * it; during Play it only stops Play. */
     wheel(delta: number): void {
-        const commit = !this.map && !this.player.isPreviewing && this.selectedIndex >= 0;
+        const commit = !this.map && !this.player.isPreviewing && this.selectedIndex >= 0 && !this.selectedLocked;
         this.zoom(delta > 0 ? -1 : 1);
         if (commit) {
             this.update();
@@ -424,6 +433,7 @@ export class Editor {
         if (this.map) {
             const view = this.player.currentViews[this.selected];
             this.camera.zoom = Math.min(MAX_ZOOM, (view?.zoom ?? this.camera.zoom) + MAP_OUT);
+            this.mapPark = this.player.parkIndex;
             this.applyCamera();
         } else if (this.selectedIndex >= 0) {
             this.player.showViewAt(this.selected); // calls viewShown
@@ -436,6 +446,18 @@ export class Editor {
     frame(index: number): void {
         this.map = false;
         this.select(index);
+    }
+
+    /** On the map, puts the camera back on the viewport when the engine turned or zoomed it (a park
+     *  load sets its own angle a frame after the plugin's), so the boxes match the picture. */
+    syncMap(): void {
+        if (!this.map || this.player.isLoading) {
+            return;
+        }
+        const vp = ui.mainViewport;
+        if (vp.rotation !== this.camera.rotation || vp.zoom !== this.camera.zoom) {
+            this.applyCamera();
+        }
     }
 
     /** The camera as it is (the map projects the views through it). */
@@ -482,6 +504,10 @@ export class Editor {
     }
 
     private mapEdit(index: number, edit: (view: View) => Partial<View>): void {
+        const target = this.player.currentViews[index];
+        if (target && this.eventsLocked && this.isEvent(target)) {
+            return; // a locked event view
+        }
         this.change(() => {
             const views = this.views();
             const view = views[index];
@@ -560,6 +586,9 @@ export class Editor {
     }
 
     update(): void {
+        if (this.selectedLocked) {
+            return;
+        }
         if (this.map) {
             // On the map: the selected view moves to the screen's centre (its zoom and angle kept).
             this.anchor();
@@ -584,6 +613,9 @@ export class Editor {
     }
 
     remove(): void {
+        if (this.selectedLocked) {
+            return;
+        }
         this.change(() => {
             const views = this.views();
             if (!views[this.selected]) {
@@ -607,6 +639,9 @@ export class Editor {
     }
 
     changeHold(delta: number): void {
+        if (this.selectedLocked) {
+            return;
+        }
         this.change(() => {
             const views = this.views();
             const view = views[this.selected];
@@ -656,6 +691,13 @@ export class Editor {
         return isPinned(v) || v.animation !== undefined;
     }
 
+    /** The selected view is an event view under the lock: nothing changes it (owner, 2026-11-10),
+     *  as its timing comes from the park (its clock, a train, a show), not from the list. */
+    get selectedLocked(): boolean {
+        const v = this.player.currentViews[this.selected];
+        return !!v && this.eventsLocked && this.isEvent(v);
+    }
+
     /** The current park's playlist views, as reverting would give them (kept until the park changes). */
     private baseViews(): View[] {
         if (!this.base || this.base.park !== this.player.parkIndex) {
@@ -679,13 +721,13 @@ export class Editor {
     }
 
     get canResetView(): boolean {
-        return this.resetTarget() !== undefined;
+        return !this.selectedLocked && this.resetTarget() !== undefined;
     }
 
     /** Puts the selected view back as the playlist has it (the rest of the list unchanged). */
     resetView(): void {
         const base = this.resetTarget();
-        if (!base) {
+        if (!base || this.selectedLocked) {
             return;
         }
         this.change(() => {
@@ -702,6 +744,7 @@ export class Editor {
         if (key === undefined) {
             return [];
         }
+        // Newest first, the presets among them by their times (owner, 2026-11-10); none: last.
         const points: RestorePoint[] = [];
         const opened = this.opened.get(key);
         if (opened) {
@@ -714,7 +757,9 @@ export class Editor {
             points.push({ id: "install", label: "Last install", tag: "install", time: this.player.installedAt });
         }
         points.push({ id: "generated", label: "Generated", tag: "build", time: this.player.builtAt });
-        return points;
+        return points.map((p, i) => ({ p, i }))
+            .sort((a, b) => (b.p.time ?? -Infinity) - (a.p.time ?? -Infinity) || a.i - b.i)
+            .map(({ p }) => p);
     }
 
     /** Saves the current park's views as a checkpoint (at most CHECKPOINTS_PER_PARK, the oldest goes). */
@@ -726,7 +771,8 @@ export class Editor {
         const all = this.checkpoints;
         const list = all[key] ?? [];
         const n = list.reduce((m, c) => Math.max(m, c.n), 0) + 1;
-        list.push({ n, time: Date.now(), views: this.player.currentViews.map(v => ({ ...v })), screen: [ui.width, ui.height] });
+        list.push({ n, time: Date.now(), views: this.player.currentViews.map(v => ({ ...v })), screen: [ui.width, ui.height],
+            camera: { ...this.camera }, selected: this.selected, onMap: this.map });
         all[key] = list.slice(-CHECKPOINTS_PER_PARK);
         saveCheckpoints(all);
         this.refresh();
@@ -751,8 +797,19 @@ export class Editor {
             } else if (id.startsWith("checkpoint.")) {
                 const c = (this.checkpoints[key] ?? []).find(cp => `checkpoint.${cp.n}` === id);
                 if (c) {
-                    this.selected = 0;
-                    this.player.setViews(c.views.map(v => ({ ...v })), 0, true);
+                    // The views, the selection and the camera as they were (owner, 2026-11-10).
+                    const sel = Math.max(0, Math.min(c.views.length - 1, c.selected ?? 0));
+                    this.selected = sel;
+                    this.player.setViews(c.views.map(v => ({ ...v })), sel, true);
+                    // In Frame mode the camera is the selected view, shown by setViews; the map's
+                    // camera comes back only on the map.
+                    if (c.camera && !!c.onMap === this.map) {
+                        this.camera = { ...c.camera };
+                        this.applyCamera();
+                    }
+                    this.selected = sel;
+                    this.refresh();
+                    return;
                 }
             }
             this.selected = this.player.viewIndex;
@@ -802,6 +859,9 @@ export class Editor {
 
     /** Changes how the selected view pans on; like a hold, a change to how the list plays. */
     private togglePan(edit: (view: View) => Partial<View>): void {
+        if (this.selectedLocked) {
+            return;
+        }
         this.change(() => {
             const views = this.views();
             const view = views[this.selected];
@@ -837,6 +897,13 @@ export class Editor {
         this.noteOpened();
         if (this.map && !this.player.isPreviewing) {
             this.selected = this.player.viewIndex;
+            if (this.mapPark !== this.player.parkIndex && view) {
+                // Another park: the old camera's spot and angle mean nothing here, so the map steps out
+                // from the view shown, at its angle (boxes were drawn at the old angle, owner's test).
+                this.cameraFromView(view);
+                this.camera.zoom = Math.min(MAX_ZOOM, view.zoom + MAP_OUT);
+                this.mapPark = this.player.parkIndex;
+            }
             this.applyCamera(); // the map keeps its camera
             return;
         }
@@ -916,8 +983,83 @@ export class Editor {
         return this.player.isPreviewing;
     }
 
+    /** The route's views: those that play in their place in the list (fixed animation stops too). */
+    routeIndices(): number[] {
+        const views = this.player.currentViews;
+        return views.map((_, i) => i).filter(i => !isPinned(views[i]));
+    }
+
+    /** The event views (cut-ins on the park's clock, car cues, shows, cued animations), apart from
+     *  the route as their timing comes from the park (owner, 2026-11-10), in the order they play:
+     *  cut-ins at their tick, the rest after the route, as listed. */
+    eventIndices(): number[] {
+        const views = this.player.currentViews;
+        const routeTicks = this.routeIndices().reduce((t, i) => t + views[i].hold * TICKS_PER_SECOND, 0);
+        const at = (i: number): number => {
+            const cue = views[i].cue;
+            return isCut(views[i]) ? cue!.tick! - (cue!.lead ?? 0) * TICKS_PER_SECOND : routeTicks + i / 1000;
+        };
+        return views.map((_, i) => i).filter(i => isPinned(views[i])).sort((a, b) => at(a) - at(b));
+    }
+
+    /** A view's number as listed: 1, 2, ... on the route, E1, E2, ... for event views. */
+    labelOf(index: number): string {
+        const route = this.routeIndices().indexOf(index);
+        return route >= 0 ? String(route + 1) : `E${this.eventIndices().indexOf(index) + 1}`;
+    }
+
+    /** The event list's rows: number, kind, name, trigger, hold and when it plays. */
+    eventRows(): string[][] {
+        const views = this.player.currentViews;
+        const route = this.routeIndices();
+        const after = route.length ? `after view ${route.length}` : "after the route";
+        const now = this.player.parkClock;
+        return this.eventIndices().map((i, k) => {
+            const v = views[i];
+            const cue = v.cue;
+            let kind = "animation";
+            let trigger = "runs on its own";
+            let plays = after;
+            if (cue && cue.tick !== undefined) {
+                kind = "clock";
+                // The effect's time; the cut comes its lead earlier, which "Plays" counts down to.
+                trigger = `at ${clock(cue.tick)}` + (cue.every ? `, every ${clock(cue.every)}` : "");
+                if (cue.cut) {
+                    const start = cue.tick - (cue.lead ?? 0) * TICKS_PER_SECOND;
+                    let next = start;
+                    if (cue.every && next < now) {
+                        next += Math.ceil((now - next) / cue.every) * cue.every;
+                    }
+                    plays = this.player.cutPlayed(i) && !cue.every ? "played" : next <= now ? "now" : `in ${clock(next - now)}`;
+                }
+            } else if (cue) {
+                kind = "train";
+                trigger = (cue.ride !== undefined ? `a car of ride ${cue.ride}` : "listed cars") + (cue.tiles ? " on its tiles" : "");
+            } else if (v.show) {
+                kind = "show";
+                trigger = `show "${v.show.name}"`;
+            }
+            return [`E${k + 1}`, kind, v.animation ?? v.show?.name ?? "", trigger, `${v.hold} s`, plays];
+        });
+    }
+
+    /** Moves the selected route view past its neighbor on the route (Ctrl+Up, Ctrl+Down), over any
+     *  event views between them, as those play by their own timing. */
+    moveOnRoute(delta: number): void {
+        const route = this.routeIndices();
+        const pos = route.indexOf(this.selected);
+        const to = route[pos + delta];
+        if (pos < 0 || to === undefined) {
+            return;
+        }
+        this.moveTo(this.selected, to);
+    }
+
     rows(): EditorRow[] {
-        return this.player.currentViews.map((v, i) => [String(i + 1), `${Math.round(v.x)}, ${Math.round(v.y)}`,
+        const route = this.routeIndices();
+        const events = this.eventIndices();
+        const label = (i: number): string => route.includes(i) ? String(route.indexOf(i) + 1) : `E${events.indexOf(i) + 1}`;
+        return this.player.currentViews.map((v, i) => [label(i), `${Math.round(v.x)}, ${Math.round(v.y)}`,
             String(v.rotation), String(v.zoom), `${v.hold} s`,
             `${Math.round(this.player.panOf(v) * 100)}%`,
             v.manual ? "you" : v.cue || v.animation !== undefined || v.show ? "event" : "auto"]);
@@ -925,7 +1067,7 @@ export class Editor {
 
     holdText(): string {
         const view = this.player.currentViews[this.selected];
-        return view ? `Hold view ${this.selected + 1}: ${view.hold} s` : "Hold: select a view";
+        return view ? `Hold view ${this.labelOf(this.selected)}: ${view.hold} s` : "Hold: select a view";
     }
 
     panText(): string {

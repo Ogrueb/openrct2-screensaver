@@ -633,7 +633,9 @@ export class Player {
         }
         delete this.edits[park.key];
         saveEdits(this.edits);
-        this.views = this.viewsFor(park);
+        const views = this.viewsFor(park);
+        this.remapCues(views);
+        this.views = views;
         this.viewOrder = this.makeViewOrder();
         this.viewPos = 0;
         this.showView(false, "revert");
@@ -646,6 +648,16 @@ export class Player {
 
     get isLoading(): boolean {
         return this.loadingPark;
+    }
+
+    /** Game ticks since the current park loaded: the clock its timeline cut-ins play on. */
+    get parkClock(): number {
+        return this.parkTicks;
+    }
+
+    /** Whether the cut-in at `index` has played on this visit (a non-repeating one plays once). */
+    cutPlayed(index: number): boolean {
+        return this.cutsDone.has(index);
     }
 
     /** The current park's views in playlist order (as fitted, unless set in the editor). */
@@ -715,11 +727,52 @@ export class Player {
         }
         const current = show >= 0 ? show : this.viewOrder[this.viewPos] ?? 0;
         this.clearPan();
+        this.remapCues(views);
         this.views = views;
         this.viewOrder = range(views.length);
         this.viewPos = Math.max(0, Math.min(views.length - 1, current));
         if (show >= 0) {
             this.showView(false, "edit");
+        }
+    }
+
+    /** Carries the visit's cut-in record over to a new list of the same park's views: cut-ins are
+     *  tracked by index, and an edit (a move, an insert, a delete) shifts the indices. Each event
+     *  view is matched by its trigger (cue, animation, show), so a played cut-in stays played and
+     *  a pending one stays pending wherever it now sits; one no longer in the list is dropped. */
+    private remapCues(views: View[]): void {
+        const keyOf = (v: View | undefined): string | undefined =>
+            v && (v.cue || v.show || v.animation) ? JSON.stringify([v.cue, v.show, v.animation]) : undefined;
+        const taken = new Set<number>();
+        const find = (i: number): number => {
+            const key = keyOf(this.views[i]);
+            if (key === undefined) {
+                return -1;
+            }
+            // The nearest match to the old index, as two event views can share a trigger.
+            let best = -1;
+            views.forEach((v, j) => {
+                if (!taken.has(j) && keyOf(v) === key && (best < 0 || Math.abs(j - i) < Math.abs(best - i))) {
+                    best = j;
+                }
+            });
+            if (best >= 0) {
+                taken.add(best);
+            }
+            return best;
+        };
+        const done = new Set<number>();
+        for (const i of [...this.cutsDone].sort((a, b) => a - b)) {
+            const j = find(i);
+            if (j >= 0) {
+                done.add(j);
+            }
+        }
+        this.cutsDone = done;
+        if (this.pendingCue) {
+            taken.clear();
+            const j = find(this.pendingCue.index);
+            this.pendingCue = j >= 0 ? { ...this.pendingCue, index: j } : undefined;
         }
     }
 
@@ -736,7 +789,9 @@ export class Player {
             delete this.edits[park.key];
         }
         saveEdits(this.edits);
-        this.views = this.viewsFor(this.currentPark());
+        const views = this.viewsFor(this.currentPark());
+        this.remapCues(views);
+        this.views = views;
         this.viewOrder = this.makeViewOrder();
         this.viewPos = 0;
         this.showView(false, "revert");
@@ -1323,6 +1378,7 @@ export class Player {
     private refitLoaded(): void {
         const views = this.viewsFor(this.currentPark(), true);
         const resized = views.length !== this.views.length;
+        this.remapCues(views);
         this.views = views;
         if (resized) {
             this.viewOrder = this.makeViewOrder();

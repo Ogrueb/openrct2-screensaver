@@ -14,6 +14,12 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const dump = name => { if (process.env.SCENE_DIR) fs.writeFileSync(path.join(process.env.SCENE_DIR, `${name}.json`), JSON.stringify([...scene])); };
 
 const playlist = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+// An event view (a fixed animation stop) last in the first park, for the editor's event lock.
+playlist.parks[0].views.push({ x: 50, y: 55, z: 64, rotation: 0, zoom: -1, hold: 8, animation: "fountain", fixed: true });
+// And two timed event views listed between route views: a car cue and a repeating cut-in on the
+// park's clock, which the editor lists apart, by when they play.
+playlist.parks[0].views.splice(2, 0, { x: 60, y: 60, z: 64, rotation: 0, zoom: -1, hold: 2, animation: "train", cue: { ride: 3, ticks: 40, wait: 1 } });
+playlist.parks[0].views.splice(4, 0, { x: 20, y: 25, z: 64, rotation: 1, zoom: 0, hold: 3, animation: "ufo", cue: { tick: 2400, lead: 2, every: 4800, ticks: 200, cut: true } });
 let now = 0;
 const store = { RCTScreensaver: { playlist, settings: { fadeMs: 0, titleMusic: "ride", window: "windowed" } } };
 const lookup = key => key.split(".").reduce((o, k) => (o == null ? undefined : o[k]), store);
@@ -257,6 +263,14 @@ assert.ok(scene.get("rcts.bar.titles.icon").src.includes("titles-off"), "on -> o
     assert.equal(ed("redo").fill, "#2a2e2c80", "an inactive tool is flat and gray (nothing to redo)");
     assert.equal(ed("redo.icon").opacity, 0.35, "its icon dimmed");
     assert.equal(ed("copy").fill, "#2a2e2c80", "Copy views waits for later");
+    assert.equal(ed("update").fill, "#2a2e2c80", "Set to camera waits for the map: in Frame mode the view follows the camera");
+    assert.ok(ed("box.mark").src.includes("/fold-open-") && ed("props.mark").src.includes("/fold-open-"), "fold marks are icons");
+    {
+        const sg = ed("seg.inertia.1");
+        mouse("move", sg.x + 3, sg.y + 3);
+        assert.equal(ed("tip.text").text, "Eased pans", "the playlist's buttons have tooltips");
+        mouse("move", 1200, 650);
+    }
     dump("editor");
     assert.ok(scene.get("rcts.bar.edit.icon").src.includes("/edit-"), "edit icon");
     const rows = [...scene.keys()].filter(k => /^rcts\.ed\.cell\.\d+\.0$/.test(k)).length;
@@ -271,7 +285,7 @@ assert.ok(scene.get("rcts.bar.titles.icon").src.includes("titles-off"), "on -> o
         // The tooltip of a tool names it and its key.
         const a = ed("add");
         mouse("move", a.x + 5, a.y + 5);
-        assert.equal(ed("tip.text").text, "Add a view (Insert)", "tooltips name the key");
+        assert.equal(ed("tip.text").text, "Add view (Insert)", "tooltips name the key");
     }
     edClick("add");
     const after = [...scene.keys()].filter(k => /^rcts\.ed\.cell\.\d+\.0$/.test(k)).length;
@@ -381,6 +395,75 @@ assert.ok(scene.get("rcts.bar.titles.icon").src.includes("titles-off"), "on -> o
     // Undo goes back through every change to the playlist's own views.
     for (let i = 0; i < 40; i++) shortcuts["rctscreensaver.undo"]();
     assert.equal(ed("cell.0.6").text, "generated", "undoing every change brings the playlist's views back");
+    // The event lock (owner, 2026-11-10): an event view selected under the lock takes no edit at all,
+    // as its timing comes from the park; a drag or the wheel moves only the camera.
+    {
+        edClick("row.5");
+        assert.equal(ed("cell.5.6").text, "event (locked)", "the fixture's event view");
+        const gray = "#2a2e2c80";
+        for (const id of ["update", "delete", "holdLess", "holdMore", "panLess", "panMore", "reset"]) {
+            assert.equal(ed(id).fill, gray, `${id} is inactive on a locked event view`);
+        }
+        assert.equal(ed("add").fill === gray, false, "Add view still works");
+        assert.match(ed("hint").text, /locked/, "the hint says why");
+        const row = () => [1, 2, 3, 4, 5].map(c => ed(`cell.5.${c}`).text).join("|");
+        const was = row();
+        const saves = JSON.stringify(saved["RCTScreensaver.edits"]);
+        edClick("delete"); edClick("holdMore"); edClick("panMore");
+        shortcuts["rctscreensaver.deleteview"](); shortcuts["rctscreensaver.setview"](); shortcuts["rctscreensaver.holdmore"]();
+        const cam = JSON.stringify(viewport.centre);
+        mouse("move", 1400, 700); mouse("down", 1400, 700); mouse("move", 1200, 700); mouse("up", 1200, 700);
+        assert.notEqual(JSON.stringify(viewport.centre), cam, "a drag still moves the camera");
+        mouse("wheel", 1400, 700, 0, 1);
+        assert.equal(row(), was, "but nothing changes the locked event view");
+        assert.equal(ed("cell.6.0"), undefined, "nor deletes it or adds rows");
+        assert.equal(JSON.stringify(saved["RCTScreensaver.edits"]), saves, "nothing is saved");
+        // Unlocked on the map, the same view can be edited.
+        shortcuts["rctscreensaver.map"]();
+        shortcuts["rctscreensaver.eventlock"]();
+        shortcuts["rctscreensaver.map"]();
+        assert.equal(ed("cell.5.6").text.includes("locked"), false, "unlocked");
+        assert.notEqual(ed("holdMore").fill, gray, "the hold can change now");
+        edClick("holdMore");
+        assert.notEqual(row(), was, "and does");
+        shortcuts["rctscreensaver.undo"]();
+        assert.equal(row(), was);
+        shortcuts["rctscreensaver.map"]();
+        shortcuts["rctscreensaver.eventlock"]();
+        shortcuts["rctscreensaver.map"]();
+        assert.equal(ed("cell.5.6").text, "event (locked)", "locked again");
+        for (let i = 0; i < 40; i++) shortcuts["rctscreensaver.undo"]();
+    }
+    // Event views in a list of their own (owner, 2026-11-10): numbered E1, E2, ... by when they play,
+    // with their kind, trigger and next play; the route list holds only the route.
+    {
+        const route = [...scene.keys()].filter(k => /^rcts\.ed\.row\.\d+$/.test(k)).length;
+        assert.equal(route, 6, "the route list: five views and the fixed animation stop");
+        assert.equal(ed("cell.5.0").text, "6", "numbered along the route only");
+        assert.equal(ed("text.events").text, "Events  2", "the event list's title counts them");
+        assert.ok(ed("events").y > ed("list").y + ed("list").height, "under the route list");
+        assert.ok(ed("frame").y + ed("frame").height >= ed("events").y + ed("events").height, "inside the views pane");
+        const cell = (i, c) => ed(`ecell.${i}.${c}`).text;
+        assert.deepEqual([cell(0, 0), cell(0, 1), cell(0, 2)], ["E1", "train", "train"], "the car cue first: it plays after the route");
+        assert.match(cell(0, 3), /ride 3/, "its trigger");
+        assert.equal(cell(0, 5), "after view 6");
+        assert.deepEqual([cell(1, 0), cell(1, 1), cell(1, 2)], ["E2", "clock", "ufo"], "then the cut-in on the park's clock");
+        assert.equal(cell(1, 3), "at 1:00, every 2:00");
+        assert.match(cell(1, 5), /^(in \d+:\d\d|now)$/, "with when it plays next");
+        assert.ok(![...scene.keys()].some(k => k.startsWith("rcts.ed.egrip")), "no drag handles: their order is their timing");
+        const ev = [...scene.keys()].find(k => /^rcts\.ed\.event\.\d+$/.test(k) && Math.abs(scene.get(k).y - ed("ecell.1.0").y) < 24);
+        const index = Number(ev.split(".").pop());
+        edClick(ev.slice("rcts.ed.".length));
+        assert.equal(ed("delete").fill, "#2a2e2c80", "a selected event view is locked");
+        // A press and drag on an event row moves nothing.
+        const r = ed(ev.slice("rcts.ed.".length));
+        const before = JSON.stringify(saved["RCTScreensaver.edits"]);
+        mouse("move", r.x + 5, r.y + 5); mouse("down", r.x + 5, r.y + 5); mouse("move", r.x + 5, r.y - 60); mouse("up", r.x + 5, r.y - 60);
+        assert.equal(JSON.stringify(saved["RCTScreensaver.edits"]), before, "dragging an event row changes nothing");
+        assert.equal(cell(1, 0), "E2");
+        assert.ok(index >= 0);
+        edClick("row.0");
+    }
     // The map (M): the camera steps out two levels, every view at its angle a box, the rest markers.
     {
         const map = id => scene.get("rcts.map." + id);
@@ -391,6 +474,7 @@ assert.ok(scene.get("rcts.bar.titles.icon").src.includes("titles-off"), "on -> o
         assert.equal(viewport.zoom, Math.min(3, zoom0 + 2), "the map steps out two levels");
         assert.equal(ed("mapMode").fill, "#8a7a2eb3", "the Map switch shows it on, olive");
         assert.notEqual(ed("lock").fill, "#2a2e2c80", "the event lock works on the map");
+        assert.notEqual(ed("update").fill, "#2a2e2c80", "Set to camera works on the map");
         const box = map("box.0");
         assert.ok(box, "the selected view is a box");
         assert.ok(Math.abs(box.x + box.width / 2 - 960) <= 1 && Math.abs(box.y + box.height / 2 - 540) <= 1,
@@ -398,6 +482,7 @@ assert.ok(scene.get("rcts.bar.titles.icon").src.includes("titles-off"), "on -> o
         assert.ok(Math.abs(box.width - 1920 * 2 ** (zoom0 - viewport.zoom)) <= 1, "the box is the view's window at its zoom");
         assert.ok(mapKeys("mark.").length + mapKeys("box.").length >= 2, "the other views are boxes or markers");
         assert.ok(mapKeys("line.").length > 0, "pan lines between the views");
+        assert.ok([...scene].some(([k, e]) => k.startsWith("rcts.map.") && /^E\d/.test(e.text ?? "")), "event views numbered E1, E2 on the map");
         assert.ok(map("handle"), "the selected box has a zoom handle");
         // Drag the box: the view moves, the camera stays.
         const before = tile();
@@ -498,8 +583,13 @@ assert.ok(scene.get("rcts.bar.titles.icon").src.includes("titles-off"), "on -> o
         const f = ed("field");
         const fx = f.x + 20, fy = f.y + 10;
         const name0 = ed("text.park").text;
+        assert.ok(ed("field.mark").src.includes("/fold-closed-"), "the field's fold mark is an icon");
+        assert.equal(ed("field.open"), undefined);
         mouse("move", fx, fy); mouse("down", fx, fy); mouse("up", fx, fy);
         assert.ok(ed("park.0") && ed("park.2"), "a click opens the park list");
+        assert.ok(ed("field.open")?.border, "the open field has an accent border");
+        assert.ok(ed("parks.open")?.border, "and so does its list");
+        assert.ok(ed("field.mark").src.includes("/fold-open-"), "and its mark points down");
         assert.equal(ed("parks.head").text, "Playlist order", "as the playlist's order");
         dump("parks");
         assert.ok(ed("pname.1").text.length > 0 && ed("pcount.0").text.endsWith("views"), "names and view counts");
@@ -527,7 +617,9 @@ assert.ok(scene.get("rcts.bar.titles.icon").src.includes("titles-off"), "on -> o
         mouse("move", fx, fy); mouse("down", fx, fy);
         now += 500;
         const q = ed("park.2");
-        mouse("move", q.x + 60, q.y + 8); mouse("up", q.x + 60, q.y + 8);
+        mouse("move", q.x + 60, q.y + 8);
+        assert.equal(ed("park.2").fill, "#a8963ac0", "held, the park under the mouse is gold");
+        mouse("up", q.x + 60, q.y + 8);
         assert.equal(ed("park.0"), undefined, "the held list closes on release");
         tick(30);
         assert.equal(ed("text.park").text, playlist.parks[0].name, "on the park released on");
@@ -544,12 +636,16 @@ assert.ok(scene.get("rcts.bar.titles.icon").src.includes("titles-off"), "on -> o
         assert.equal(ed("restore").fill, "#2a2e2c80", "Restore waits for a highlighted point");
         edClick("row.0");
         const t = ed("cell.0.1").text;
+        tick(10);
         edClick("checkpoint");
-        assert.equal(saved["RCTScreensaver.checkpoints"]?.[playlist.parks[1].key]?.length, 1, "Save checkpoint keeps the views");
-        assert.equal(ed("pt.1").text, "Checkpoint 1", "listed after Editor opened");
+        const cp = saved["RCTScreensaver.checkpoints"]?.[playlist.parks[1].key];
+        assert.equal(cp?.length, 1, "Save checkpoint keeps the views");
+        assert.ok(cp[0].camera && typeof cp[0].camera.zoom === "number", "and the camera (position, angle, zoom)");
+        assert.equal(ed("pt.0").text, "Checkpoint 1", "newest first: before Editor opened");
+        assert.equal(ed("pt.1").text, "Editor opened");
         mouse("move", 1400, 700); mouse("down", 1400, 700); mouse("move", 1000, 600); mouse("up", 1000, 600);
         assert.notEqual(ed("cell.0.1").text, t);
-        edClick("point.1");
+        edClick("point.0");
         assert.notEqual(ed("restore").fill, "#2a2e2c80", "a highlighted point enables Restore");
         edClick("restore");
         assert.equal(ed("cell.0.1").text, t, "Restore selected brings the checkpoint back");
@@ -595,8 +691,10 @@ assert.ok(scene.get("rcts.bar.titles.icon").src.includes("titles-off"), "on -> o
         mouse("move", 1200, 650);
         tick(40);
         assert.equal(ed("frame").opacity, 0, "unpinned, the panes hide with the cursor");
+        assert.equal(shown("strip"), false, "and so does the controls bar");
         mouse("move", 1210, 650);
         assert.equal(ed("frame").opacity, 1, "and come back on a move");
+        assert.equal(shown("strip"), true, "the bar too");
         edClick("pin");
         tick(40);
         assert.equal(ed("frame").opacity, 1, "pinned, they stay");

@@ -59,6 +59,7 @@ function startPlayer(): void {
         bar = new ControlsBar(mode!, () => player, settings, {
             toggleEditor: () => toggleEditor(),
             editorOpen: () => editor?.isOpen ?? false,
+            editorPinned: () => editor?.pinned ?? true,
         });
         bar.open();
         captions = new Captions(mode!, () => player, settings, () => editor?.isOpen ?? false, () => bar?.shown ?? false);
@@ -159,10 +160,10 @@ function registerShortcuts(): void {
         ["redo", "Redo (view editor)", ["CTRL+Y", "CTRL+SHIFT+Z"], either(() => {}, e => e.redo())],
         // The view editor's tools (owner, 2026-11-10; the toolbox's tooltips name them).
         ["addview", "Add a view (view editor)", ["INSERT"], either(() => {}, e => e.add())],
-        ["setview", "Set the view to the camera (view editor)", ["C"], either(() => {}, e => e.update())],
+        ["setview", "Set the view to the camera (view editor)", ["C"], either(() => {}, e => { if (e.mapMode || !editorPanel) e.update(); })],
         ["deleteview", "Delete the view (view editor)", ["DELETE"], either(() => {}, e => e.remove())],
-        ["viewup", "Move the view up (view editor)", ["CTRL+UP"], either(() => {}, e => { if (e.movable(e.selectedIndex)) e.move(-1); })],
-        ["viewdown", "Move the view down (view editor)", ["CTRL+DOWN"], either(() => {}, e => { if (e.movable(e.selectedIndex)) e.move(1); })],
+        ["viewup", "Move the view up (view editor)", ["CTRL+UP"], either(() => {}, e => { if (e.movable(e.selectedIndex)) e.moveOnRoute(-1); })],
+        ["viewdown", "Move the view down (view editor)", ["CTRL+DOWN"], either(() => {}, e => { if (e.movable(e.selectedIndex)) e.moveOnRoute(1); })],
         ["rotateright", "Rotate right (view editor)", ["RETURN"], either(() => {}, e => e.rotate(1))],
         ["rotateleft", "Rotate left (view editor)", ["SHIFT+RETURN"], either(() => {}, e => e.rotate(-1))],
         ["zoomin", "Zoom in (view editor)", ["PAGEUP"], either(() => {}, e => e.zoom(-1))],

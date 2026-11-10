@@ -223,27 +223,47 @@ The panel became three panes (round 8 of the mockups accepted, built the same da
   grip column: a row dragged 5 px lifts (the dragged row follows the mouse, its place dims, an orange line
   shows where it lands) and drops there as one change (undoable; Ctrl+Up and Ctrl+Down move the selected
   view too). Event views stay put while the event lock is on and say "event (locked)"; generated views say
-  "generated". The wheel and the thin scroll bar (thumb drag, track click) scroll past ten rows. The status
+  "generated". The lock covers every edit of a selected event view (owner, 2026-11-10), as its timing comes
+  from the park (its clock, a train, a show), not from its place in the list: Set to camera, Delete, Hold,
+  Pan and Reset view go gray, and a drag or the wheel on the park moves only the camera (the hint says so).
+  Edits around event views keep the visit's cut-in record: played and pending cut-ins are tracked by their
+  trigger, not their row (`Player.remapCues`), so an insert or delete above one neither replays nor skips it. The wheel and the thin scroll bar (thumb drag, track click) scroll past ten rows. The status
   and help lines went (the toolbox's hint and the box's header say it).
+- **Event list** (owner, 2026-11-10), under the route list in the views pane, folded away when the park has
+  none: the timed event views (cut-ins on the park's clock, car cues, shows, cued animations: `isPinned`)
+  apart from the route, as their ordering doesn't follow the route's rules. The route list holds the rest,
+  fixed animation stops included (they play in their place), numbered 1..N along the route; events are
+  E1, E2, ... in the order they play (cut-ins at their tick less the lead, the rest after the route).
+  Columns: kind (clock, train, show, animation), name, trigger ("at 1:00, every 2:00", "a car of ride 3"),
+  hold, and Plays ("in 0:42" counting down on the park's clock, "played" for a one-off cut-in done this
+  visit, "after view N" for the rest). No drag handles; a click selects, and the lock applies as above. A
+  route row dragged (or Ctrl+Up/Down) moves among the route views only. The map numbers events E1, E2 too
+  and draws pan lines along the route only.
 - **Toolbox, bottom left.** The **Frame | Map** switch on top (Map olive while on, "M" beside it), a
   one-line hint for the mode, then icon buttons under small labels: VIEW (add, set to camera, delete),
   CAMERA (rotate left and right, zoom in and out), EVENTS (the lock: sparkles over a padlock, usable on the
   map only); HOLD and PAN as − value +; a footer of undo, redo, a gap, **Reset view** (the selected view
   back to its playlist version: each view remembers which playlist view it started as, `View.origin`,
   until install), and at the right the **pin** (on by default: the panes stay shown; off, they hide with
-  the cursor like the bar, `settings.editorPinned`) and **Play** ("P"). Every button's tooltip names it and
+  the cursor, and the controls bar with them, `settings.editorPinned`) and **Play** ("P"). Every button's tooltip names it and
   its key. Buttons that would do nothing are flat, pressed in and gray, their icons dimmed (owner).
-  Keys: Insert add, C set to camera, Delete, Ctrl+Up/Down move, Enter and Shift+Enter rotate right and
+  Set to camera works on the map only: in Frame mode the selected view already follows the camera (owner's
+  test, 2026-11-10), so the button is gray there and C does nothing. Keys: Insert add, C set to camera, Delete, Ctrl+Up/Down move, Enter and Shift+Enter rotate right and
   left, Page Up and Page Down zoom, L the event lock, P Play, [ and ] the hold, Shift+[ and Shift+] the pan
   share, M the map, Ctrl+Z and Ctrl+Y undo and redo, E closes.
 - **Top-right box.** A header "RESTORE POINTS · PARK" with where the views come from ("edited · saved in
   the game", "playlist views", or a warning); a click on it folds the box, and a window too narrow for it
   beside the views pane (960 game pixels wide) shows it folded. The restore points, 3.5 rows high (a half
-  row: there are more) with a scroll bar, newest first: **Editor opened** (the park's views when the editor
-  first showed it this run), **Checkpoint n** (Save checkpoint; 10 per park in `RCTScreensaver.checkpoints`,
-  the oldest goes), **Last install** (parks whose views came from the views file), **Generated** (the
+  row: there are more) with a scroll bar, all newest first by their times (presets included; owner,
+  2026-11-10): **Editor opened** (the park's views when the editor
+  first showed it this run), **Checkpoint n** (Save checkpoint; the 10 most recent per park in
+  `RCTScreensaver.checkpoints`; each keeps the camera's position, angle and zoom and the selected view,
+  restored with it, the map's camera only on the map), **Last install** (parks whose views came from the views file), **Generated** (the
   playlist's own views), each with its time (today: hh:mm; else the date; install and build times from the
   playlist, `installed` and `built`). Restore selected works on the highlighted row, as one undoable change.
+  Fold marks (the box's header, Playlist, the park field) are icons, as the game's font has no triangles;
+  the open park field and its list have a gold border, and held to jump, the park under the mouse is gold. On the map, the boxes clear while a park change is under way (the
+  views are already the next park's) and come back once it shows; on another park the map steps out from the view shown, at its angle, and follows the viewport when a load turns it. Every Playlist button has a tooltip.
   Copy and Paste views are inactive for now (no clipboard in the mode yet; left for the end, owner).
   Under it the foldable **Playlist** properties (the playlist's name at the right): Motion (Inertia
   Off/On; Angle and zoom change Off/Start/End, where Off makes every pan that would turn or zoom a cut,

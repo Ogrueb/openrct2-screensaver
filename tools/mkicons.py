@@ -341,6 +341,9 @@ ICONS = {
     "paste": paste_icon(),
     "save": floppy(),
     "import": tray(False),
+    # Fold marks (the game's font has no triangles): a list or section open, or folded.
+    "fold-open": [("poly", [(6.5, 9), (17.5, 9), (12, 15.5)])],
+    "fold-closed": [("poly", [(9, 6.5), (15.5, 12), (9, 17.5)])],
     "export": tray(True),
 }
 

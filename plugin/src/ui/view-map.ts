@@ -10,7 +10,7 @@ import type { Camera, Editor } from "../editor";
 import { surfaceZ } from "../editor";
 import { toScreen, toWorld } from "../fit";
 import type { MouseEvent, Overlay } from "../mode";
-import type { View } from "../storage";
+import { View, isPinned } from "../storage";
 import { Layer, Rect, Scene, contains, measure } from "./kit";
 
 const TILE = 32;
@@ -129,7 +129,8 @@ export class ViewMap {
                 const h = ui.height * k;
                 return { index, view, cx: c.x, cy: c.y, box: { x: c.x - w / 2, y: c.y - h / 2, width: w, height: h } };
             }
-            return { index, view, cx: c.x, cy: c.y, marker: { x: c.x - MARKER / 2, y: c.y - MARKER / 2, width: MARKER, height: MARKER } };
+            const mw = isPinned(view) ? MARKER + 12 : MARKER; // wider for an event's "E1"
+            return { index, view, cx: c.x, cy: c.y, marker: { x: c.x - mw / 2, y: c.y - MARKER / 2, width: mw, height: MARKER } };
         });
     }
 
@@ -263,22 +264,30 @@ export class ViewMap {
     }
 
     render(editor: Editor): void {
+        if (editor.playback.isLoading) {
+            this.clear(); // the views are already the next park's: nothing until it shows
+            return;
+        }
         this.place(editor);
         const scene: Scene = new Map();
         const views = this.placed;
-        // Pan lines: each view to the next, the last back to the first.
-        if (views.length > 1) {
-            views.forEach((p, i) => {
-                const q = views[(i + 1) % views.length];
-                this.line(scene, `line.${i}`, p.cx, p.cy, q.cx, q.cy, editor.pans(editor.currentViews[i]));
+        // Pan lines along the route: each view to the next, the last back to the first. Event views
+        // play on the park's timing, so no line leads to them.
+        const route = new Set(editor.routeIndices());
+        const stops = views.filter(p => route.has(p.index));
+        if (stops.length > 1) {
+            stops.forEach((p, i) => {
+                const q = stops[(i + 1) % stops.length];
+                this.line(scene, `line.${i}`, p.cx, p.cy, q.cx, q.cy, editor.pans(editor.currentViews[p.index]));
             });
         }
+        const labels = editor.rows().map(r => r[0]); // 1, 2, ... on the route, E1, E2, ... for events
         const sel = editor.selectedIndex;
         for (const p of views) {
             const event = isEvent(p.view);
             const colour = p.index === sel ? MAP_COLOURS.selected
                 : event ? MAP_COLOURS.event : p.view.manual ? MAP_COLOURS.manual : MAP_COLOURS.generated;
-            const text = `${p.index + 1}${event ? (editor.eventsLocked ? " event (locked)" : " event") : ""}`;
+            const text = `${labels[p.index]}${event ? (editor.eventsLocked ? " event (locked)" : " event") : ""}`;
             if (p.box) {
                 const width = p.index === sel ? 3 : 2;
                 scene.set(`box.${p.index}`, {
@@ -290,7 +299,7 @@ export class ViewMap {
                     type: "rect", ...round(p.marker), fill: MAP_COLOURS.labelBacking, border: colour, borderWidth: 2, z: Z_BOX,
                 });
                 scene.set(`mark.${p.index}.text`, {
-                    type: "text", text: String(p.index + 1), size: TEXT_SIZE, bold: true, colour: MAP_COLOURS.text,
+                    type: "text", text: labels[p.index], size: TEXT_SIZE, bold: true, colour: MAP_COLOURS.text,
                     x: Math.round(p.cx), y: Math.round(p.cy - TEXT_SIZE * 0.65), align: "center", z: Z_LABEL,
                 });
             }
