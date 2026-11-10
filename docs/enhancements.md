@@ -163,6 +163,11 @@ element (a small patch in the mode group). Stages, one PR each:
 4. Event views (locked boxes with labels, an unlock button): **done 2026-11-10**. Requirement 6 waits for
    the owner's two-park trial.
 
+Owner's test round, 2026-11-10: stages 1-4 pass (rotation over a tall building, the map, box drag and
+the corner handle, right-click add with undo, double-click framing, locked event boxes on Constellations
+and Sambhava's Rest; install and play after map edits skipped). Repeated turns drifted the camera, as
+each turn re-anchored on another surface; fixed the same day (the anchor is kept until the camera moves).
+
 ## 3. Weather and day/night in the generator (low priority)
 
 Goal: the playlist decides the light and weather of the show rather than each park's saved date and the
