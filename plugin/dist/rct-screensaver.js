@@ -280,21 +280,16 @@
         this.update();
       }
     }
-    /** Sets the camera's height to what is under the screen's centre, without moving the picture,
-     * and the selected view's with it. */
-    fit() {
-      this.stopPreview();
+    /** Puts the camera's point at the height of what is seen at the screen's centre (a building's
+     * top, the ground or water), without moving the picture: a view set there turns about it, and the
+     * camera stays where it was over the void. */
+    anchor() {
       const c = this.camera;
       const p = toScreen(c.x, c.y, c.z, c.rotation);
       const z = surfaceZ(p, c.rotation);
-      if (z === void 0) {
-        return;
-      }
-      const world = toWorld(p, z, c.rotation);
-      this.camera = { ...c, x: world.x, y: world.y, z };
-      this.applyCamera();
-      if (this.selectedIndex >= 0) {
-        this.update();
+      if (z !== void 0) {
+        const world = toWorld(p, z, c.rotation);
+        this.camera = { ...c, x: world.x, y: world.y, z };
       }
     }
     // Undo and redo, per park.
@@ -371,6 +366,7 @@
     }
     rotate(delta) {
       this.stopPreview();
+      this.anchor();
       this.camera.rotation = (this.camera.rotation + delta + 4) % 4;
       this.applyCamera();
     }
@@ -434,6 +430,7 @@
     }
     add() {
       this.change(() => {
+        this.anchor();
         const views = this.views();
         const at = this.selected >= 0 ? this.selected + 1 : views.length;
         views.splice(at, 0, this.cameraView(views[this.selected]?.hold ?? DEFAULT_HOLD));
@@ -446,6 +443,7 @@
         if (!views[this.selected]) {
           return;
         }
+        this.anchor();
         views[this.selected] = { ...views[this.selected], ...this.cameraView(views[this.selected].hold) };
         delete views[this.selected].overview;
         this.save(views, this.selected);
@@ -4004,9 +4002,6 @@
         case "update":
           e.update();
           break;
-        case "fit":
-          e.fit();
-          break;
         case "undo":
           e.undo();
           break;
@@ -4115,7 +4110,7 @@
         this.track = { x: bx, y: rowsTop + bar2, width: bar2 - 2, height: rowsBottom - rowsTop - 2 * bar2 };
       }
       y = this.list.y + this.list.height + s.gap;
-      buttonRow(["add", "update", "fit", "delete"]);
+      buttonRow(["add", "update", "delete"]);
       buttonRow(["up", "down", "revert"]);
       const half = Math.round((inner - s.sectionGap) / 2);
       const step = (less, more, key, text, x, w) => {
@@ -4205,7 +4200,6 @@
       }
       textButton("add", "Add view");
       textButton("update", "Set to camera");
-      textButton("fit", "Fit height");
       textButton("delete", "Delete");
       textButton("up", "Move up");
       textButton("down", "Move down");

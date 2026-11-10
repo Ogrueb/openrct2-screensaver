@@ -70,7 +70,9 @@ Live editing (screensaver mode only, `docs/screensaver-ui.md` "Live editing"):
       tile changes in the list and "Set by" says "you". A plain click on the park changes nothing.
 - [ ] A drag that runs over the panel or the bar keeps going until the button is let go.
 - [ ] The wheel over the park zooms the selected view one level per step; over the list it scrolls.
-- [ ] Fit height on a view over a tall building, then drag: the view moves at the building's top.
+- [ ] Centre a tall building, then Rotate left or right: the building stays in the centre (the camera
+      turns about its top, not about the ground behind it). Set to camera there, and a pan's turn into
+      that view also keeps the building centred.
 - [ ] Ctrl+Z and the Undo button step back through drags, zooms, holds, adds and deletes; Ctrl+Y (or
       Ctrl+Shift+Z) and Redo step forward; undoing everything shows "auto" views again.
 - [ ] With Play on, a drag stops Play and moves no view.
