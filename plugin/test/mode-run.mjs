@@ -262,7 +262,7 @@ assert.ok(scene.get("rcts.bar.titles.icon").src.includes("titles-off"), "on -> o
     {
         const sg = ed("seg.inertia.1");
         mouse("move", sg.x + 3, sg.y + 3);
-        assert.equal(ed("tip.text").text, "Pans ease in and out", "the playlist's buttons have tooltips");
+        assert.equal(ed("tip.text").text, "Eased pans", "the playlist's buttons have tooltips");
         mouse("move", 1200, 650);
     }
     dump("editor");
@@ -279,7 +279,7 @@ assert.ok(scene.get("rcts.bar.titles.icon").src.includes("titles-off"), "on -> o
         // The tooltip of a tool names it and its key.
         const a = ed("add");
         mouse("move", a.x + 5, a.y + 5);
-        assert.equal(ed("tip.text").text, "Add a view (Insert)", "tooltips name the key");
+        assert.equal(ed("tip.text").text, "Add view (Insert)", "tooltips name the key");
     }
     edClick("add");
     const after = [...scene.keys()].filter(k => /^rcts\.ed\.cell\.\d+\.0$/.test(k)).length;
