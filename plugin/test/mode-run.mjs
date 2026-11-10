@@ -14,6 +14,8 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const dump = name => { if (process.env.SCENE_DIR) fs.writeFileSync(path.join(process.env.SCENE_DIR, `${name}.json`), JSON.stringify([...scene])); };
 
 const playlist = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+// An event view (a fixed animation stop) last in the first park, for the editor's event lock.
+playlist.parks[0].views.push({ x: 50, y: 55, z: 64, rotation: 0, zoom: -1, hold: 8, animation: "fountain", fixed: true });
 let now = 0;
 const store = { RCTScreensaver: { playlist, settings: { fadeMs: 0, titleMusic: "ride", window: "windowed" } } };
 const lookup = key => key.split(".").reduce((o, k) => (o == null ? undefined : o[k]), store);
@@ -367,6 +369,45 @@ assert.ok(scene.get("rcts.bar.titles.icon").src.includes("titles-off"), "on -> o
     // Undo goes back through every change to the playlist's own views.
     for (let i = 0; i < 40; i++) shortcuts["rctscreensaver.undo"]();
     assert.equal(ed("cell.0.6").text, "generated", "undoing every change brings the playlist's views back");
+    // The event lock (owner, 2026-11-10): an event view selected under the lock takes no edit at all,
+    // as its timing comes from the park; a drag or the wheel moves only the camera.
+    {
+        edClick("row.5");
+        assert.equal(ed("cell.5.6").text, "event (locked)", "the fixture's event view");
+        const gray = "#2a2e2c80";
+        for (const id of ["update", "delete", "holdLess", "holdMore", "panLess", "panMore", "reset"]) {
+            assert.equal(ed(id).fill, gray, `${id} is inactive on a locked event view`);
+        }
+        assert.equal(ed("add").fill === gray, false, "Add view still works");
+        assert.match(ed("hint").text, /locked/, "the hint says why");
+        const row = () => [1, 2, 3, 4, 5].map(c => ed(`cell.5.${c}`).text).join("|");
+        const was = row();
+        const saves = JSON.stringify(saved["RCTScreensaver.edits"]);
+        edClick("delete"); edClick("holdMore"); edClick("panMore");
+        shortcuts["rctscreensaver.deleteview"](); shortcuts["rctscreensaver.setview"](); shortcuts["rctscreensaver.holdmore"]();
+        const cam = JSON.stringify(viewport.centre);
+        mouse("move", 1400, 700); mouse("down", 1400, 700); mouse("move", 1200, 700); mouse("up", 1200, 700);
+        assert.notEqual(JSON.stringify(viewport.centre), cam, "a drag still moves the camera");
+        mouse("wheel", 1400, 700, 0, 1);
+        assert.equal(row(), was, "but nothing changes the locked event view");
+        assert.equal(ed("cell.6.0"), undefined, "nor deletes it or adds rows");
+        assert.equal(JSON.stringify(saved["RCTScreensaver.edits"]), saves, "nothing is saved");
+        // Unlocked on the map, the same view can be edited.
+        shortcuts["rctscreensaver.map"]();
+        shortcuts["rctscreensaver.eventlock"]();
+        shortcuts["rctscreensaver.map"]();
+        assert.equal(ed("cell.5.6").text.includes("locked"), false, "unlocked");
+        assert.notEqual(ed("holdMore").fill, gray, "the hold can change now");
+        edClick("holdMore");
+        assert.notEqual(row(), was, "and does");
+        shortcuts["rctscreensaver.undo"]();
+        assert.equal(row(), was);
+        shortcuts["rctscreensaver.map"]();
+        shortcuts["rctscreensaver.eventlock"]();
+        shortcuts["rctscreensaver.map"]();
+        assert.equal(ed("cell.5.6").text, "event (locked)", "locked again");
+        for (let i = 0; i < 40; i++) shortcuts["rctscreensaver.undo"]();
+    }
     // The map (M): the camera steps out two levels, every view at its angle a box, the rest markers.
     {
         const map = id => scene.get("rcts.map." + id);

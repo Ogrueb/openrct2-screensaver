@@ -401,7 +401,7 @@
     /** A press on the park: a drag starts. It edits the selected view only if Play was off (a
      * drag during Play just stops it where it is). */
     dragStart() {
-      this.gesture = { commit: !this.player.isPreviewing && this.selectedIndex >= 0, moved: false };
+      this.gesture = { commit: !this.player.isPreviewing && this.selectedIndex >= 0 && !this.selectedLocked, moved: false };
       this.stopPreview();
     }
     /** The mouse moved by window pixels during a drag: the park follows it. */
@@ -426,7 +426,7 @@
     /** The wheel over the park: zooms the camera a level (delta > 0 in) and the selected view with
      * it; during Play it only stops Play. */
     wheel(delta) {
-      const commit = !this.map && !this.player.isPreviewing && this.selectedIndex >= 0;
+      const commit = !this.map && !this.player.isPreviewing && this.selectedIndex >= 0 && !this.selectedLocked;
       this.zoom(delta > 0 ? -1 : 1);
       if (commit) {
         this.update();
@@ -645,6 +645,10 @@
       this.mapEdit(index, () => ({ zoom: Math.min(MAX_ZOOM2, Math.max(MIN_ZOOM2, Math.round(zoom))) }));
     }
     mapEdit(index, edit) {
+      const target = this.player.currentViews[index];
+      if (target && this.eventsLocked && this.isEvent(target)) {
+        return;
+      }
       this.change(() => {
         const views = this.views();
         const view = views[index];
@@ -723,6 +727,9 @@
       });
     }
     update() {
+      if (this.selectedLocked) {
+        return;
+      }
       if (this.map) {
         this.anchor();
         const c = this.camera;
@@ -746,6 +753,9 @@
       });
     }
     remove() {
+      if (this.selectedLocked) {
+        return;
+      }
       this.change(() => {
         const views = this.views();
         if (!views[this.selected]) {
@@ -767,6 +777,9 @@
       });
     }
     changeHold(delta) {
+      if (this.selectedLocked) {
+        return;
+      }
       this.change(() => {
         const views = this.views();
         const view = views[this.selected];
@@ -809,6 +822,12 @@
     isEvent(v) {
       return isPinned(v) || v.animation !== void 0;
     }
+    /** The selected view is an event view under the lock: nothing changes it (owner, 2026-11-10),
+     *  as its timing comes from the park (its clock, a train, a show), not from the list. */
+    get selectedLocked() {
+      const v = this.player.currentViews[this.selected];
+      return !!v && this.eventsLocked && this.isEvent(v);
+    }
     /** The current park's playlist views, as reverting would give them (kept until the park changes). */
     baseViews() {
       if (!this.base || this.base.park !== this.player.parkIndex) {
@@ -830,12 +849,12 @@
       return JSON.stringify(rest) === JSON.stringify(base) ? void 0 : base;
     }
     get canResetView() {
-      return this.resetTarget() !== void 0;
+      return !this.selectedLocked && this.resetTarget() !== void 0;
     }
     /** Puts the selected view back as the playlist has it (the rest of the list unchanged). */
     resetView() {
       const base = this.resetTarget();
-      if (!base) {
+      if (!base || this.selectedLocked) {
         return;
       }
       this.change(() => {
@@ -941,6 +960,9 @@
     }
     /** Changes how the selected view pans on; like a hold, a change to how the list plays. */
     togglePan(edit) {
+      if (this.selectedLocked) {
+        return;
+      }
       this.change(() => {
         const views = this.views();
         const view = views[this.selected];
@@ -2453,7 +2475,9 @@
       }
       delete this.edits[park.key];
       saveEdits(this.edits);
-      this.views = this.viewsFor(park);
+      const views = this.viewsFor(park);
+      this.remapCues(views);
+      this.views = views;
       this.viewOrder = this.makeViewOrder();
       this.viewPos = 0;
       this.showView(false, "revert");
@@ -2521,11 +2545,49 @@
       }
       const current = show >= 0 ? show : this.viewOrder[this.viewPos] ?? 0;
       this.clearPan();
+      this.remapCues(views);
       this.views = views;
       this.viewOrder = range2(views.length);
       this.viewPos = Math.max(0, Math.min(views.length - 1, current));
       if (show >= 0) {
         this.showView(false, "edit");
+      }
+    }
+    /** Carries the visit's cut-in record over to a new list of the same park's views: cut-ins are
+     *  tracked by index, and an edit (a move, an insert, a delete) shifts the indices. Each event
+     *  view is matched by its trigger (cue, animation, show), so a played cut-in stays played and
+     *  a pending one stays pending wherever it now sits; one no longer in the list is dropped. */
+    remapCues(views) {
+      const keyOf = (v) => v && (v.cue || v.show || v.animation) ? JSON.stringify([v.cue, v.show, v.animation]) : void 0;
+      const taken = /* @__PURE__ */ new Set();
+      const find = (i) => {
+        const key = keyOf(this.views[i]);
+        if (key === void 0) {
+          return -1;
+        }
+        let best = -1;
+        views.forEach((v, j) => {
+          if (!taken.has(j) && keyOf(v) === key && (best < 0 || Math.abs(j - i) < Math.abs(best - i))) {
+            best = j;
+          }
+        });
+        if (best >= 0) {
+          taken.add(best);
+        }
+        return best;
+      };
+      const done = /* @__PURE__ */ new Set();
+      for (const i of [...this.cutsDone].sort((a, b) => a - b)) {
+        const j = find(i);
+        if (j >= 0) {
+          done.add(j);
+        }
+      }
+      this.cutsDone = done;
+      if (this.pendingCue) {
+        taken.clear();
+        const j = find(this.pendingCue.index);
+        this.pendingCue = j >= 0 ? { ...this.pendingCue, index: j } : void 0;
       }
     }
     /** Drops the current park's hand-set views, going back to the playlist's. */
@@ -2540,7 +2602,9 @@
         delete this.edits[park.key];
       }
       saveEdits(this.edits);
-      this.views = this.viewsFor(this.currentPark());
+      const views = this.viewsFor(this.currentPark());
+      this.remapCues(views);
+      this.views = views;
       this.viewOrder = this.makeViewOrder();
       this.viewPos = 0;
       this.showView(false, "revert");
@@ -3053,6 +3117,7 @@
     refitLoaded() {
       const views = this.viewsFor(this.currentPark(), true);
       const resized = views.length !== this.views.length;
+      this.remapCues(views);
       this.views = views;
       if (resized) {
         this.viewOrder = this.makeViewOrder();
@@ -4847,6 +4912,7 @@
   // src/ui/editor-panel.ts
   var PAN_SHARE_STEP2 = 0.1;
   var HINT_FRAME = "Drag the park: moves the view. Wheel: zooms it.";
+  var HINT_LOCKED = "An event view, locked: dragging the park moves the camera.";
   var HINT_MAP = "Drag a box or its corner. Right-click: adds a view.";
   var DRAG_Z = Z.tip - 2;
   var CHOICES = {
@@ -5585,6 +5651,7 @@
       let y = frame.y + s.pad;
       const loading = e.playback.isLoading;
       const noView = e.selectedIndex < 0 || loading;
+      const fixedView = noView || e.selectedLocked;
       const half = Math.floor((inner - s.gap) / 2);
       this.place("frameMode", { x: x0, y, width: half, height: s.switchHeight }, "Frame: edit through the camera (M switches)", loading);
       this.place("mapMode", { x: x0 + inner - half, y, width: half, height: s.switchHeight }, "Map: every view as a box (M)", loading);
@@ -5605,15 +5672,15 @@
         overlay
       );
       y += s.switchHeight + 2;
-      const hint = fit(overlay, e.mapMode ? HINT_MAP : HINT_FRAME, s.hintSize, inner);
+      const hint = fit(overlay, e.mapMode ? HINT_MAP : e.selectedLocked ? HINT_LOCKED : HINT_FRAME, s.hintSize, inner);
       label(scene, "hint", hint, { x: x0, y, width: 0, height: s.hintHeight }, s.hintSize, overlay);
       scene.set("hint", { ...scene.get("hint"), colour: THEME.textDim });
       y += s.hintHeight;
       const groups = [
         ["VIEW", [
           ["add", "add", "Add a view (Insert)", loading || !e.playback.canEdit],
-          ["update", "set-camera", "Set to camera (C)", noView],
-          ["delete", "delete", "Delete the view (Delete)", noView]
+          ["update", "set-camera", e.selectedLocked ? "Event views are locked (unlock on the map)" : "Set to camera (C)", fixedView],
+          ["delete", "delete", e.selectedLocked ? "Event views are locked (unlock on the map)" : "Delete the view (Delete)", fixedView]
         ]],
         ["CAMERA", [
           ["rotl", "rotate-left", "Rotate left (Shift+Enter)", loading],
@@ -5644,9 +5711,9 @@
       const stepper = (name, less, more, text, sx, tips) => {
         this.sectionLabel(scene, `label.${name}`, name, sx, y);
         const ry = y + s.labelHeight;
-        const l = this.place(less, { x: sx, y: ry, width: b, height: b }, tips[0], noView);
+        const l = this.place(less, { x: sx, y: ry, width: b, height: b }, tips[0], fixedView);
         const value = { x: sx + b + s.gap, y: ry, width: s.stepValue, height: b };
-        const m = this.place(more, { x: value.x + value.width + s.gap, y: ry, width: b, height: b }, tips[1], noView);
+        const m = this.place(more, { x: value.x + value.width + s.gap, y: ry, width: b, height: b }, tips[1], fixedView);
         button(scene, less, l, this.state(less), { icon: "less", iconSize: s.toolIcon }, overlay);
         button(scene, more, m, this.state(more), { icon: "add", iconSize: s.toolIcon }, overlay);
         scene.set(`${name}.value`, { type: "rect", ...value, fill: THEME.editorList, z: Z.face });

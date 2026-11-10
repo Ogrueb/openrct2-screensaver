@@ -200,7 +200,7 @@ export class Editor {
     /** A press on the park: a drag starts. It edits the selected view only if Play was off (a
      * drag during Play just stops it where it is). */
     dragStart(): void {
-        this.gesture = { commit: !this.player.isPreviewing && this.selectedIndex >= 0, moved: false };
+        this.gesture = { commit: !this.player.isPreviewing && this.selectedIndex >= 0 && !this.selectedLocked, moved: false };
         this.stopPreview();
     }
 
@@ -229,7 +229,7 @@ export class Editor {
     /** The wheel over the park: zooms the camera a level (delta > 0 in) and the selected view with
      * it; during Play it only stops Play. */
     wheel(delta: number): void {
-        const commit = !this.map && !this.player.isPreviewing && this.selectedIndex >= 0;
+        const commit = !this.map && !this.player.isPreviewing && this.selectedIndex >= 0 && !this.selectedLocked;
         this.zoom(delta > 0 ? -1 : 1);
         if (commit) {
             this.update();
@@ -482,6 +482,10 @@ export class Editor {
     }
 
     private mapEdit(index: number, edit: (view: View) => Partial<View>): void {
+        const target = this.player.currentViews[index];
+        if (target && this.eventsLocked && this.isEvent(target)) {
+            return; // a locked event view
+        }
         this.change(() => {
             const views = this.views();
             const view = views[index];
@@ -560,6 +564,9 @@ export class Editor {
     }
 
     update(): void {
+        if (this.selectedLocked) {
+            return;
+        }
         if (this.map) {
             // On the map: the selected view moves to the screen's centre (its zoom and angle kept).
             this.anchor();
@@ -584,6 +591,9 @@ export class Editor {
     }
 
     remove(): void {
+        if (this.selectedLocked) {
+            return;
+        }
         this.change(() => {
             const views = this.views();
             if (!views[this.selected]) {
@@ -607,6 +617,9 @@ export class Editor {
     }
 
     changeHold(delta: number): void {
+        if (this.selectedLocked) {
+            return;
+        }
         this.change(() => {
             const views = this.views();
             const view = views[this.selected];
@@ -656,6 +669,13 @@ export class Editor {
         return isPinned(v) || v.animation !== undefined;
     }
 
+    /** The selected view is an event view under the lock: nothing changes it (owner, 2026-11-10),
+     *  as its timing comes from the park (its clock, a train, a show), not from the list. */
+    get selectedLocked(): boolean {
+        const v = this.player.currentViews[this.selected];
+        return !!v && this.eventsLocked && this.isEvent(v);
+    }
+
     /** The current park's playlist views, as reverting would give them (kept until the park changes). */
     private baseViews(): View[] {
         if (!this.base || this.base.park !== this.player.parkIndex) {
@@ -679,13 +699,13 @@ export class Editor {
     }
 
     get canResetView(): boolean {
-        return this.resetTarget() !== undefined;
+        return !this.selectedLocked && this.resetTarget() !== undefined;
     }
 
     /** Puts the selected view back as the playlist has it (the rest of the list unchanged). */
     resetView(): void {
         const base = this.resetTarget();
-        if (!base) {
+        if (!base || this.selectedLocked) {
             return;
         }
         this.change(() => {
@@ -802,6 +822,9 @@ export class Editor {
 
     /** Changes how the selected view pans on; like a hold, a change to how the list plays. */
     private togglePan(edit: (view: View) => Partial<View>): void {
+        if (this.selectedLocked) {
+            return;
+        }
         this.change(() => {
             const views = this.views();
             const view = views[this.selected];
