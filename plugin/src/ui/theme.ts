@@ -105,6 +105,8 @@ export const EDITOR = {
     titleSize: 17,
     rowHeight: 24,
     visibleRows: 10,
+    eventRows: 4, // the event list's rows shown, a scroll bar past that
+    eventsGap: 8, // between the route list and the event list
     textSize: 14,
     cellMargin: 14, // added to each list column's widest text
     scrollBar: 12, // a list's scroll bar, when it overflows

@@ -285,6 +285,12 @@
   var Z_STEP = 8;
   var MAP_OUT = 2;
   var EDITOR_COLUMNS = ["#", "Tile", "Angle", "Zoom", "Hold", "Pan", "Set by"];
+  var EVENT_COLUMNS = ["#", "Kind", "Name", "Trigger", "Hold", "Plays"];
+  var TICKS_PER_SECOND = 40;
+  function clock(ticks) {
+    const s = Math.max(0, Math.round(ticks / TICKS_PER_SECOND));
+    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+  }
   function round2(n) {
     return Math.round(n * 100) / 100;
   }
@@ -1067,9 +1073,78 @@
     get isPlaying() {
       return this.player.isPreviewing;
     }
+    /** The route's views: those that play in their place in the list (fixed animation stops too). */
+    routeIndices() {
+      const views = this.player.currentViews;
+      return views.map((_, i) => i).filter((i) => !isPinned(views[i]));
+    }
+    /** The event views (cut-ins on the park's clock, car cues, shows, cued animations), apart from
+     *  the route as their timing comes from the park (owner, 2026-11-10), in the order they play:
+     *  cut-ins at their tick, the rest after the route, as listed. */
+    eventIndices() {
+      const views = this.player.currentViews;
+      const routeTicks = this.routeIndices().reduce((t, i) => t + views[i].hold * TICKS_PER_SECOND, 0);
+      const at = (i) => {
+        const cue = views[i].cue;
+        return isCut(views[i]) ? cue.tick - (cue.lead ?? 0) * TICKS_PER_SECOND : routeTicks + i / 1e3;
+      };
+      return views.map((_, i) => i).filter((i) => isPinned(views[i])).sort((a, b) => at(a) - at(b));
+    }
+    /** A view's number as listed: 1, 2, ... on the route, E1, E2, ... for event views. */
+    labelOf(index) {
+      const route = this.routeIndices().indexOf(index);
+      return route >= 0 ? String(route + 1) : `E${this.eventIndices().indexOf(index) + 1}`;
+    }
+    /** The event list's rows: number, kind, name, trigger, hold and when it plays. */
+    eventRows() {
+      const views = this.player.currentViews;
+      const route = this.routeIndices();
+      const after = route.length ? `after view ${route.length}` : "after the route";
+      const now = this.player.parkClock;
+      return this.eventIndices().map((i, k) => {
+        const v = views[i];
+        const cue = v.cue;
+        let kind = "animation";
+        let trigger = "runs on its own";
+        let plays = after;
+        if (cue && cue.tick !== void 0) {
+          kind = "clock";
+          trigger = `at ${clock(cue.tick)}` + (cue.every ? `, every ${clock(cue.every)}` : "");
+          if (cue.cut) {
+            const start = cue.tick - (cue.lead ?? 0) * TICKS_PER_SECOND;
+            let next = start;
+            if (cue.every && next < now) {
+              next += Math.ceil((now - next) / cue.every) * cue.every;
+            }
+            plays = this.player.cutPlayed(i) && !cue.every ? "played" : next <= now ? "now" : `in ${clock(next - now)}`;
+          }
+        } else if (cue) {
+          kind = "train";
+          trigger = (cue.ride !== void 0 ? `a car of ride ${cue.ride}` : "listed cars") + (cue.tiles ? " on its tiles" : "");
+        } else if (v.show) {
+          kind = "show";
+          trigger = `show "${v.show.name}"`;
+        }
+        return [`E${k + 1}`, kind, v.animation ?? v.show?.name ?? "", trigger, `${v.hold} s`, plays];
+      });
+    }
+    /** Moves the selected route view past its neighbor on the route (Ctrl+Up, Ctrl+Down), over any
+     *  event views between them, as those play by their own timing. */
+    moveOnRoute(delta) {
+      const route = this.routeIndices();
+      const pos = route.indexOf(this.selected);
+      const to = route[pos + delta];
+      if (pos < 0 || to === void 0) {
+        return;
+      }
+      this.moveTo(this.selected, to);
+    }
     rows() {
+      const route = this.routeIndices();
+      const events = this.eventIndices();
+      const label2 = (i) => route.includes(i) ? String(route.indexOf(i) + 1) : `E${events.indexOf(i) + 1}`;
       return this.player.currentViews.map((v, i) => [
-        String(i + 1),
+        label2(i),
         `${Math.round(v.x)}, ${Math.round(v.y)}`,
         String(v.rotation),
         String(v.zoom),
@@ -1080,7 +1155,7 @@
     }
     holdText() {
       const view = this.player.currentViews[this.selected];
-      return view ? `Hold view ${this.selected + 1}: ${view.hold} s` : "Hold: select a view";
+      return view ? `Hold view ${this.labelOf(this.selected)}: ${view.hold} s` : "Hold: select a view";
     }
     panText() {
       const view = this.player.currentViews[this.selected];
@@ -1443,6 +1518,10 @@
     titleSize: 17,
     rowHeight: 24,
     visibleRows: 10,
+    eventRows: 4,
+    // the event list's rows shown, a scroll bar past that
+    eventsGap: 8,
+    // between the route list and the event list
     textSize: 14,
     cellMargin: 14,
     // added to each list column's widest text
@@ -1918,7 +1997,7 @@
   var SHOW_TAIL_MS = 3e3;
   var SOUND_FADE_MS = 750;
   var PREVIEW_DELAY_MS = 1e3;
-  var TICKS_PER_SECOND = 40;
+  var TICKS_PER_SECOND2 = 40;
   var CUE_WAIT_S = 20;
   var CUE_TAIL_TICKS = 80;
   var CAR_CHECK_TICKS = 4;
@@ -2089,7 +2168,7 @@
           const p = toScreen(pose.x, pose.y, pose.z, pose.rotation);
           if (this.panLast) {
             const px = Math.hypot(p.x - this.panLast.x, p.y - this.panLast.y) / 2 ** pose.zoom;
-            this.panPeak = Math.max(this.panPeak, px * TICKS_PER_SECOND);
+            this.panPeak = Math.max(this.panPeak, px * TICKS_PER_SECOND2);
           }
           this.panLast = { x: p.x, y: p.y };
           this.panTicks++;
@@ -2489,6 +2568,14 @@
     get isLoading() {
       return this.loadingPark;
     }
+    /** Game ticks since the current park loaded: the clock its timeline cut-ins play on. */
+    get parkClock() {
+      return this.parkTicks;
+    }
+    /** Whether the cut-in at `index` has played on this visit (a non-repeating one plays once). */
+    cutPlayed(index) {
+      return this.cutsDone.has(index);
+    }
     /** The current park's views in playlist order (as fitted, unless set in the editor). */
     get currentViews() {
       return this.views;
@@ -2833,7 +2920,7 @@
       if (!cue || this.cueAt === void 0) {
         return void 0;
       }
-      return Math.max(0, (this.cueAt + cue.ticks + CUE_TAIL_TICKS - this.parkTicks) * 1e3 / TICKS_PER_SECOND);
+      return Math.max(0, (this.cueAt + cue.ticks + CUE_TAIL_TICKS - this.parkTicks) * 1e3 / TICKS_PER_SECOND2);
     }
     /** Another timeline cut-in's lead begins within `ms` (and CHAIN_S): better to wait for it here. */
     cutDueWithin(ms) {
@@ -2843,8 +2930,8 @@
           return false;
         }
         const start = nextOccurrence(v.cue, this.parkTicks);
-        const from = start - (v.cue.lead ?? 0) * TICKS_PER_SECOND;
-        return from - this.parkTicks <= (ms / 1e3 + CHAIN_S) * TICKS_PER_SECOND;
+        const from = start - (v.cue.lead ?? 0) * TICKS_PER_SECOND2;
+        return from - this.parkTicks <= (ms / 1e3 + CHAIN_S) * TICKS_PER_SECOND2;
       });
     }
     /** A cut-in view ending shortly before another timeline cut-in's lead begins: pans on to that
@@ -2872,7 +2959,7 @@
     cueFires(cue, earlyS = 0) {
       if (cue.tick !== void 0) {
         const start = nextOccurrence(cue, this.parkTicks);
-        const from = start - ((cue.lead ?? 0) + earlyS) * TICKS_PER_SECOND;
+        const from = start - ((cue.lead ?? 0) + earlyS) * TICKS_PER_SECOND2;
         return this.parkTicks >= from && this.parkTicks < start + cue.ticks ? { at: start } : void 0;
       }
       if (cue.ride === void 0 && !cue.cars || this.parkTicks % CAR_CHECK_TICKS !== 0) {
@@ -2890,7 +2977,7 @@
      * a timeline cue's `lead`, by a pan that arrives as the effect starts. */
     cutIn(index, fired) {
       const view = this.views[index];
-      const leadMs = (fired.at - this.parkTicks) * 1e3 / TICKS_PER_SECOND;
+      const leadMs = (fired.at - this.parkTicks) * 1e3 / TICKS_PER_SECOND2;
       const inPlace = this.editing ? this.viewOrder.indexOf(index) : -1;
       if (inPlace < 0) {
         this.viewOrder.splice(this.viewPos + 1, 0, index);
@@ -2980,7 +3067,7 @@
         return !missed && elapsed < view.hold * 1e3 + wait;
       }
       const left = this.cueAt + cue.ticks + CUE_TAIL_TICKS - this.parkTicks;
-      return left > 0 && elapsed < (view.hold + wait / 1e3 + (cue.ticks + CUE_TAIL_TICKS) / TICKS_PER_SECOND) * 2e3;
+      return left > 0 && elapsed < (view.hold + wait / 1e3 + (cue.ticks + CUE_TAIL_TICKS) / TICKS_PER_SECOND2) * 2e3;
     }
     /** Milliseconds the current view has left as far as is known now (an event view's effect
      * not yet cued counts as its wait running out). */
@@ -2994,7 +3081,7 @@
       if (this.cueAt === void 0) {
         return view.hold * 1e3 + (cue.wait ?? CUE_WAIT_S) * 1e3 - elapsed;
       }
-      return Math.max(left, (this.cueAt + cue.ticks + CUE_TAIL_TICKS - this.parkTicks) * 1e3 / TICKS_PER_SECOND);
+      return Math.max(left, (this.cueAt + cue.ticks + CUE_TAIL_TICKS - this.parkTicks) * 1e3 / TICKS_PER_SECOND2);
     }
     /** True while a show view's camera has yet to reach the end of its path: game ticks can run
      * slower than the hold's clock, and the view stays until the camera arrives (at most twice
@@ -4662,7 +4749,8 @@
           const h = ui.height * k;
           return { index, view, cx: c.x, cy: c.y, box: { x: c.x - w / 2, y: c.y - h / 2, width: w, height: h } };
         }
-        return { index, view, cx: c.x, cy: c.y, marker: { x: c.x - MARKER / 2, y: c.y - MARKER / 2, width: MARKER, height: MARKER } };
+        const mw = isPinned(view) ? MARKER + 12 : MARKER;
+        return { index, view, cx: c.x, cy: c.y, marker: { x: c.x - mw / 2, y: c.y - MARKER / 2, width: mw, height: MARKER } };
       });
     }
     /** The selected box's zoom handle (bottom right corner), if it can be dragged. */
@@ -4794,17 +4882,20 @@
       this.place(editor2);
       const scene = /* @__PURE__ */ new Map();
       const views = this.placed;
-      if (views.length > 1) {
-        views.forEach((p, i) => {
-          const q = views[(i + 1) % views.length];
-          this.line(scene, `line.${i}`, p.cx, p.cy, q.cx, q.cy, editor2.pans(editor2.currentViews[i]));
+      const route = new Set(editor2.routeIndices());
+      const stops = views.filter((p) => route.has(p.index));
+      if (stops.length > 1) {
+        stops.forEach((p, i) => {
+          const q = stops[(i + 1) % stops.length];
+          this.line(scene, `line.${i}`, p.cx, p.cy, q.cx, q.cy, editor2.pans(editor2.currentViews[p.index]));
         });
       }
+      const labels = editor2.rows().map((r) => r[0]);
       const sel = editor2.selectedIndex;
       for (const p of views) {
         const event = isEvent(p.view);
         const colour = p.index === sel ? MAP_COLOURS.selected : event ? MAP_COLOURS.event : p.view.manual ? MAP_COLOURS.manual : MAP_COLOURS.generated;
-        const text = `${p.index + 1}${event ? editor2.eventsLocked ? " event (locked)" : " event" : ""}`;
+        const text = `${labels[p.index]}${event ? editor2.eventsLocked ? " event (locked)" : " event" : ""}`;
         if (p.box) {
           const width = p.index === sel ? 3 : 2;
           scene.set(`box.${p.index}`, {
@@ -4827,7 +4918,7 @@
           });
           scene.set(`mark.${p.index}.text`, {
             type: "text",
-            text: String(p.index + 1),
+            text: labels[p.index],
             size: TEXT_SIZE,
             bold: true,
             colour: MAP_COLOURS.text,
@@ -4974,9 +5065,12 @@
       // the panes shown, for what the mouse is over
       this.paneViews = { x: 0, y: 0, width: 0, height: 0 };
       this.listRect = { x: 0, y: 0, width: 0, height: 0 };
+      // the event views' rows, when the park has any
+      this.clockShown = -1;
       // the restore points' rows
       this.views = new Scroll();
       this.parks = new Scroll();
+      this.events = new Scroll();
       this.points = new Scroll();
       this.followed = -1;
       // the restore point highlighted
@@ -5018,6 +5112,10 @@
     /** Called every update: with the pin off the panes hide once the mouse has rested a while. */
     update() {
       const e = this.editor;
+      const second = e && this.eventsRect && !this.hidden ? Math.floor(e.playback.parkClock / 40) : -1;
+      if (second >= 0 && second !== this.clockShown && !this.busy) {
+        this.render();
+      }
       if (!e || e.pinned || this.hidden || this.busy || this.over(this.mouse.x, this.mouse.y)) {
         return;
       }
@@ -5069,7 +5167,9 @@
         if (this.parksRect && contains(this.parksRect, this.mouse.x, this.mouse.y)) {
           this.parks.by(step, ed.parkNames.length, this.parkRows());
         } else if (contains(this.listRect, this.mouse.x, this.mouse.y)) {
-          this.views.by(step, ed.rows().length, EDITOR.visibleRows);
+          this.views.by(step, ed.routeIndices().length, EDITOR.visibleRows);
+        } else if (this.eventsRect && contains(this.eventsRect, this.mouse.x, this.mouse.y)) {
+          this.events.by(step, ed.eventIndices().length, EDITOR.eventRows);
         } else if (this.pointsRect && contains(this.pointsRect, this.mouse.x, this.mouse.y)) {
           this.points.by(step, ed.restorePoints().length, EDITOR.boxRows);
         }
@@ -5104,7 +5204,7 @@
       const rowsTop = rect.y + (r.list === "views" ? EDITOR.rowHeight : EDITOR.parkRow);
       const step = this.mouse.y < rowsTop ? -1 : this.mouse.y > rect.y + rect.height ? 1 : 0;
       if (step && r.list === "views") {
-        this.views.by(step, ed.rows().length, EDITOR.visibleRows);
+        this.views.by(step, ed.routeIndices().length, EDITOR.visibleRows);
       } else if (step) {
         this.parks.by(step, ed.parkNames.length, this.parkRows());
       }
@@ -5128,15 +5228,15 @@
         this.rowDrag = { list: views ? "views" : "parks", from: Number(hit.slice(views ? 4 : 5)), x0: this.mouse.x, y0: this.mouse.y, moving: false };
       } else if (hit?.endsWith(".thumb")) {
         const which = hit.slice(0, -6);
-        const scroll = which === "parks" ? this.parks : which === "points" ? this.points : this.views;
-        const count = which === "parks" ? () => ed.parkNames.length : which === "points" ? () => ed.restorePoints().length : () => ed.rows().length;
-        const visible = which === "parks" ? this.parkRows() : which === "points" ? EDITOR.boxRows : EDITOR.visibleRows;
+        const scroll = this.scrollOf(which);
+        const count = which === "parks" ? () => ed.parkNames.length : which === "points" ? () => ed.restorePoints().length : which === "events" ? () => ed.eventIndices().length : () => ed.routeIndices().length;
+        const visible = which === "parks" ? this.parkRows() : which === "points" ? EDITOR.boxRows : which === "events" ? EDITOR.eventRows : EDITOR.visibleRows;
         this.thumbDrag = { scroll, y0: this.mouse.y, first0: scroll.first, count, visible };
       } else if (hit?.endsWith(".track")) {
         const which = hit.slice(0, -6);
-        const scroll = which === "parks" ? this.parks : which === "points" ? this.points : this.views;
-        const page = which === "parks" ? this.parkRows() : which === "points" ? 3 : EDITOR.visibleRows;
-        const count = which === "parks" ? ed.parkNames.length : which === "points" ? ed.restorePoints().length : ed.rows().length;
+        const scroll = this.scrollOf(which);
+        const page = which === "parks" ? this.parkRows() : which === "points" ? 3 : which === "events" ? EDITOR.eventRows : EDITOR.visibleRows;
+        const count = which === "parks" ? ed.parkNames.length : which === "points" ? ed.restorePoints().length : which === "events" ? ed.eventIndices().length : ed.routeIndices().length;
         scroll.by(this.mouse.y < (scroll.thumb?.y ?? 0) ? -page : page, count, page);
       }
       return true;
@@ -5175,16 +5275,31 @@
       }
       return down !== void 0;
     }
-    /** Where a dragged row lands: the gap nearest the mouse, as an index after the row leaves its place. */
+    scrollOf(which) {
+      return which === "parks" ? this.parks : which === "points" ? this.points : which === "events" ? this.events : this.views;
+    }
+    /** Where a dragged row lands: the gap nearest the mouse, as an index after the row leaves its place.
+     *  A route view lands among the route views: the event views listed between them stay put. */
     dropIndex(r) {
       const ed = this.editor;
       const views = r.list === "views";
       const rect = views ? this.listRect : this.parksRect;
       const rowH = views ? EDITOR.rowHeight : EDITOR.parkRow;
-      const count = views ? ed.rows().length : ed.parkNames.length;
+      const route = ed.routeIndices();
+      const count = views ? route.length : ed.parkNames.length;
       const first = views ? this.views.first : this.parks.first;
       const gap = Math.max(0, Math.min(count, Math.round((this.mouse.y - rect.y - rowH) / rowH) + first));
-      return gap > r.from ? gap - 1 : gap;
+      if (!views) {
+        return gap > r.from ? gap - 1 : gap;
+      }
+      const fromPos = route.indexOf(r.from);
+      const rest = route.filter((i) => i !== r.from);
+      const p = fromPos >= 0 && gap > fromPos ? gap - 1 : gap;
+      if (!rest.length) {
+        return r.from;
+      }
+      const after = (i) => i > r.from ? i - 1 : i;
+      return p < rest.length ? after(rest[p]) : after(rest[rest.length - 1]) + 1;
     }
     /** Handles a mouse event on the park (off the panes and the bar, or during a drag that started on
      * the park): a left drag moves the camera and with it the selected view, the wheel zooms it. */
@@ -5250,8 +5365,8 @@
       if (!e) {
         return;
       }
-      if (id.startsWith("row.")) {
-        e.select(Number(id.slice(4)));
+      if (id.startsWith("row.") || id.startsWith("event.")) {
+        e.select(Number(id.slice(id.indexOf(".") + 1)));
         return;
       }
       if (id.startsWith("park.")) {
@@ -5446,18 +5561,37 @@
       );
       y += t + s.gap;
       const rows = e.rows();
+      const route = e.routeIndices();
+      const events = e.eventIndices();
       const sel = e.selectedIndex;
       if (sel !== this.followed) {
         this.followed = sel;
-        if (sel >= 0 && (sel < this.views.first || sel >= this.views.first + s.visibleRows)) {
-          this.views.first = sel;
+        const r = route.indexOf(sel);
+        const k = events.indexOf(sel);
+        if (r >= 0 && (r < this.views.first || r >= this.views.first + s.visibleRows)) {
+          this.views.first = r;
+        }
+        if (k >= 0 && (k < this.events.first || k >= this.events.first + s.eventRows)) {
+          this.events.first = k;
         }
       }
       const listH = s.rowHeight * (s.visibleRows + 1);
-      const bar2 = rows.length > s.visibleRows ? s.scrollBar + 2 : 0;
+      const bar2 = route.length > s.visibleRows ? s.scrollBar + 2 : 0;
       this.listRect = { x: x0, y, width: inner - bar2, height: listH };
-      this.views.layout({ x: x0 + inner - s.scrollBar, y: y + s.rowHeight, width: s.scrollBar, height: s.visibleRows * s.rowHeight }, rows.length, s.visibleRows);
-      this.paneViews = { x: s.x, y: s.y, width: s.width, height: y + listH + s.pad - s.y };
+      this.views.layout({ x: x0 + inner - s.scrollBar, y: y + s.rowHeight, width: s.scrollBar, height: s.visibleRows * s.rowHeight }, route.length, s.visibleRows);
+      let bottom = y + listH;
+      if (events.length) {
+        const shown = Math.min(events.length, s.eventRows);
+        const top = bottom + s.eventsGap + s.rowHeight;
+        const ebar = events.length > s.eventRows ? s.scrollBar + 2 : 0;
+        this.eventsRect = { x: x0, y: top, width: inner - ebar, height: s.rowHeight * (shown + 1) };
+        this.events.layout({ x: x0 + inner - s.scrollBar, y: top + s.rowHeight, width: s.scrollBar, height: shown * s.rowHeight }, events.length, s.eventRows);
+        bottom = top + this.eventsRect.height;
+      } else {
+        this.eventsRect = void 0;
+        this.events.first = 0;
+      }
+      this.paneViews = { x: s.x, y: s.y, width: s.width, height: bottom + s.pad - s.y };
       this.frames.push(this.paneViews);
       backing(scene, "frame", this.paneViews, THEME.editorBacking);
       button(scene, "prevPark", this.boxes.get("prevPark"), this.state("prevPark"), { icon: "prev-view", iconSize: s.toolIcon }, overlay);
@@ -5473,19 +5607,22 @@
       if (count) {
         label(scene, "text.count", count, { x: field.x + field.width - 8 - countW, y: field.y, width: 0, height: field.height }, s.textSize, overlay, true);
       }
-      this.viewsList(e, scene, rows);
+      this.viewsList(e, scene, rows, route);
+      if (this.eventsRect) {
+        this.eventsList(e, scene, events);
+      }
       if (this.dropdown) {
         this.parkList(e, scene);
       } else {
         this.parksRect = void 0;
       }
     }
-    viewsList(e, scene, rows) {
+    viewsList(e, scene, rows, route) {
       const s = EDITOR;
       const overlay = this.mode.overlay;
       const list = this.listRect;
       scene.set("list", { type: "rect", ...list, fill: THEME.editorList, z: Z.face });
-      const cols = columnStarts(list.width - s.grip, rows, overlay).map((c) => c + s.grip);
+      const cols = columnStarts(list.width - s.grip, route.map((i) => rows[i]), overlay, EDITOR_COLUMNS).map((c) => c + s.grip);
       EDITOR_COLUMNS.forEach((h, c) => label(
         scene,
         `head.${c}`,
@@ -5499,9 +5636,9 @@
       const hover = this.hit();
       const r = this.rowDrag?.list === "views" && this.rowDrag.moving ? this.rowDrag : void 0;
       for (let i = 0; i < s.visibleRows; i++) {
-        const index = this.views.first + i;
+        const index = route[this.views.first + i];
         const row = rows[index];
-        if (!row) {
+        if (index === void 0 || !row) {
           break;
         }
         const box = this.place(`row.${index}`, { x: list.x, y: top + i * s.rowHeight, width: list.width, height: s.rowHeight });
@@ -5529,7 +5666,7 @@
         this.place("views.thumb", this.views.thumb);
       }
       if (r) {
-        this.dragged(scene, list, s.rowHeight, this.views.first, rows.length, r, (ghost) => {
+        this.dragged(scene, list, s.rowHeight, this.views.first, route.length, r, (ghost) => {
           this.cells(e, rows[r.from]).forEach((cell, c) => label(
             scene,
             `ghost.${c}`,
@@ -5539,6 +5676,64 @@
             overlay
           ));
         });
+      }
+    }
+    /** The event views: when they play and on what, apart from the route, as no drag or list place
+     *  changes their timing (owner, 2026-11-10); a click selects one. */
+    eventsList(e, scene, events) {
+      const s = EDITOR;
+      const overlay = this.mode.overlay;
+      const list = this.eventsRect;
+      const title = { x: list.x, y: list.y - s.rowHeight, width: list.width, height: s.rowHeight };
+      label(scene, "text.events", `Events  ${events.length}`, { x: title.x + 4, y: title.y, width: 0, height: title.height }, s.textSize, overlay, true);
+      const note = e.eventsLocked ? "play on the park's timing (locked)" : "play on the park's timing";
+      const noteX = title.x + 4 + measure(overlay, `Events  ${events.length}`, s.textSize, true).width + 12;
+      scene.set("text.events.note", {
+        type: "text",
+        text: note,
+        size: s.hintSize,
+        colour: THEME.textDim,
+        x: noteX,
+        y: Math.round(title.y + (title.height - s.hintSize * 1.25) / 2),
+        z: Z.icon
+      });
+      scene.set("events", { type: "rect", ...list, fill: THEME.editorList, z: Z.face });
+      const rows = e.eventRows();
+      this.clockShown = Math.floor(e.playback.parkClock / 40);
+      const cols = columnStarts(list.width - s.grip, rows, overlay, EVENT_COLUMNS).map((c) => c + s.grip);
+      EVENT_COLUMNS.forEach((h, c) => label(
+        scene,
+        `ehead.${c}`,
+        h,
+        { x: list.x + cols[c] + 4, y: list.y, width: 0, height: s.rowHeight },
+        s.textSize,
+        overlay,
+        true
+      ));
+      const top = list.y + s.rowHeight;
+      const hover = this.hit();
+      for (let i = 0; i < s.eventRows; i++) {
+        const k = this.events.first + i;
+        const index = events[k];
+        if (index === void 0) {
+          break;
+        }
+        const box = this.place(`event.${index}`, { x: list.x, y: top + i * s.rowHeight, width: list.width, height: s.rowHeight });
+        const fill = index === e.selectedIndex ? THEME.faceOn : hover === `event.${index}` ? THEME.faceHover : i % 2 ? THEME.face : void 0;
+        scene.set(`event.${index}`, { type: "rect", ...box, fill: fill ?? "#00000000", z: Z.face });
+        rows[k].forEach((cell, c) => label(
+          scene,
+          `ecell.${i}.${c}`,
+          fit(overlay, cell, s.textSize, (cols[c + 1] ?? list.width) - cols[c] - 6),
+          { x: box.x + cols[c] + 4, y: box.y, width: 0, height: box.height },
+          s.textSize,
+          overlay
+        ));
+      }
+      this.events.draw(scene, "events");
+      if (this.events.track) {
+        this.place("events.track", this.events.track);
+        this.place("events.thumb", this.events.thumb);
       }
     }
     /** A row's cells as shown: who set each view, event views marked locked while they are. */
@@ -5965,11 +6160,11 @@
     const today = d.getFullYear() === n.getFullYear() && d.getMonth() === n.getMonth() && d.getDate() === n.getDate();
     return today ? hm : `${MONTHS[d.getMonth()]} ${d.getDate()}, ${hm}`;
   }
-  function columnStarts(width, rows, overlay) {
+  function columnStarts(width, rows, overlay, headers) {
     const size = EDITOR.textSize;
-    const natural = EDITOR_COLUMNS.map((h, c) => Math.max(
+    const natural = headers.map((h, c) => Math.max(
       measure(overlay, h, size, true).width,
-      ...rows.map((r) => measure(overlay, c === 6 ? "event (locked)" : r[c] ?? "", size).width)
+      ...rows.map((r) => measure(overlay, headers === EDITOR_COLUMNS && c === 6 ? "event (locked)" : r[c] ?? "", size).width)
     ) + EDITOR.cellMargin);
     const total = natural.reduce((a, b) => a + b, 0);
     const widths = total <= width ? natural.map((w) => w + (width - total) / natural.length) : natural.map((w) => w * width / total);
@@ -6128,11 +6323,11 @@
       }, (e) => e.remove())],
       ["viewup", "Move the view up (view editor)", ["CTRL+UP"], either(() => {
       }, (e) => {
-        if (e.movable(e.selectedIndex)) e.move(-1);
+        if (e.movable(e.selectedIndex)) e.moveOnRoute(-1);
       })],
       ["viewdown", "Move the view down (view editor)", ["CTRL+DOWN"], either(() => {
       }, (e) => {
-        if (e.movable(e.selectedIndex)) e.move(1);
+        if (e.movable(e.selectedIndex)) e.moveOnRoute(1);
       })],
       ["rotateright", "Rotate right (view editor)", ["RETURN"], either(() => {
       }, (e) => e.rotate(1))],

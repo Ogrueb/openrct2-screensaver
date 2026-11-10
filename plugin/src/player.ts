@@ -650,6 +650,16 @@ export class Player {
         return this.loadingPark;
     }
 
+    /** Game ticks since the current park loaded: the clock its timeline cut-ins play on. */
+    get parkClock(): number {
+        return this.parkTicks;
+    }
+
+    /** Whether the cut-in at `index` has played on this visit (a non-repeating one plays once). */
+    cutPlayed(index: number): boolean {
+        return this.cutsDone.has(index);
+    }
+
     /** The current park's views in playlist order (as fitted, unless set in the editor). */
     get currentViews(): View[] {
         return this.views;

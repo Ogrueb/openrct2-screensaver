@@ -2,7 +2,8 @@
 // in the controls bar's style (owner's design, 2026-11-10):
 // - the views pane, top left: the park (previous, a dropdown field, next; held, the field's list jumps on
 //   release; clicked, it stays open as the playlist's order, its rows dragged to reorder the parks) over
-//   the park's views, each row dragged by its grip to reorder them;
+//   the park's route views, each row dragged by its grip to reorder them, and under them the event
+//   views (cut-ins, car cues, shows) in a list of their own, by when they play (owner, 2026-11-10);
 // - the toolbox, bottom left: Frame | Map, a hint, the view, camera and event tools, hold and pan, then
 //   undo, redo, Reset view, the pin (the panes stay shown) and Play; tooltips name each tool and its key;
 // - the top-right box: the park's restore points and the Playlist properties (motion, timing,
@@ -10,7 +11,7 @@
 // Live editing (docs/screensaver-ui.md): a drag on the park moves the selected view, the wheel zooms it.
 
 import type { Editor, EditorView, RestorePoint } from "../editor";
-import { EDITOR_COLUMNS } from "../editor";
+import { EDITOR_COLUMNS, EVENT_COLUMNS } from "../editor";
 import { modeSettings } from "../mode";
 import type { MouseEvent, Overlay, ScreensaverApi } from "../mode";
 import type { PlaylistProps } from "../storage";
@@ -100,11 +101,14 @@ export class EditorPanel implements EditorView {
     private off = new Set<string>(); // inactive buttons
     private frames: Rect[] = []; // the panes shown, for what the mouse is over
     private paneViews: Rect = { x: 0, y: 0, width: 0, height: 0 };
-    private listRect: Rect = { x: 0, y: 0, width: 0, height: 0 }; // the views' rows
+    private listRect: Rect = { x: 0, y: 0, width: 0, height: 0 }; // the route views' rows
+    private eventsRect: Rect | undefined; // the event views' rows, when the park has any
+    private clockShown = -1; // the park clock's second the event list last showed
     private parksRect: Rect | undefined; // the park list, while open
     private pointsRect: Rect | undefined; // the restore points' rows
     private readonly views = new Scroll();
     private readonly parks = new Scroll();
+    private readonly events = new Scroll();
     private readonly points = new Scroll();
     private followed = -1; // the selection the views list last scrolled to
     private drag: { x: number; y: number } | undefined; // a left drag on the park: where the mouse last was
@@ -156,6 +160,11 @@ export class EditorPanel implements EditorView {
     /** Called every update: with the pin off the panes hide once the mouse has rested a while. */
     update(): void {
         const e = this.editor;
+        // The event list's "in m:ss" counts down with the park's clock.
+        const second = e && this.eventsRect && !this.hidden ? Math.floor(e.playback.parkClock / 40) : -1;
+        if (second >= 0 && second !== this.clockShown && !this.busy) {
+            this.render();
+        }
         if (!e || e.pinned || this.hidden || this.busy || this.over(this.mouse.x, this.mouse.y)) {
             return;
         }
@@ -211,7 +220,9 @@ export class EditorPanel implements EditorView {
             if (this.parksRect && contains(this.parksRect, this.mouse.x, this.mouse.y)) {
                 this.parks.by(step, ed.parkNames.length, this.parkRows());
             } else if (contains(this.listRect, this.mouse.x, this.mouse.y)) {
-                this.views.by(step, ed.rows().length, EDITOR.visibleRows);
+                this.views.by(step, ed.routeIndices().length, EDITOR.visibleRows);
+            } else if (this.eventsRect && contains(this.eventsRect, this.mouse.x, this.mouse.y)) {
+                this.events.by(step, ed.eventIndices().length, EDITOR.eventRows);
             } else if (this.pointsRect && contains(this.pointsRect, this.mouse.x, this.mouse.y)) {
                 this.points.by(step, ed.restorePoints().length, EDITOR.boxRows);
             }
@@ -248,7 +259,7 @@ export class EditorPanel implements EditorView {
         const rowsTop = rect.y + (r.list === "views" ? EDITOR.rowHeight : EDITOR.parkRow);
         const step = this.mouse.y < rowsTop ? -1 : this.mouse.y > rect.y + rect.height ? 1 : 0;
         if (step && r.list === "views") {
-            this.views.by(step, ed.rows().length, EDITOR.visibleRows);
+            this.views.by(step, ed.routeIndices().length, EDITOR.visibleRows);
         } else if (step) {
             this.parks.by(step, ed.parkNames.length, this.parkRows());
         }
@@ -274,15 +285,17 @@ export class EditorPanel implements EditorView {
             this.rowDrag = { list: views ? "views" : "parks", from: Number(hit.slice(views ? 4 : 5)), x0: this.mouse.x, y0: this.mouse.y, moving: false };
         } else if (hit?.endsWith(".thumb")) {
             const which = hit.slice(0, -6);
-            const scroll = which === "parks" ? this.parks : which === "points" ? this.points : this.views;
-            const count = which === "parks" ? () => ed.parkNames.length : which === "points" ? () => ed.restorePoints().length : () => ed.rows().length;
-            const visible = which === "parks" ? this.parkRows() : which === "points" ? EDITOR.boxRows : EDITOR.visibleRows;
+            const scroll = this.scrollOf(which);
+            const count = which === "parks" ? () => ed.parkNames.length : which === "points" ? () => ed.restorePoints().length
+                : which === "events" ? () => ed.eventIndices().length : () => ed.routeIndices().length;
+            const visible = which === "parks" ? this.parkRows() : which === "points" ? EDITOR.boxRows : which === "events" ? EDITOR.eventRows : EDITOR.visibleRows;
             this.thumbDrag = { scroll, y0: this.mouse.y, first0: scroll.first, count, visible };
         } else if (hit?.endsWith(".track")) {
             const which = hit.slice(0, -6);
-            const scroll = which === "parks" ? this.parks : which === "points" ? this.points : this.views;
-            const page = which === "parks" ? this.parkRows() : which === "points" ? 3 : EDITOR.visibleRows;
-            const count = which === "parks" ? ed.parkNames.length : which === "points" ? ed.restorePoints().length : ed.rows().length;
+            const scroll = this.scrollOf(which);
+            const page = which === "parks" ? this.parkRows() : which === "points" ? 3 : which === "events" ? EDITOR.eventRows : EDITOR.visibleRows;
+            const count = which === "parks" ? ed.parkNames.length : which === "points" ? ed.restorePoints().length
+                : which === "events" ? ed.eventIndices().length : ed.routeIndices().length;
             scroll.by(this.mouse.y < (scroll.thumb?.y ?? 0) ? -page : page, count, page);
         }
         return true;
@@ -324,16 +337,32 @@ export class EditorPanel implements EditorView {
         return down !== undefined;
     }
 
-    /** Where a dragged row lands: the gap nearest the mouse, as an index after the row leaves its place. */
+    private scrollOf(which: string): Scroll {
+        return which === "parks" ? this.parks : which === "points" ? this.points : which === "events" ? this.events : this.views;
+    }
+
+    /** Where a dragged row lands: the gap nearest the mouse, as an index after the row leaves its place.
+     *  A route view lands among the route views: the event views listed between them stay put. */
     private dropIndex(r: RowDrag): number {
         const ed = this.editor!;
         const views = r.list === "views";
         const rect = views ? this.listRect : this.parksRect!;
         const rowH = views ? EDITOR.rowHeight : EDITOR.parkRow;
-        const count = views ? ed.rows().length : ed.parkNames.length;
+        const route = ed.routeIndices();
+        const count = views ? route.length : ed.parkNames.length;
         const first = views ? this.views.first : this.parks.first;
         const gap = Math.max(0, Math.min(count, Math.round((this.mouse.y - rect.y - rowH) / rowH) + first));
-        return gap > r.from ? gap - 1 : gap;
+        if (!views) {
+            return gap > r.from ? gap - 1 : gap;
+        }
+        const fromPos = route.indexOf(r.from);
+        const rest = route.filter(i => i !== r.from);
+        const p = fromPos >= 0 && gap > fromPos ? gap - 1 : gap;
+        if (!rest.length) {
+            return r.from;
+        }
+        const after = (i: number): number => (i > r.from ? i - 1 : i); // an index once the row is out
+        return p < rest.length ? after(rest[p]) : after(rest[rest.length - 1]) + 1;
     }
 
     /** Handles a mouse event on the park (off the panes and the bar, or during a drag that started on
@@ -405,8 +434,8 @@ export class EditorPanel implements EditorView {
         if (!e) {
             return;
         }
-        if (id.startsWith("row.")) {
-            e.select(Number(id.slice(4)));
+        if (id.startsWith("row.") || id.startsWith("event.")) {
+            e.select(Number(id.slice(id.indexOf(".") + 1)));
             return;
         }
         if (id.startsWith("park.")) {
@@ -553,19 +582,40 @@ export class EditorPanel implements EditorView {
             many ? "Hold to pick a park; click for the playlist's order" : undefined);
         y += t + s.gap;
         // The views list: a header row, then up to visibleRows rows, a scroll bar past that.
+        // The route views, a header row over up to visibleRows rows (a scroll bar past that), then the
+        // event views in their own list, when the park has any.
         const rows = e.rows();
+        const route = e.routeIndices();
+        const events = e.eventIndices();
         const sel = e.selectedIndex;
         if (sel !== this.followed) {
             this.followed = sel; // scroll to a newly selected view only, so the wheel can move away
-            if (sel >= 0 && (sel < this.views.first || sel >= this.views.first + s.visibleRows)) {
-                this.views.first = sel;
+            const r = route.indexOf(sel);
+            const k = events.indexOf(sel);
+            if (r >= 0 && (r < this.views.first || r >= this.views.first + s.visibleRows)) {
+                this.views.first = r;
+            }
+            if (k >= 0 && (k < this.events.first || k >= this.events.first + s.eventRows)) {
+                this.events.first = k;
             }
         }
         const listH = s.rowHeight * (s.visibleRows + 1);
-        const bar = rows.length > s.visibleRows ? s.scrollBar + 2 : 0;
+        const bar = route.length > s.visibleRows ? s.scrollBar + 2 : 0;
         this.listRect = { x: x0, y, width: inner - bar, height: listH };
-        this.views.layout({ x: x0 + inner - s.scrollBar, y: y + s.rowHeight, width: s.scrollBar, height: s.visibleRows * s.rowHeight }, rows.length, s.visibleRows);
-        this.paneViews = { x: s.x, y: s.y, width: s.width, height: y + listH + s.pad - s.y };
+        this.views.layout({ x: x0 + inner - s.scrollBar, y: y + s.rowHeight, width: s.scrollBar, height: s.visibleRows * s.rowHeight }, route.length, s.visibleRows);
+        let bottom = y + listH;
+        if (events.length) {
+            const shown = Math.min(events.length, s.eventRows);
+            const top = bottom + s.eventsGap + s.rowHeight; // under the list's title
+            const ebar = events.length > s.eventRows ? s.scrollBar + 2 : 0;
+            this.eventsRect = { x: x0, y: top, width: inner - ebar, height: s.rowHeight * (shown + 1) };
+            this.events.layout({ x: x0 + inner - s.scrollBar, y: top + s.rowHeight, width: s.scrollBar, height: shown * s.rowHeight }, events.length, s.eventRows);
+            bottom = top + this.eventsRect.height;
+        } else {
+            this.eventsRect = undefined;
+            this.events.first = 0;
+        }
+        this.paneViews = { x: s.x, y: s.y, width: s.width, height: bottom + s.pad - s.y };
         this.frames.push(this.paneViews);
         backing(scene, "frame", this.paneViews, THEME.editorBacking);
         // Title row
@@ -582,7 +632,10 @@ export class EditorPanel implements EditorView {
         if (count) {
             label(scene, "text.count", count, { x: field.x + field.width - 8 - countW, y: field.y, width: 0, height: field.height }, s.textSize, overlay, true);
         }
-        this.viewsList(e, scene, rows);
+        this.viewsList(e, scene, rows, route);
+        if (this.eventsRect) {
+            this.eventsList(e, scene, events);
+        }
         if (this.dropdown) {
             this.parkList(e, scene);
         } else {
@@ -590,21 +643,21 @@ export class EditorPanel implements EditorView {
         }
     }
 
-    private viewsList(e: Editor, scene: Scene, rows: string[][]): void {
+    private viewsList(e: Editor, scene: Scene, rows: string[][], route: number[]): void {
         const s = EDITOR;
         const overlay = this.mode.overlay;
         const list = this.listRect;
         scene.set("list", { type: "rect", ...list, fill: THEME.editorList, z: Z.face });
-        const cols = columnStarts(list.width - s.grip, rows, overlay).map(c => c + s.grip);
+        const cols = columnStarts(list.width - s.grip, route.map(i => rows[i]), overlay, EDITOR_COLUMNS).map(c => c + s.grip);
         EDITOR_COLUMNS.forEach((h, c) => label(scene, `head.${c}`, h,
             { x: list.x + cols[c] + 4, y: list.y, width: 0, height: s.rowHeight }, s.textSize, overlay, true));
         const top = list.y + s.rowHeight;
         const hover = this.hit();
         const r = this.rowDrag?.list === "views" && this.rowDrag.moving ? this.rowDrag : undefined;
         for (let i = 0; i < s.visibleRows; i++) {
-            const index = this.views.first + i;
+            const index = route[this.views.first + i];
             const row = rows[index];
-            if (!row) {
+            if (index === undefined || !row) {
                 break;
             }
             const box = this.place(`row.${index}`, { x: list.x, y: top + i * s.rowHeight, width: list.width, height: s.rowHeight });
@@ -626,10 +679,49 @@ export class EditorPanel implements EditorView {
             this.place("views.thumb", this.views.thumb!);
         }
         if (r) {
-            this.dragged(scene, list, s.rowHeight, this.views.first, rows.length, r, ghost => {
+            this.dragged(scene, list, s.rowHeight, this.views.first, route.length, r, ghost => {
                 this.cells(e, rows[r.from]).forEach((cell, c) => label(scene, `ghost.${c}`, cell,
                     { x: ghost.x + cols[c] + 4, y: ghost.y, width: 0, height: ghost.height }, s.textSize, overlay));
             });
+        }
+    }
+
+    /** The event views: when they play and on what, apart from the route, as no drag or list place
+     *  changes their timing (owner, 2026-11-10); a click selects one. */
+    private eventsList(e: Editor, scene: Scene, events: number[]): void {
+        const s = EDITOR;
+        const overlay = this.mode.overlay;
+        const list = this.eventsRect!;
+        const title = { x: list.x, y: list.y - s.rowHeight, width: list.width, height: s.rowHeight };
+        label(scene, "text.events", `Events  ${events.length}`, { x: title.x + 4, y: title.y, width: 0, height: title.height }, s.textSize, overlay, true);
+        const note = e.eventsLocked ? "play on the park's timing (locked)" : "play on the park's timing";
+        const noteX = title.x + 4 + measure(overlay, `Events  ${events.length}`, s.textSize, true).width + 12;
+        scene.set("text.events.note", { type: "text", text: note, size: s.hintSize, colour: THEME.textDim,
+            x: noteX, y: Math.round(title.y + (title.height - s.hintSize * 1.25) / 2), z: Z.icon });
+        scene.set("events", { type: "rect", ...list, fill: THEME.editorList, z: Z.face });
+        const rows = e.eventRows();
+        this.clockShown = Math.floor(e.playback.parkClock / 40);
+        const cols = columnStarts(list.width - s.grip, rows, overlay, EVENT_COLUMNS).map(c => c + s.grip);
+        EVENT_COLUMNS.forEach((h, c) => label(scene, `ehead.${c}`, h,
+            { x: list.x + cols[c] + 4, y: list.y, width: 0, height: s.rowHeight }, s.textSize, overlay, true));
+        const top = list.y + s.rowHeight;
+        const hover = this.hit();
+        for (let i = 0; i < s.eventRows; i++) {
+            const k = this.events.first + i;
+            const index = events[k];
+            if (index === undefined) {
+                break;
+            }
+            const box = this.place(`event.${index}`, { x: list.x, y: top + i * s.rowHeight, width: list.width, height: s.rowHeight });
+            const fill = index === e.selectedIndex ? THEME.faceOn : hover === `event.${index}` ? THEME.faceHover : i % 2 ? THEME.face : undefined;
+            scene.set(`event.${index}`, { type: "rect", ...box, fill: fill ?? "#00000000", z: Z.face });
+            rows[k].forEach((cell, c) => label(scene, `ecell.${i}.${c}`, fit(overlay, cell, s.textSize, (cols[c + 1] ?? list.width) - cols[c] - 6),
+                { x: box.x + cols[c] + 4, y: box.y, width: 0, height: box.height }, s.textSize, overlay));
+        }
+        this.events.draw(scene, "events");
+        if (this.events.track) {
+            this.place("events.track", this.events.track);
+            this.place("events.thumb", this.events.thumb!);
         }
     }
 
@@ -1040,11 +1132,11 @@ export function formatTime(ms: number, now: number): string {
  * Where each list column starts: each as wide as its widest text (header or cell) plus a margin, the
  * spare width shared out evenly; squeezed in proportion if the texts are wider than the list.
  */
-function columnStarts(width: number, rows: string[][], overlay: Overlay): number[] {
+function columnStarts(width: number, rows: string[][], overlay: Overlay, headers: string[]): number[] {
     const size = EDITOR.textSize;
-    const natural = EDITOR_COLUMNS.map((h, c) => Math.max(
+    const natural = headers.map((h, c) => Math.max(
         measure(overlay, h, size, true).width,
-        ...rows.map(r => measure(overlay, c === 6 ? "event (locked)" : r[c] ?? "", size).width),
+        ...rows.map(r => measure(overlay, headers === EDITOR_COLUMNS && c === 6 ? "event (locked)" : r[c] ?? "", size).width),
     ) + EDITOR.cellMargin);
     const total = natural.reduce((a, b) => a + b, 0);
     const widths = total <= width

@@ -13,7 +13,7 @@
 
 import { toScreen, toWorld } from "./fit";
 import { Player } from "./player";
-import { CHECKPOINTS_PER_PARK, View, isPinned, loadCheckpoints, saveCheckpoints, saveSettings } from "./storage";
+import { CHECKPOINTS_PER_PARK, View, isCut, isPinned, loadCheckpoints, saveCheckpoints, saveSettings } from "./storage";
 
 const CLASSIFICATION = "rctscreensaver.editor";
 const WIDTH = 300;
@@ -43,6 +43,14 @@ export interface EditorView {
 /** One view's row in the list. */
 export type EditorRow = [index: string, tile: string, angle: string, zoom: string, hold: string, pan: string, setBy: string];
 export const EDITOR_COLUMNS = ["#", "Tile", "Angle", "Zoom", "Hold", "Pan", "Set by"];
+export const EVENT_COLUMNS = ["#", "Kind", "Name", "Trigger", "Hold", "Plays"];
+const TICKS_PER_SECOND = 40;
+
+/** m:ss for a count of game ticks. */
+function clock(ticks: number): string {
+    const s = Math.max(0, Math.round(ticks / TICKS_PER_SECOND));
+    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
 
 /** Camera position: world coordinates of the screen centre, as the plugin moves it. */
 export interface Camera {
@@ -939,8 +947,83 @@ export class Editor {
         return this.player.isPreviewing;
     }
 
+    /** The route's views: those that play in their place in the list (fixed animation stops too). */
+    routeIndices(): number[] {
+        const views = this.player.currentViews;
+        return views.map((_, i) => i).filter(i => !isPinned(views[i]));
+    }
+
+    /** The event views (cut-ins on the park's clock, car cues, shows, cued animations), apart from
+     *  the route as their timing comes from the park (owner, 2026-11-10), in the order they play:
+     *  cut-ins at their tick, the rest after the route, as listed. */
+    eventIndices(): number[] {
+        const views = this.player.currentViews;
+        const routeTicks = this.routeIndices().reduce((t, i) => t + views[i].hold * TICKS_PER_SECOND, 0);
+        const at = (i: number): number => {
+            const cue = views[i].cue;
+            return isCut(views[i]) ? cue!.tick! - (cue!.lead ?? 0) * TICKS_PER_SECOND : routeTicks + i / 1000;
+        };
+        return views.map((_, i) => i).filter(i => isPinned(views[i])).sort((a, b) => at(a) - at(b));
+    }
+
+    /** A view's number as listed: 1, 2, ... on the route, E1, E2, ... for event views. */
+    labelOf(index: number): string {
+        const route = this.routeIndices().indexOf(index);
+        return route >= 0 ? String(route + 1) : `E${this.eventIndices().indexOf(index) + 1}`;
+    }
+
+    /** The event list's rows: number, kind, name, trigger, hold and when it plays. */
+    eventRows(): string[][] {
+        const views = this.player.currentViews;
+        const route = this.routeIndices();
+        const after = route.length ? `after view ${route.length}` : "after the route";
+        const now = this.player.parkClock;
+        return this.eventIndices().map((i, k) => {
+            const v = views[i];
+            const cue = v.cue;
+            let kind = "animation";
+            let trigger = "runs on its own";
+            let plays = after;
+            if (cue && cue.tick !== undefined) {
+                kind = "clock";
+                // The effect's time; the cut comes its lead earlier, which "Plays" counts down to.
+                trigger = `at ${clock(cue.tick)}` + (cue.every ? `, every ${clock(cue.every)}` : "");
+                if (cue.cut) {
+                    const start = cue.tick - (cue.lead ?? 0) * TICKS_PER_SECOND;
+                    let next = start;
+                    if (cue.every && next < now) {
+                        next += Math.ceil((now - next) / cue.every) * cue.every;
+                    }
+                    plays = this.player.cutPlayed(i) && !cue.every ? "played" : next <= now ? "now" : `in ${clock(next - now)}`;
+                }
+            } else if (cue) {
+                kind = "train";
+                trigger = (cue.ride !== undefined ? `a car of ride ${cue.ride}` : "listed cars") + (cue.tiles ? " on its tiles" : "");
+            } else if (v.show) {
+                kind = "show";
+                trigger = `show "${v.show.name}"`;
+            }
+            return [`E${k + 1}`, kind, v.animation ?? v.show?.name ?? "", trigger, `${v.hold} s`, plays];
+        });
+    }
+
+    /** Moves the selected route view past its neighbor on the route (Ctrl+Up, Ctrl+Down), over any
+     *  event views between them, as those play by their own timing. */
+    moveOnRoute(delta: number): void {
+        const route = this.routeIndices();
+        const pos = route.indexOf(this.selected);
+        const to = route[pos + delta];
+        if (pos < 0 || to === undefined) {
+            return;
+        }
+        this.moveTo(this.selected, to);
+    }
+
     rows(): EditorRow[] {
-        return this.player.currentViews.map((v, i) => [String(i + 1), `${Math.round(v.x)}, ${Math.round(v.y)}`,
+        const route = this.routeIndices();
+        const events = this.eventIndices();
+        const label = (i: number): string => route.includes(i) ? String(route.indexOf(i) + 1) : `E${events.indexOf(i) + 1}`;
+        return this.player.currentViews.map((v, i) => [label(i), `${Math.round(v.x)}, ${Math.round(v.y)}`,
             String(v.rotation), String(v.zoom), `${v.hold} s`,
             `${Math.round(this.player.panOf(v) * 100)}%`,
             v.manual ? "you" : v.cue || v.animation !== undefined || v.show ? "event" : "auto"]);
@@ -948,7 +1031,7 @@ export class Editor {
 
     holdText(): string {
         const view = this.player.currentViews[this.selected];
-        return view ? `Hold view ${this.selected + 1}: ${view.hold} s` : "Hold: select a view";
+        return view ? `Hold view ${this.labelOf(this.selected)}: ${view.hold} s` : "Hold: select a view";
     }
 
     panText(): string {

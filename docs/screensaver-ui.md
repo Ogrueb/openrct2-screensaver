@@ -229,6 +229,16 @@ The panel became three panes (round 8 of the mockups accepted, built the same da
   Edits around event views keep the visit's cut-in record: played and pending cut-ins are tracked by their
   trigger, not their row (`Player.remapCues`), so an insert or delete above one neither replays nor skips it. The wheel and the thin scroll bar (thumb drag, track click) scroll past ten rows. The status
   and help lines went (the toolbox's hint and the box's header say it).
+- **Event list** (owner, 2026-11-10), under the route list in the views pane, folded away when the park has
+  none: the timed event views (cut-ins on the park's clock, car cues, shows, cued animations: `isPinned`)
+  apart from the route, as their ordering doesn't follow the route's rules. The route list holds the rest,
+  fixed animation stops included (they play in their place), numbered 1..N along the route; events are
+  E1, E2, ... in the order they play (cut-ins at their tick less the lead, the rest after the route).
+  Columns: kind (clock, train, show, animation), name, trigger ("at 1:00, every 2:00", "a car of ride 3"),
+  hold, and Plays ("in 0:42" counting down on the park's clock, "played" for a one-off cut-in done this
+  visit, "after view N" for the rest). No drag handles; a click selects, and the lock applies as above. A
+  route row dragged (or Ctrl+Up/Down) moves among the route views only. The map numbers events E1, E2 too
+  and draws pan lines along the route only.
 - **Toolbox, bottom left.** The **Frame | Map** switch on top (Map olive while on, "M" beside it), a
   one-line hint for the mode, then icon buttons under small labels: VIEW (add, set to camera, delete),
   CAMERA (rotate left and right, zoom in and out), EVENTS (the lock: sparkles over a padlock, usable on the
