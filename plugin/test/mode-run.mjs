@@ -574,6 +574,7 @@ assert.ok(scene.get("rcts.bar.titles.icon").src.includes("titles-off"), "on -> o
         mouse("move", fx, fy); mouse("down", fx, fy); mouse("up", fx, fy);
         assert.ok(ed("park.0") && ed("park.2"), "a click opens the park list");
         assert.ok(ed("field.open")?.border, "the open field has an accent border");
+        assert.ok(ed("parks.open")?.border, "and so does its list");
         assert.ok(ed("field.mark").src.includes("/fold-open-"), "and its mark points down");
         assert.equal(ed("parks.head").text, "Playlist order", "as the playlist's order");
         dump("parks");
@@ -600,7 +601,9 @@ assert.ok(scene.get("rcts.bar.titles.icon").src.includes("titles-off"), "on -> o
         mouse("move", fx, fy); mouse("down", fx, fy);
         now += 500;
         const q = ed("park.2");
-        mouse("move", q.x + 60, q.y + 8); mouse("up", q.x + 60, q.y + 8);
+        mouse("move", q.x + 60, q.y + 8);
+        assert.equal(ed("park.2").fill, "#a8963ac0", "held, the park under the mouse is gold");
+        mouse("up", q.x + 60, q.y + 8);
         assert.equal(ed("park.0"), undefined, "the held list closes on release");
         tick(30);
         assert.equal(ed("text.park").text, playlist.parks[0].name, "on the park released on");
