@@ -153,11 +153,15 @@ element (a small patch in the mode group). Stages, one PR each:
 1. Frame mode and undo. **Done 2026-11-09**; the Fit height button gave way to setting the height
    by itself on 2026-11-10 (owner's test: no visible effect) (`docs/screensaver-ui.md` "Live editing"; tests in
    `plugin/test/editor-unit.mjs` and `mode-run.mjs`, which now also runs on a small fixture playlist).
-2. Map mode: boxes, other-angle markers, drag, Shift+wheel zoom, right-click add, double-click to frame;
-   a perf-log run while panning in Map mode (the overlay unites changes into one dirty rect, so moving
-   boxes redraw the whole window).
-3. The `line` overlay element and pan lines.
-4. Event views (locked boxes with labels) and requirement 6.
+2. Map mode: boxes, other-angle markers, drag, a corner handle for zoom, right-click add, double-click
+   to frame. **Done 2026-11-10** (built on without a test round, owner's call), on M rather than Tab
+   (OpenRCT2 binds Tab to its map window) and with the corner handle instead of Shift+wheel (mouse events
+   carry no modifier keys). Still to do: a perf-log run while panning in Map mode (the overlay unites
+   changes into one dirty rect, so moving boxes redraw the whole window).
+3. Pan lines. **Done 2026-11-10** as dotted lines from overlay rects (no engine change); the `line`
+   element waits for the perf run.
+4. Event views (locked boxes with labels, an unlock button): **done 2026-11-10**. Requirement 6 waits for
+   the owner's two-park trial.
 
 ## 3. Weather and day/night in the generator (low priority)
 

@@ -232,8 +232,34 @@ panel and the bar, edits the selected view directly.
 - The arrow keys, Rotate and Zoom buttons still move only the camera (then Add view or Set to camera).
 - With the settings panel open, a click on the park closes it, as before.
 
-Next stages (not built): the box map (Tab: every view as a box on a wider camera, drag boxes, pan
-lines; needs an overlay `line` element), then event views and the drawing page decision.
+### The map (stages 2-4 of the live editor, 2026-11-10; `plugin/src/ui/view-map.ts`)
+
+M (or the panel's **Map** button) steps the camera two levels out from the selected view and draws every
+view of the park on the overlay; M again, or a double click on a box, frames the selected view again.
+Play closes the map (it moves the camera through the views).
+
+- **Boxes:** a view at the camera's angle is the box its window covers at its zoom (in the current
+  window, as it plays), with its number at the top left; a view at another angle is a numbered marker at
+  its spot. Colours as on the drawing page: generated views lilac, hand-set blue, event views amber, the
+  selected one orange and thicker.
+- **Pan lines:** from each view to the next and from the last back to the first, dotted on the overlay
+  (it draws no lines): dense yellow dots for a pan, sparse cyan ones for a cut, clipped to the window.
+- **Mouse:** a drag on a box moves its view on the plane at its height (saved on release, the camera
+  stays); a box wider or taller than half the window (an overview) is held by a 24 px band along its edge,
+  so a press inside it pans. The selected box's corner handle changes its zoom by whole levels (the box
+  snaps). A drag on empty park pans, the wheel zooms the camera, a right click on empty park adds a view
+  there (after the selected one, at its zoom, at the camera's angle, at the height of what is under the
+  cursor), a right click on a box selects it. Clicking a row in the list centres the map on that view
+  (turning to its angle).
+- **Panel buttons on the map:** Add view adds at the screen's centre, Set to camera moves the selected
+  view there (keeping its zoom); Rotate and Zoom move the camera.
+- **Event views** (a cue, an animation or a show) are labeled "event" and locked: a click selects them, a
+  drag pans. The panel's **Event views: locked/unlocked** button lets them be dragged.
+- Every map change goes through the same edits and undo as the rest of the editor.
+
+Left for later: the overlay redraws the whole window while boxes move (the engine unites changes into one
+dirty rect); a perf-log run while panning on the map decides whether an engine `line` element or
+per-element dirty rects are worth a patch.
 
 ## Widget kit (`plugin/src/ui/kit.ts`)
 

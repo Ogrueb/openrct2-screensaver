@@ -8,21 +8,28 @@ import { EDITOR_COLUMNS } from "../editor";
 import type { MouseEvent, Overlay, ScreensaverApi } from "../mode";
 import { Layer, Rect, Scene, backing, button, contains, label, measure } from "./kit";
 import { EDITOR, THEME, TIMING, Z } from "./theme";
+import { ViewMap } from "./view-map";
 
 type HitId =
     | "close" | "prevPark" | "nextPark" | `row.${number}` | "scrollUp" | "scrollDown"
     | "add" | "update" | "delete" | "up" | "down" | "revert" | "undo" | "redo"
     | "holdLess" | "holdMore" | "panLess" | "panMore" | "turn" | "inertia"
-    | "rotl" | "rotr" | "zoomin" | "zoomout" | "play";
+    | "rotl" | "rotr" | "zoomin" | "zoomout" | "play" | "map" | "lock";
 
 const PAN_SHARE_STEP = 0.1;
 const HELP = [
     "Drag the park: moves the selected view. Wheel: zooms it.",
     "Arrows pan the camera (Shift: faster). Ctrl+Z undoes. E closes.",
 ];
+const MAP_HELP = [
+    "Drag a box: moves it; its corner: zooms it. Drag the park: pans.",
+    "Right-click: adds a view. Double-click a box: frames it. M closes.",
+];
 
 export class EditorPanel implements EditorView {
+    readonly supportsMap = true;
     private readonly layer: Layer;
+    private readonly map: ViewMap;
     private editor: Editor | undefined;
     private mouse = { x: -1, y: -1 };
     private downOn: HitId | undefined;
@@ -37,6 +44,7 @@ export class EditorPanel implements EditorView {
 
     constructor(private readonly mode: ScreensaverApi) {
         this.layer = new Layer(mode.overlay, "rcts.ed.");
+        this.map = new ViewMap(mode.overlay);
     }
 
     get isOpen(): boolean {
@@ -56,6 +64,7 @@ export class EditorPanel implements EditorView {
         this.downOn = undefined;
         this.drag = undefined;
         this.layer.clear();
+        this.map.clear();
     }
 
     refresh(): void {
@@ -64,7 +73,7 @@ export class EditorPanel implements EditorView {
 
     /** Handles a mouse event over the panel (or a press that started on it); false lets it through. */
     onMouse(e: MouseEvent): boolean {
-        if (!this.editor || this.drag) {
+        if (!this.editor || this.drag || this.map.dragging) {
             return false; // a drag on the park keeps the mouse over the panel too
         }
         if (e.type !== "wheel") {
@@ -95,6 +104,9 @@ export class EditorPanel implements EditorView {
         if (!editor) {
             return false;
         }
+        if (editor.mapMode || this.map.dragging) {
+            return this.map.onMouse(e, editor);
+        }
         if (e.type === "down" && e.button === 0) {
             this.drag = { x: e.x, y: e.y };
             editor.dragStart();
@@ -119,7 +131,7 @@ export class EditorPanel implements EditorView {
 
     /** A drag on the park is going on (every mouse event is the park's until it ends). */
     get dragging(): boolean {
-        return this.drag !== undefined;
+        return this.drag !== undefined || this.map.dragging;
     }
 
     private hit(): HitId | undefined {
@@ -172,6 +184,8 @@ export class EditorPanel implements EditorView {
             case "zoomin": e.zoom(-1); break;
             case "zoomout": e.zoom(1); break;
             case "play": e.togglePreview(); break;
+            case "map": e.toggleMap(); break;
+            case "lock": e.toggleEventLock(); break;
         }
     }
 
@@ -246,6 +260,7 @@ export class EditorPanel implements EditorView {
         this.boxes.set("inertia", { x: x0 + inner - half, y, width: half, height: s.buttonHeight });
         y += s.buttonHeight + s.gap;
         buttonRow(["rotl", "rotr", "zoomin", "zoomout"]);
+        buttonRow(["map", "lock"]);
         // Undo and redo, then Play taking the rest of the row.
         const small = Math.round((inner - 2 * s.gap) / 6);
         this.boxes.set("undo", { x: x0, y, width: small, height: s.buttonHeight });
@@ -256,7 +271,7 @@ export class EditorPanel implements EditorView {
         const status = e.status();
         this.texts.set("status", { text: status.text, warning: status.warning, r: { x: x0, y, width: inner, height: s.lineHeight } });
         y += s.lineHeight;
-        for (const [i, help] of HELP.entries()) {
+        for (const [i, help] of (e.mapMode ? MAP_HELP : HELP).entries()) {
             this.texts.set(`help${i}`, { text: help, r: { x: x0, y, width: inner, height: s.lineHeight } });
             y += s.lineHeight;
         }
@@ -326,6 +341,8 @@ export class EditorPanel implements EditorView {
         textButton("rotr", "Rotate right");
         textButton("zoomin", "Zoom in");
         textButton("zoomout", "Zoom out");
+        textButton("map", e.mapMode ? "Map (M): on" : "Map (M): off", e.mapMode);
+        textButton("lock", e.eventsLocked ? "Event views: locked" : "Event views: unlocked", !e.eventsLocked);
         textButton("undo", "Undo");
         textButton("redo", "Redo");
         textButton("play", e.isPlaying ? "Play: on (moving the camera stops it)" : "Play: off", e.isPlaying);
@@ -339,6 +356,11 @@ export class EditorPanel implements EditorView {
             }
         }
         this.layer.render(scene);
+        if (e.mapMode) {
+            this.map.render(e);
+        } else {
+            this.map.clear();
+        }
     }
 }
 

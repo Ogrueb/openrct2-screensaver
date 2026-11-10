@@ -236,6 +236,7 @@ assert.ok(scene.get("rcts.bar.titles.icon").src.includes("titles-off"), "on -> o
     const edClick = id => { const e = ed(id); const x = e.x + e.width / 2, y = e.y + e.height / 2; mouse("move", x, y); mouse("down", x, y); mouse("up", x, y); };
     click("edit");
     assert.ok(ed("frame"), "the edit button opens the editor panel");
+    assert.ok(ed("frame").y + ed("frame").height < 1080 - 120, "the panel fits above the bar in a 1080 window");
     assert.ok(scene.get("rcts.bar.edit.icon").src.includes("/edit-"), "edit icon");
     const rows = [...scene.keys()].filter(k => /^rcts\.ed\.cell\.\d+\.0$/.test(k)).length;
     assert.ok(rows > 0, "the park's views are listed");
@@ -272,6 +273,7 @@ assert.ok(scene.get("rcts.bar.titles.icon").src.includes("titles-off"), "on -> o
         "no counter text over the list");
     // Live editing: a drag on the park moves the camera, and the selected view goes where it ends.
     const edits = () => Object.values(saved["RCTScreensaver.edits"] ?? {})[0]?.views ?? [];
+    const editsCount = () => edits().length;
     edClick("scrollUp");
     edClick("row.0");
     const tile = () => ed("cell.0.1").text;
@@ -320,6 +322,64 @@ assert.ok(scene.get("rcts.bar.titles.icon").src.includes("titles-off"), "on -> o
     // Undo goes back through every change to the playlist's own views.
     for (let i = 0; i < 40; i++) shortcuts["rctscreensaver.undo"]();
     assert.equal(ed("cell.0.6").text, "auto", "undoing every change brings the playlist's views back");
+    // The map (M): the camera steps out two levels, every view at its angle a box, the rest markers.
+    {
+        const map = id => scene.get("rcts.map." + id);
+        const mapKeys = prefix => [...scene.keys()].filter(k => k.startsWith("rcts.map." + prefix));
+        edClick("row.0");
+        const zoom0 = Number(ed("cell.0.3").text);
+        shortcuts["rctscreensaver.map"]();
+        assert.equal(viewport.zoom, Math.min(3, zoom0 + 2), "the map steps out two levels");
+        assert.ok(ed("map.text").text.endsWith("on"), "the Map button shows it on");
+        const box = map("box.0");
+        assert.ok(box, "the selected view is a box");
+        assert.ok(Math.abs(box.x + box.width / 2 - 960) <= 1 && Math.abs(box.y + box.height / 2 - 540) <= 1,
+            "centred, as the camera is on it");
+        assert.ok(Math.abs(box.width - 1920 * 2 ** (zoom0 - viewport.zoom)) <= 1, "the box is the view's window at its zoom");
+        assert.ok(mapKeys("mark.").length + mapKeys("box.").length >= 2, "the other views are boxes or markers");
+        assert.ok(mapKeys("line.").length > 0, "pan lines between the views");
+        assert.ok(map("handle"), "the selected box has a zoom handle");
+        // Drag the box: the view moves, the camera stays.
+        const before = tile();
+        const cam = JSON.stringify(viewport.centre);
+        mouse("move", 960, 540); mouse("down", 960, 540); mouse("move", 1010, 560); mouse("move", 1060, 540);
+        assert.ok(Math.abs(map("box.0").x + map("box.0").width / 2 - 1060) <= 1, "the box follows the mouse");
+        assert.equal(tile(), before, "saved only on release");
+        mouse("up", 1060, 540);
+        assert.notEqual(tile(), before, "the view moved");
+        assert.equal(JSON.stringify(viewport.centre), cam, "the camera stays on the map");
+        assert.equal(ed("cell.0.6").text, "you", "placed by hand");
+        // The corner handle: dragged out to twice the size, the view zooms out a level.
+        const h = map("handle");
+        const b = map("box.0");
+        const hx = h.x + h.width / 2, hy = h.y + h.height / 2;
+        mouse("move", hx, hy); mouse("down", hx, hy);
+        mouse("move", b.x + b.width / 2 + b.width, b.y + b.height / 2 + b.height);
+        mouse("up", b.x + b.width / 2 + b.width, b.y + b.height / 2 + b.height);
+        assert.equal(Number(ed("cell.0.3").text), Math.min(3, zoom0 + 1), "the handle zooms the view out a level");
+        // A drag on empty park pans the camera.
+        mouse("move", 1800, 150); mouse("down", 1800, 150); mouse("move", 1700, 150); mouse("up", 1700, 150);
+        assert.notEqual(JSON.stringify(viewport.centre), cam, "a drag on empty park pans");
+        // A right click on empty park adds a view there.
+        const count = editsCount();
+        mouse("move", 1800, 150); mouse("down", 1800, 150, 1); mouse("up", 1800, 150, 1);
+        assert.equal(editsCount(), count + 1, "a right click adds a view");
+        assert.ok(map("box.1"), "the new view is a box at the camera's angle");
+        shortcuts["rctscreensaver.undo"]();
+        assert.equal(editsCount(), count, "undone on the map too");
+        // Double-click a box: the map closes on that view.
+        const b0 = map("box.0");
+        const bx = b0.x + b0.width - 10, by = b0.y + b0.height / 2; // the right edge holds even a big box
+        mouse("move", bx, by); mouse("down", bx, by); mouse("up", bx, by);
+        now += 100;
+        mouse("down", bx, by); mouse("up", bx, by);
+        assert.equal(mapKeys("").length, 0, "a double click closes the map");
+        assert.equal(viewport.zoom, Number(ed("cell.0.3").text), "the camera frames the view again");
+        shortcuts["rctscreensaver.map"]();
+        assert.ok(mapKeys("box.").length > 0, "M opens the map again");
+        shortcuts["rctscreensaver.map"]();
+        assert.equal(mapKeys("").length, 0, "and closes it");
+    }
     edClick("close");
     assert.equal(ed("frame"), undefined, "the close button closes the panel");
     // The mouse on the park is the bar's again once the editor is closed.
