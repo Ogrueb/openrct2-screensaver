@@ -39,6 +39,15 @@ export const THEME = {
     editorBacking: "#0a140ee6",
     editorList: "#0d1d13f0",
     warning: "#ff7a6a", // a status that needs action (the editor's "re-run --install")
+    // An inactive button (owner, 2026-11-10: flat, pressed in and gray), its text and its icon's opacity.
+    faceOff: "#2a2e2c80",
+    textOff: "#ffffff5c",
+    iconOff: 0.35,
+    textDim: "#ffffffa0", // key hints, section labels, times
+    textGood: "#8fd6a0", // the editor's "edited · saved in the game"
+    dragLine: "#ff6a1a", // where a dragged row goes (the mockups' orange)
+    rowDimmed: "#00000099", // over a row being dragged
+    dragGhost: "#3f7a51f5", // the dragged row itself, lifted (nearly opaque, over the rows it passes)
     tipPad: 6,
 };
 
@@ -83,23 +92,52 @@ export const FLYOUT = {
     previewAuthor: "Builder",
 };
 
-/** The view editor panel at the window's top left, game pixels. */
+/** The view editor's panes (docs/screensaver-ui.md, "Editor"; owner, 2026-11-10), game pixels: the views
+ *  pane at the window's top left, the toolbox at its bottom left, the restore points and Playlist
+ *  properties at its top right. */
 export const EDITOR = {
-    x: 16,
+    x: 16, // every pane's distance from the window's edges
     y: 16,
-    width: 540,
-    pad: 10,
-    gap: 4,
-    titleHeight: 30,
+    width: 540, // the views pane
+    pad: 8,
+    gap: 3,
+    titleHeight: 32,
     titleSize: 17,
     rowHeight: 24,
     visibleRows: 10,
-    buttonHeight: 28,
     textSize: 14,
-    lineHeight: 20,
-    sectionGap: 16, // between the hold and pan controls on their shared line
     cellMargin: 14, // added to each list column's widest text
-    scrollBar: 24, // the list's scroll bar, when it has more than visibleRows views
+    scrollBar: 12, // a list's scroll bar, when it overflows
+    grip: 18, // the drag handle column of the views and parks
+    parkRow: 26, // the park dropdown's rows
+    dragStart: 5, // pixels the mouse moves before a press on a row drags it
+    holdOpen: 300, // ms: a press on the park field held this long opens the list until release
+    // The toolbox
+    tool: 38, // a tool button's side
+    toolIcon: 20, // its icon (tools/mkicons.py GAME_SIZES)
+    groupGap: 10,
+    labelSize: 11, // VIEW, CAMERA, EVENTS, HOLD, PAN
+    labelHeight: 15,
+    switchHeight: 34, // Frame | Map
+    hintSize: 12,
+    hintHeight: 20,
+    stepValue: 58, // the hold and pan value between its - and +
+    footerGap: 14, // between redo and Reset view
+    playWidth: 96,
+    // The top-right box
+    boxWidth: 420,
+    boxRow: 28, // a restore point
+    boxRows: 3.5, // restore points shown (a half row says there are more; owner, 2026-11-10)
+    boxHead: 12, // the RESTORE POINTS line
+    boxButton: 32,
+    propRow: 30,
+    propHeader: 30,
+    segHeight: 24,
+    segPad: 10, // each side of a segment's text
+    stepButton: 26,
+    stepValueBox: 56,
+    holdStep: 0.5, // seconds per - or + of the Playlist timing holds
+    holdMax: 10,
 };
 
 /** Controls bar timings, ms. */

@@ -20,7 +20,7 @@ OUT = os.path.join(HERE, "..", "plugin", "icons")
 
 # Icon sizes in game pixels (plugin/src/ui/theme.ts: ICON_PRIMARY, ICON_SECONDARY) and the scale
 # factors drawn for; the plugin picks the nearest size drawn.
-GAME_SIZES = (24, 34)
+GAME_SIZES = (20, 24, 34)  # 20: the view editor's tool buttons (EDITOR.icon)
 SCALES = (1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4)
 SAMPLES = 4
 COLOUR = (255, 255, 255)
@@ -145,6 +145,161 @@ def pencil():
     return [("poly", body), ("poly", cap), ("poly", tip)]
 
 
+def arc(cx, cy, r, a0, a1, n=32):
+    """Points on a circle from angle a0 to a1 (degrees, clockwise on screen: y points down)."""
+    return circle(cx, cy, r, n, math.radians(a0), math.radians(a1))
+
+
+def head(tip, angle, length=5.2, half=3.6):
+    """A filled arrowhead with its tip at `tip`, pointing along `angle` (degrees, screen y down)."""
+    a = math.radians(angle)
+    ux, uy = math.cos(a), math.sin(a)
+    bx, by = tip[0] - ux * length, tip[1] - uy * length
+    return ("poly", [tip, (bx - uy * half, by + ux * half), (bx + uy * half, by - ux * half)])
+
+
+def turn_arrow(clockwise):
+    """Rotate right (clockwise) or left: three quarters of a ring with a head at its end."""
+    a0, a1 = (-200, 50) if clockwise else (20, 270)
+    pts = arc(12, 13, 7.2, a0, a1)
+    if not clockwise:
+        pts = pts[::-1]
+    end, before = pts[-1], pts[-3]
+    ang = math.degrees(math.atan2(end[1] - before[1], end[0] - before[0]))
+    return [("line", pts[:-2], 2.2), head((end[0] + math.cos(math.radians(ang)) * 2.2, end[1] + math.sin(math.radians(ang)) * 2.2), ang)]
+
+
+def undo_arrow():
+    """Undo: a hook arrow pointing left, curving back down on the right."""
+    pts = [(9, 9)] + arc(13.5, 13.5, 4.5, -90, 90)[1:] + [(7, 18)]
+    return [("line", pts, 2.2), head((3.5, 9), 180, 5.0, 3.8)]
+
+
+def magnifier(plus):
+    shapes = [("line", circle(10.5, 10.5, 6.2), 2.2), ("line", [(15, 15), (20.5, 20.5)], 3.0),
+              ("line", [(7.6, 10.5), (13.4, 10.5)], 2.0)]
+    if plus:
+        shapes.append(("line", [(10.5, 7.6), (10.5, 13.4)], 2.0))
+    return shapes
+
+
+def padlock(open_=False):
+    shackle = arc(12, 12, 4.2, 180, 360) if not open_ else arc(17.5, 11, 4.2, 180, 360)
+    body = [(5.5, 12), (18.5, 12), (18.5, 21), (5.5, 21), (5.5, 12),
+            (11, 15), (13, 15), (13, 18), (11, 18), (11, 15)]
+    if open_:
+        legs = [(13.3, 12)] + shackle + [(21.7, 13)]
+    else:
+        legs = [(7.8, 12)] + shackle + [(16.2, 12)]
+    return [("poly", body), ("line", legs, 2.0)]
+
+
+def sparkle(cx, cy, r):
+    """A four-pointed star."""
+    w = r * 0.28
+    return ("poly", [(cx, cy - r), (cx + w, cy - w), (cx + r, cy), (cx + w, cy + w),
+                     (cx, cy + r), (cx - w, cy + w), (cx - r, cy), (cx - w, cy - w)])
+
+
+def events_lock(open_=False):
+    """Event views locked: sparkles over a padlock (owner, 2026-11-10); open: unlocked."""
+    shapes = []
+    for shape in padlock(open_):
+        if shape[0] == "poly":
+            shapes.append(("poly", [(x * 0.82 + 3.6, y * 0.82 + 4.2) for x, y in shape[1]]))
+        else:
+            shapes.append(("line", [(x * 0.82 + 3.6, y * 0.82 + 4.2) for x, y in shape[1]], shape[2]))
+    return shapes + [sparkle(5.2, 5.0, 3.6), sparkle(19.5, 4.2, 2.6), sparkle(12.0, 2.6, 1.9)]
+
+
+def trash():
+    lid = ("poly", [(4.5, 5.5), (19.5, 5.5), (19.5, 7.5), (4.5, 7.5)])
+    knob = ("poly", [(9.5, 3), (14.5, 3), (14.5, 5.5), (9.5, 5.5)])
+    can = ("poly", [(6, 8.8), (18, 8.8), (17, 21), (7, 21), (6, 8.8),
+                    (9, 11), (9.3, 19), (10.7, 19), (10.7, 11), (9, 11),
+                    (13.3, 11), (13.3, 19), (14.7, 19), (15, 11), (13.3, 11)])
+    return [lid, knob, can]
+
+
+def target():
+    """Set to the camera: a viewfinder's corners round a dot."""
+    c = []
+    for sx, sy in ((1, 1), (-1, 1), (1, -1), (-1, -1)):
+        ox, oy = 12 - sx * 8.5, 12 - sy * 8.5
+        c.append(("line", [(ox, oy + sy * 4.5), (ox, oy), (ox + sx * 4.5, oy)], 2.0))
+    return c + [("poly", circle(12, 12, 3.0))]
+
+
+def frame_icon():
+    """The Frame switch: a picture's frame (a screen) with corner ticks."""
+    return [("poly", [(3, 5), (21, 5), (21, 19), (3, 19), (3, 5), (5, 7), (5, 17), (19, 17), (19, 7), (5, 7)]),
+            ("line", [(8, 12), (16, 12)], 1.6), ("line", [(12, 9.5), (12, 14.5)], 1.6)]
+
+
+def map_icon():
+    """The Map switch: a map folded in three."""
+    return [("line", [(3, 6), (9, 3.5), (15, 6), (21, 3.5), (21, 18), (15, 20.5), (9, 18), (3, 20.5), (3, 6)], 1.9),
+            ("line", [(9, 3.5), (9, 18)], 1.6), ("line", [(15, 6), (15, 20.5)], 1.6)]
+
+
+def pin():
+    """Keep the editor shown: a push pin."""
+    return [("poly", [(8, 3), (16, 3), (16, 4.8), (14.6, 4.8), (14.6, 10.5), (18, 14), (18, 15.5),
+                      (6, 15.5), (6, 14), (9.4, 10.5), (9.4, 4.8), (8, 4.8)]),
+            ("line", [(12, 15.5), (12, 21.5)], 1.8)]
+
+
+def bookmark_plus():
+    outline = [(6, 3), (18, 3), (18, 21), (12, 16.5), (6, 21), (6, 3)]
+    return [("line", outline, 2.0), ("line", [(9, 9), (15, 9)], 2.0), ("line", [(12, 6), (12, 12)], 2.0)]
+
+
+def clock_back():
+    """Restore: a clock with an arrow running back round it."""
+    ring = arc(12.5, 12, 8, -150, 180)
+    return [("line", ring, 2.0), head((4.0, 9.0), 120, 4.6, 3.4),
+            ("line", [(12.5, 7.5), (12.5, 12.5), (16, 14.5)], 2.0)]
+
+
+def copy_icon():
+    return [("line", [(9, 9), (20, 9), (20, 20), (9, 20), (9, 9)], 2.0),
+            ("line", [(5.5, 15.5), (4, 15.5), (4, 4), (15.5, 4), (15.5, 5.5)], 2.0)]
+
+
+def paste_icon():
+    return [("line", [(8, 5), (5, 5), (5, 21.5), (19, 21.5), (19, 5), (16, 5)], 2.0),
+            ("poly", [(8.5, 3), (15.5, 3), (15.5, 7), (8.5, 7)]),
+            ("line", [(8.5, 11.5), (15.5, 11.5)], 1.6), ("line", [(8.5, 15), (15.5, 15)], 1.6),
+            ("line", [(8.5, 18.5), (13, 18.5)], 1.6)]
+
+
+def floppy():
+    return [("poly", [(3.5, 3.5), (17, 3.5), (20.5, 7), (20.5, 20.5), (3.5, 20.5), (3.5, 3.5),
+                      (5.5, 5.5), (5.5, 18.5), (18.5, 18.5), (18.5, 7.8), (16.2, 5.5), (5.5, 5.5)]),
+            ("poly", [(7.5, 5.5), (15, 5.5), (15, 10), (7.5, 10)]),
+            ("poly", [(7.5, 13), (16.5, 13), (16.5, 18.5), (7.5, 18.5), (7.5, 13), (9.3, 14.6), (9.3, 18.5), (14.7, 18.5), (14.7, 14.6), (9.3, 14.6)])]
+
+
+def tray(up):
+    shapes = [("line", [(3.5, 14), (3.5, 20), (20.5, 20), (20.5, 14)], 2.0)]
+    if up:
+        shapes += [("line", [(12, 16), (12, 7)], 2.0), head((12, 2.8), -90, 5.0, 4.0)]
+    else:
+        shapes += [("line", [(12, 3), (12, 12)], 2.0), head((12, 16.6), 90, 5.0, 4.0)]
+    return shapes
+
+
+def reset_view():
+    """Reset the selected view: a full turn back to a dot (the view's own spot)."""
+    ring = arc(12, 12, 7.8, -60, 250)[::-1]
+    return [("line", ring, 2.2), head((17.6, 3.6), -20, 5.0, 3.8), ("poly", circle(12, 12, 2.2))]
+
+
+CLOSE = [("line", [(6, 6), (18, 18)], 2.6), ("line", [(18, 6), (6, 18)], 2.6)]
+PLUS = [("line", [(12, 4.5), (12, 19.5)], 2.6), ("line", [(4.5, 12), (19.5, 12)], 2.6)]
+MINUS = [("line", [(4.5, 12), (19.5, 12)], 2.6)]
+
+
 ICONS = {
     "prev-park": PREV_PARK,
     "next-park": mirror(PREV_PARK),
@@ -162,6 +317,31 @@ ICONS = {
     "day": sun(),
     "night": moon(),
     "day-night": cycle(),
+    # The view editor (docs/screensaver-ui.md, "Editor"; owner, 2026-11-10)
+    "close": CLOSE,
+    "add": PLUS,
+    "less": MINUS,
+    "set-camera": target(),
+    "delete": trash(),
+    "rotate-left": mirror(turn_arrow(True)),
+    "rotate-right": turn_arrow(True),
+    "zoom-in": magnifier(True),
+    "zoom-out": magnifier(False),
+    "events-locked": events_lock(),
+    "events-unlocked": events_lock(True),
+    "undo": undo_arrow(),
+    "redo": mirror(undo_arrow()),
+    "reset-view": reset_view(),
+    "pin": pin(),
+    "frame": frame_icon(),
+    "map": map_icon(),
+    "checkpoint": bookmark_plus(),
+    "restore": clock_back(),
+    "copy": copy_icon(),
+    "paste": paste_icon(),
+    "save": floppy(),
+    "import": tray(False),
+    "export": tray(True),
 }
 
 
@@ -180,6 +360,8 @@ def near_line(pts, w, x, y):
     r2 = (w / 2) ** 2
     for (x1, y1), (x2, y2) in zip(pts, pts[1:]):
         dx, dy = x2 - x1, y2 - y1
+        if dx == 0 and dy == 0:
+            dx = 1e-9  # a repeated point: the segment is a dot
         t = max(0.0, min(1.0, ((x - x1) * dx + (y - y1) * dy) / (dx * dx + dy * dy)))
         px, py = x1 + t * dx - x, y1 + t * dy - y
         if px * px + py * py <= r2:

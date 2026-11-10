@@ -7,7 +7,10 @@ import { fitViews, toScreen } from "./fit";
 import { measureLoaded } from "./measure";
 import { Pan, PanChanges, Pose, panTolerance } from "./pan";
 import { DESIGN_SCREEN, NO_SCALING, Scaling, Screen, scaleTolerance, scaleViews, scalingFor, screenOf } from "./scale";
-import { Cue, Edits, ParkEntry, Playlist, Settings, View, Visits, isPinned, placeCuts, loadEdits, loadVisits, saveEdits, saveSettings, saveVisits } from "./storage";
+import {
+    Cue, Edits, ParkEntry, Playlist, PlaylistProps, Settings, View, Visits, isPinned, placeCuts, loadEdits, loadPlaylistProps, loadVisits,
+    saveEdits, savePlaylistProps, saveSettings, saveVisits,
+} from "./storage";
 
 const MIN_SPEED = 1;
 const MAX_SPEED = 4; // 8 is only accepted with OpenRCT2's debugging tools enabled
@@ -68,6 +71,8 @@ export class Player {
     private previewing = false; // the editor plays the park's views (with pans), looping in the park
     private running = false;
     private readonly edits: Edits = loadEdits();
+    private props: PlaylistProps; // the view editor's Playlist properties in force (maybe unsaved)
+    private savedProps: PlaylistProps; // and as saved in the game's storage
     private scalingLogged = ""; // camera log: the window and scaling last logged
     // The pan from the current view to the next, once it has been planned
     private pan: Pan | undefined;
@@ -104,6 +109,26 @@ export class Player {
         // fade) a park change cuts.
         this.dip = !!overlay && settings.fadeMs > 0 && backgroundLoading(sequence) && canHoldSwitch(sequence);
         this.cover = new Cover(settings.fadeMs, this.dip ? overlay : undefined);
+        this.savedProps = loadPlaylistProps(playlist.sequence);
+        this.props = { ...this.savedProps };
+        this.noteInstalledMusic(settings.titleMusic);
+        this.applyPresentation();
+    }
+
+    /** The editor's Title music and Show titles, where set, over the viewer's settings (the mode's
+     *  title music takes effect when the caller configures the mode). */
+    private applyPresentation(): void {
+        if (this.props.titleMusic !== undefined) {
+            this.settings.titleMusic = this.props.titleMusic;
+        }
+        if (this.props.titles !== undefined) {
+            this.settings.titlesOverride = this.props.titles ?? undefined;
+        }
+    }
+
+    /** The settings playback runs with (shared with the controls bar). */
+    get liveSettings(): Settings {
+        return this.settings;
     }
 
     /** True while the view is held (Space, or the controls bar's hold button). */
@@ -131,7 +156,7 @@ export class Player {
         this.running = true;
         this.holding = false;
         this.settings.speed = Math.min(MAX_SPEED, Math.max(MIN_SPEED, this.settings.speed));
-        this.parkOrder = range(this.playlist.parks.length);
+        this.parkOrder = this.orderFromProps();
         this.unplayed.clear();
         this.history = [];
         if (!this.sequence.isPlaying) {
@@ -344,7 +369,7 @@ export class Player {
         }
         this.unplayed.delete(this.parkPos);
         if (this.unplayed.size === 0) {
-            this.unplayed = new Set(this.parkOrder.filter(i => i !== this.parkPos));
+            this.unplayed = new Set(range(this.parkOrder.length).filter(p => p !== this.parkPos));
         }
         const pool = [...this.unplayed];
         this.upNext = pool[context.getRandom(0, pool.length)];
@@ -448,6 +473,170 @@ export class Player {
 
     get parkNames(): string[] {
         return this.playlist.parks.map(p => p.name);
+    }
+
+    /** Playlist indices of the parks in play order (the view editor's Playlist order). */
+    get playOrder(): number[] {
+        return [...this.parkOrder];
+    }
+
+    /** How many views each park has (by playlist index): its edits', else the playlist's. */
+    viewCountOf(index: number): number {
+        if (index === this.parkIndex && !this.loadingPark) {
+            return this.views.length;
+        }
+        const park = this.playlist.parks[index];
+        const edit = park?.key !== undefined ? this.edits[park.key] : undefined;
+        return edit?.views?.length ?? (edit?.reset ? park.defaultViews?.length : undefined) ?? park?.views.length ?? 0;
+    }
+
+    /** The play order from the editor's saved order (parks it does not name keep theirs, after it). */
+    private orderFromProps(): number[] {
+        const parks = this.playlist.parks;
+        const order = this.props.order ?? [];
+        const rank = (i: number) => {
+            const r = order.indexOf(parks[i].key ?? parks[i].fileName);
+            return r < 0 ? order.length + i : r;
+        };
+        return range(parks.length).sort((a, b) => rank(a) - rank(b));
+    }
+
+    /** Moves a park in the play order (positions), keeping the park on screen; saved at once. */
+    moveParkInOrder(from: number, to: number): void {
+        const n = this.parkOrder.length;
+        if (from === to || from < 0 || to < 0 || from >= n || to >= n) {
+            return;
+        }
+        const current = this.parkOrder[this.parkPos];
+        const [moved] = this.parkOrder.splice(from, 1);
+        this.parkOrder.splice(to, 0, moved);
+        this.parkPos = this.parkOrder.indexOf(current);
+        this.unplayed.clear(); // shuffle's round starts again from here
+        this.history = [];
+        this.pickNext();
+        const order = this.parkOrder.map(i => this.playlist.parks[i].key ?? this.playlist.parks[i].fileName);
+        this.props.order = order;
+        this.savedProps.order = order;
+        savePlaylistProps(this.playlist.sequence, this.savedProps);
+    }
+
+    get sequenceName(): string {
+        return this.playlist.sequence;
+    }
+
+    /** The playlist's own values for the editor's Playlist properties, as built. */
+    get playlistDefaults(): Required<Omit<PlaylistProps, "order">> {
+        const p = this.playlist;
+        return {
+            inertia: p.inertia ?? this.settings.inertia,
+            panChanges: p.panChanges ?? this.settings.panChanges,
+            changeHold: p.changeHold ?? this.settings.changeHold,
+            arriveHold: p.arriveHold ?? this.settings.arriveHold,
+            returnHold: p.returnHold ?? this.settings.returnHold,
+            titleMusic: this.installedMusic,
+            titles: p.titles ?? null,
+        };
+    }
+
+    private installedMusic: "ride" | "theme" | "keep" = "keep";
+
+    /** The title music the install set (settings.titleMusic as playback started), for the editor. */
+    noteInstalledMusic(music: Settings["titleMusic"]): void {
+        this.installedMusic = music === "ride" || music === "theme" ? music : "keep";
+    }
+
+    /** The Playlist properties in force: the editor's over the playlist's own. */
+    get playlistProps(): Required<Omit<PlaylistProps, "order">> {
+        const d = this.playlistDefaults;
+        const p = this.props;
+        return {
+            inertia: p.inertia ?? d.inertia, panChanges: p.panChanges ?? d.panChanges,
+            changeHold: p.changeHold ?? d.changeHold, arriveHold: p.arriveHold ?? d.arriveHold,
+            returnHold: p.returnHold ?? d.returnHold, titleMusic: p.titleMusic ?? d.titleMusic,
+            titles: p.titles !== undefined ? p.titles : d.titles,
+        };
+    }
+
+    /** Changes a Playlist property: in force at once (from the next pan), saved with savePlaylistProps. */
+    setPlaylistProp<K extends keyof PlaylistProps>(key: K, value: PlaylistProps[K]): void {
+        this.props[key] = value;
+        if (key === "titleMusic" || key === "titles") {
+            if (key === "titleMusic") {
+                this.settings.titleMusic = (value ?? this.installedMusic) as Settings["titleMusic"];
+            } else {
+                this.settings.titlesOverride = (value === undefined ? this.playlist.titles : value ?? undefined) as Settings["titlesOverride"];
+            }
+            return;
+        }
+        this.clearPan(); // planned again with the new motion
+    }
+
+    /** The Playlist properties differ from what is saved in the game's storage. */
+    get playlistPropsUnsaved(): boolean {
+        return JSON.stringify(this.props) !== JSON.stringify(this.savedProps);
+    }
+
+    savePlaylistProps(): void {
+        this.savedProps = { ...this.props };
+        savePlaylistProps(this.playlist.sequence, this.savedProps);
+        saveSettings(this.settings); // the title music applies on entering the mode from the settings
+    }
+
+    /** When the playlist was built and installed (ms since 1970), if known. */
+    get builtAt(): number | undefined {
+        return this.playlist.built;
+    }
+
+    get installedAt(): number | undefined {
+        return this.playlist.installed;
+    }
+
+    /** The current park's key (its edits, checkpoints), or undefined if it cannot be edited. */
+    get parkKey(): string | undefined {
+        return this.currentPark()?.key;
+    }
+
+    /** The current park's views were set by hand at install (its views file): "Last install" differs
+     *  from "Generated". */
+    get installedHandSet(): boolean {
+        return this.currentPark()?.handSet === true;
+    }
+
+    /** The views the park would play without the editor's edits: the playlist's own ("Generated", or
+     *  with `installed` the views as installed, hand-set ones included). */
+    baseViews(installed = false): View[] {
+        const park = this.currentPark();
+        if (!park || park.key === undefined) {
+            return [];
+        }
+        const saved = this.edits[park.key];
+        delete this.edits[park.key];
+        if (!installed && park.handSet) {
+            this.edits[park.key] = { reset: true };
+        }
+        try {
+            return this.viewsFor(park, !this.loadingPark);
+        } finally {
+            if (saved) {
+                this.edits[park.key] = saved;
+            } else {
+                delete this.edits[park.key];
+            }
+        }
+    }
+
+    /** Drops the editor's edits of the current park, back to its views as installed. */
+    restoreInstalled(): void {
+        const park = this.currentPark();
+        if (park.key === undefined || !this.edits[park.key]) {
+            return;
+        }
+        delete this.edits[park.key];
+        saveEdits(this.edits);
+        this.views = this.viewsFor(park);
+        this.viewOrder = this.makeViewOrder();
+        this.viewPos = 0;
+        this.showView(false, "revert");
     }
 
     /** Playlist index of the current park. */
@@ -627,16 +816,22 @@ export class Player {
     }
 
     panChangesOf(view: View): PanChanges {
-        return (view.panChanges ?? this.settings.panChanges) === "start" ? "start" : "end";
+        return this.changesSetting(view) === "start" ? "start" : "end";
+    }
+
+    /** Where a view's pan changes the angle and zoom: the editor's Playlist property (not on overviews:
+     *  they keep their own, owner's rule), else the view's, else the settings'. "off": such a pan cuts. */
+    private changesSetting(view: View): PanChanges | "off" {
+        return (!view.overview ? this.props.panChanges : undefined) ?? view.panChanges ?? this.settings.panChanges;
     }
 
     inertiaOf(view: View): boolean {
-        return (view.inertia ?? this.settings.inertia) === true;
+        return (this.props.inertia ?? view.inertia ?? this.settings.inertia) === true;
     }
 
     /** A pan hold in ms: the playlist's (settings UI, times its time scaling), else the plugin setting's. */
     private holdMs(key: "changeHold" | "arriveHold" | "returnHold", fallback: number): number {
-        return Math.max(0, (this.playlist[key] ?? this.settings[key] ?? fallback) * 1000);
+        return Math.max(0, (this.props[key] ?? this.playlist[key] ?? this.settings[key] ?? fallback) * 1000);
     }
 
     /** Plans the current view's pan to the next view of the park, if it gets one. */
@@ -662,6 +857,10 @@ export class Player {
         if (!view || !next || view === next || view.show || effectMs === undefined || this.panOf(view) === 0) {
             this.camLog("plan", "cut");
             return; // held still, then a cut
+        }
+        if (this.changesSetting(view) === "off" && (next.rotation !== view.rotation || next.zoom !== view.zoom)) {
+            this.camLog("plan", "cut");
+            return; // Angle and zoom change "Off": no pan that turns or zooms
         }
         let still = (1 - this.panOf(view)) * view.hold * 1000;
         const cueExtra = Math.max(0, Date.now() - this.viewStarted + effectMs - still); // still counts from the view's start

@@ -106,6 +106,7 @@ function update(): void {
     player.update();
     bar?.update();
     captions?.update();
+    editorPanel?.update();
     if (player.debug && Date.now() - lastDebug >= DEBUG_INTERVAL_MS) {
         lastDebug = Date.now();
         log(player.describe());
@@ -156,6 +157,22 @@ function registerShortcuts(): void {
         ["undo", "Undo (view editor)", ["CTRL+Z"], either(() => {}, e => e.undo())],
         ["map", "Map of the views on / off (view editor)", ["M"], either(() => {}, e => e.toggleMap())],
         ["redo", "Redo (view editor)", ["CTRL+Y", "CTRL+SHIFT+Z"], either(() => {}, e => e.redo())],
+        // The view editor's tools (owner, 2026-11-10; the toolbox's tooltips name them).
+        ["addview", "Add a view (view editor)", ["INSERT"], either(() => {}, e => e.add())],
+        ["setview", "Set the view to the camera (view editor)", ["C"], either(() => {}, e => e.update())],
+        ["deleteview", "Delete the view (view editor)", ["DELETE"], either(() => {}, e => e.remove())],
+        ["viewup", "Move the view up (view editor)", ["CTRL+UP"], either(() => {}, e => { if (e.movable(e.selectedIndex)) e.move(-1); })],
+        ["viewdown", "Move the view down (view editor)", ["CTRL+DOWN"], either(() => {}, e => { if (e.movable(e.selectedIndex)) e.move(1); })],
+        ["rotateright", "Rotate right (view editor)", ["RETURN"], either(() => {}, e => e.rotate(1))],
+        ["rotateleft", "Rotate left (view editor)", ["SHIFT+RETURN"], either(() => {}, e => e.rotate(-1))],
+        ["zoomin", "Zoom in (view editor)", ["PAGEUP"], either(() => {}, e => e.zoom(-1))],
+        ["zoomout", "Zoom out (view editor)", ["PAGEDOWN"], either(() => {}, e => e.zoom(1))],
+        ["eventlock", "Lock / unlock event views on the map (view editor)", ["L"], either(() => {}, e => { if (e.mapMode) e.toggleEventLock(); })],
+        ["play", "Play / stop the park's views (view editor)", ["P"], either(() => {}, e => e.togglePreview())],
+        ["holdless", "Shorter hold (view editor)", ["["], either(() => {}, e => e.changeHold(-1))],
+        ["holdmore", "Longer hold (view editor)", ["]"], either(() => {}, e => e.changeHold(1))],
+        ["panless", "Less of the hold panning (view editor)", ["SHIFT+["], either(() => {}, e => e.changePan(-0.1))],
+        ["panmore", "More of the hold panning (view editor)", ["SHIFT+]"], either(() => {}, e => e.changePan(0.1))],
     ];
     for (const [id, text, bindings, action] of shortcuts) {
         ui.registerShortcut({

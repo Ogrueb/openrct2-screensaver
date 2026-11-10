@@ -207,6 +207,57 @@ status line (camera, where the views come from). Arrow keys pan the camera while
 faster), and Space starts and stops Play. After the owner's first look (2026-11-02): a nearly opaque
 backing, list columns as wide as their widest text, hold and pan on one line with their values centered
 between − and +. `Editor` keeps the logic for both: the stock engine still gets the window (`WindowView`).
+Since 2026-11-10 the overlay's panel is three panes ("Editing UI", below); Turn and Inertia moved to the
+playlist-wide properties there.
+
+### Editing UI (owner's design, 2026-11-10; mockups in the project files' `editor-ui/`)
+
+The panel became three panes (round 8 of the mockups accepted, built the same day):
+
+- **Views pane, top left.** Previous park, the park field (name, "N / M ▾" its place in the play order),
+  next park, close. A press on the field held past 0.3 s opens the park list over the views and jumps to
+  the park the button is released on; a click opens it as **Playlist order**: rows with grips, numbers,
+  names and view counts, dragged to reorder the parks (saved in the game at once, `RCTScreensaver.
+  playlistProps.<sequence>.order`, and played in that order at once), clicked to go to a park (the list
+  stays); a click anywhere else closes it (Esc is the engine's: it leaves the mode). The views list has a
+  grip column: a row dragged 5 px lifts (the dragged row follows the mouse, its place dims, an orange line
+  shows where it lands) and drops there as one change (undoable; Ctrl+Up and Ctrl+Down move the selected
+  view too). Event views stay put while the event lock is on and say "event (locked)"; generated views say
+  "generated". The wheel and the thin scroll bar (thumb drag, track click) scroll past ten rows. The status
+  and help lines went (the toolbox's hint and the box's header say it).
+- **Toolbox, bottom left.** The **Frame | Map** switch on top (Map olive while on, "M" beside it), a
+  one-line hint for the mode, then icon buttons under small labels: VIEW (add, set to camera, delete),
+  CAMERA (rotate left and right, zoom in and out), EVENTS (the lock: sparkles over a padlock, usable on the
+  map only); HOLD and PAN as − value +; a footer of undo, redo, a gap, **Reset view** (the selected view
+  back to its playlist version: each view remembers which playlist view it started as, `View.origin`,
+  until install), and at the right the **pin** (on by default: the panes stay shown; off, they hide with
+  the cursor like the bar, `settings.editorPinned`) and **Play** ("P"). Every button's tooltip names it and
+  its key. Buttons that would do nothing are flat, pressed in and gray, their icons dimmed (owner).
+  Keys: Insert add, C set to camera, Delete, Ctrl+Up/Down move, Enter and Shift+Enter rotate right and
+  left, Page Up and Page Down zoom, L the event lock, P Play, [ and ] the hold, Shift+[ and Shift+] the pan
+  share, M the map, Ctrl+Z and Ctrl+Y undo and redo, E closes.
+- **Top-right box.** A header "RESTORE POINTS · PARK" with where the views come from ("edited · saved in
+  the game", "playlist views", or a warning); a click on it folds the box, and a window too narrow for it
+  beside the views pane (960 game pixels wide) shows it folded. The restore points, 3.5 rows high (a half
+  row: there are more) with a scroll bar, newest first: **Editor opened** (the park's views when the editor
+  first showed it this run), **Checkpoint n** (Save checkpoint; 10 per park in `RCTScreensaver.checkpoints`,
+  the oldest goes), **Last install** (parks whose views came from the views file), **Generated** (the
+  playlist's own views), each with its time (today: hh:mm; else the date; install and build times from the
+  playlist, `installed` and `built`). Restore selected works on the highlighted row, as one undoable change.
+  Copy and Paste views are inactive for now (no clipboard in the mode yet; left for the end, owner).
+  Under it the foldable **Playlist** properties (the playlist's name at the right): Motion (Inertia
+  Off/On; Angle and zoom change Off/Start/End, where Off makes every pan that would turn or zoom a cut,
+  overviews excepted, and hides the two holds that no longer apply), Timing (change, arrival and return
+  holds, half-second steps) and Presentation (Title music Ride/Theme/Unset, Show titles Overview/On/Off/
+  Unset; Unset leaves the viewer's own setting). Changes play at once (the music too); **Save** keeps them
+  in the game (`RCTScreensaver.playlistProps`); Import and Export are inactive (no way to pick files yet).
+- **Install** picks both up: `mksequence.py --install` writes the park order and the saved properties into
+  the playlist file (`[views] inertia`, `pan_changes` (now also "off"), `change_hold`, `arrive_hold`,
+  `return_hold` divided back by `time_scale`; top-level `title_music` and `titles`, removed for Unset; the
+  `[[park]]` sections moved as text, comments kept; the old file as `<playlist>.toml.bak`) and drops them
+  from the game's storage, as it does with view edits. The live editor on its own, without the generator,
+  is a later stage (`docs/enhancements.md` section 2, item 6).
+- In map mode the panes take the mouse: a press on them never reaches the boxes underneath.
 
 ### Live editing (first stage of the live editor, 2026-11-09)
 

@@ -180,8 +180,10 @@ each turn re-anchored on another surface; fixed the same day (the anchor is kept
    restore points (a list 3.5 rows high with a scroll bar: editor opened, checkpoints, last install,
    generated, each with its time; Restore works on the selected entry), Save checkpoint, Copy and Paste
    views (the drawing page's text format; needs a clipboard call in the mode's engine patches), and a
-   Playlist section for playlist-wide settings (turns and zoom changes, inertia, time scale). Mockup
-   approved in part; not built yet.
+   Playlist section for playlist-wide settings (turns and zoom changes, inertia, time scale). Accepted
+   after round 8 (motion moved into the box's foldable Playlist properties with timing and presentation;
+   Save, Import, Export; restore points with times; the pin; Copy, Paste, Import and Export inactive for
+   now) and built 2026-11-10 (`docs/screensaver-ui.md`, "Editing UI"); not yet tested in the game.
 6. Later stage: the live editor on its own, without the generator (owner, 2026-11-10). Edits already
    play from the game's storage on every run; what still needs the generator (writing edits and the park
    order into the playlist files, building, the rest of the settings page's functions) is to be drafted
