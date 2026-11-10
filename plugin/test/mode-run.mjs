@@ -16,6 +16,10 @@ const dump = name => { if (process.env.SCENE_DIR) fs.writeFileSync(path.join(pro
 const playlist = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
 // An event view (a fixed animation stop) last in the first park, for the editor's event lock.
 playlist.parks[0].views.push({ x: 50, y: 55, z: 64, rotation: 0, zoom: -1, hold: 8, animation: "fountain", fixed: true });
+// And two timed event views listed between route views: a car cue and a repeating cut-in on the
+// park's clock, which the editor lists apart, by when they play.
+playlist.parks[0].views.splice(2, 0, { x: 60, y: 60, z: 64, rotation: 0, zoom: -1, hold: 2, animation: "train", cue: { ride: 3, ticks: 40, wait: 1 } });
+playlist.parks[0].views.splice(4, 0, { x: 20, y: 25, z: 64, rotation: 1, zoom: 0, hold: 3, animation: "ufo", cue: { tick: 2400, lead: 2, every: 4800, ticks: 200, cut: true } });
 let now = 0;
 const store = { RCTScreensaver: { playlist, settings: { fadeMs: 0, titleMusic: "ride", window: "windowed" } } };
 const lookup = key => key.split(".").reduce((o, k) => (o == null ? undefined : o[k]), store);
@@ -408,6 +412,36 @@ assert.ok(scene.get("rcts.bar.titles.icon").src.includes("titles-off"), "on -> o
         assert.equal(ed("cell.5.6").text, "event (locked)", "locked again");
         for (let i = 0; i < 40; i++) shortcuts["rctscreensaver.undo"]();
     }
+    // Event views in a list of their own (owner, 2026-11-10): numbered E1, E2, ... by when they play,
+    // with their kind, trigger and next play; the route list holds only the route.
+    {
+        const route = [...scene.keys()].filter(k => /^rcts\.ed\.row\.\d+$/.test(k)).length;
+        assert.equal(route, 6, "the route list: five views and the fixed animation stop");
+        assert.equal(ed("cell.5.0").text, "6", "numbered along the route only");
+        assert.equal(ed("text.events").text, "Events  2", "the event list's title counts them");
+        assert.ok(ed("events").y > ed("list").y + ed("list").height, "under the route list");
+        assert.ok(ed("frame").y + ed("frame").height >= ed("events").y + ed("events").height, "inside the views pane");
+        const cell = (i, c) => ed(`ecell.${i}.${c}`).text;
+        assert.deepEqual([cell(0, 0), cell(0, 1), cell(0, 2)], ["E1", "train", "train"], "the car cue first: it plays after the route");
+        assert.match(cell(0, 3), /ride 3/, "its trigger");
+        assert.equal(cell(0, 5), "after view 6");
+        assert.deepEqual([cell(1, 0), cell(1, 1), cell(1, 2)], ["E2", "clock", "ufo"], "then the cut-in on the park's clock");
+        assert.equal(cell(1, 3), "at 1:00, every 2:00");
+        assert.match(cell(1, 5), /^(in \d+:\d\d|now)$/, "with when it plays next");
+        assert.ok(![...scene.keys()].some(k => k.startsWith("rcts.ed.egrip")), "no drag handles: their order is their timing");
+        const ev = [...scene.keys()].find(k => /^rcts\.ed\.event\.\d+$/.test(k) && Math.abs(scene.get(k).y - ed("ecell.1.0").y) < 24);
+        const index = Number(ev.split(".").pop());
+        edClick(ev.slice("rcts.ed.".length));
+        assert.equal(ed("delete").fill, "#2a2e2c80", "a selected event view is locked");
+        // A press and drag on an event row moves nothing.
+        const r = ed(ev.slice("rcts.ed.".length));
+        const before = JSON.stringify(saved["RCTScreensaver.edits"]);
+        mouse("move", r.x + 5, r.y + 5); mouse("down", r.x + 5, r.y + 5); mouse("move", r.x + 5, r.y - 60); mouse("up", r.x + 5, r.y - 60);
+        assert.equal(JSON.stringify(saved["RCTScreensaver.edits"]), before, "dragging an event row changes nothing");
+        assert.equal(cell(1, 0), "E2");
+        assert.ok(index >= 0);
+        edClick("row.0");
+    }
     // The map (M): the camera steps out two levels, every view at its angle a box, the rest markers.
     {
         const map = id => scene.get("rcts.map." + id);
@@ -425,6 +459,7 @@ assert.ok(scene.get("rcts.bar.titles.icon").src.includes("titles-off"), "on -> o
         assert.ok(Math.abs(box.width - 1920 * 2 ** (zoom0 - viewport.zoom)) <= 1, "the box is the view's window at its zoom");
         assert.ok(mapKeys("mark.").length + mapKeys("box.").length >= 2, "the other views are boxes or markers");
         assert.ok(mapKeys("line.").length > 0, "pan lines between the views");
+        assert.ok([...scene].some(([k, e]) => k.startsWith("rcts.map.") && /^E\d/.test(e.text ?? "")), "event views numbered E1, E2 on the map");
         assert.ok(map("handle"), "the selected box has a zoom handle");
         // Drag the box: the view moves, the camera stays.
         const before = tile();
