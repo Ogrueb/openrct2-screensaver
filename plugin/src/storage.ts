@@ -178,9 +178,12 @@ export interface Checkpoint {
     time: number; // ms since 1970
     views: View[];
     screen?: [number, number]; // the window they were saved in
+    camera?: { x: number; y: number; z: number; rotation: number; zoom: number }; // where the camera was
+    selected?: number; // the view selected then
+    onMap?: boolean; // the camera was the map's (Frame mode: the selected view's)
 }
 
-export const CHECKPOINTS_PER_PARK = 10; // the oldest goes past this (owner, 2026-11-10)
+export const CHECKPOINTS_PER_PARK = 10; // the 10 most recent are kept (owner, 2026-11-10)
 
 export function loadCheckpoints(): Record<string, Checkpoint[]> {
     return context.sharedStorage.get<Record<string, Checkpoint[]>>(NAMESPACE + ".checkpoints", {});

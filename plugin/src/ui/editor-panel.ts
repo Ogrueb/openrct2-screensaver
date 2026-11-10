@@ -15,7 +15,7 @@ import { EDITOR_COLUMNS, EVENT_COLUMNS } from "../editor";
 import { modeSettings } from "../mode";
 import type { MouseEvent, Overlay, ScreensaverApi } from "../mode";
 import type { PlaylistProps } from "../storage";
-import { Layer, Rect, Scene, backing, bevel, button, contains, label, measure, tooltip } from "./kit";
+import { Layer, Rect, Scene, backing, bevel, button, contains, iconPath, iconPixels, label, measure, tooltip } from "./kit";
 import { EDITOR, THEME, TIMING, Z } from "./theme";
 import { ViewMap } from "./view-map";
 
@@ -26,12 +26,15 @@ const HINT_MAP = "Drag a box or its corner. Right-click: adds a view.";
 const DRAG_Z = Z.tip - 2; // a dragged row over the rest of the pane
 
 /** A Playlist property's choices, as the segmented buttons show them. */
-type Choice = [label: string, value: unknown];
+type Choice = [label: string, value: unknown, tip: string];
 const CHOICES: Partial<Record<keyof PlaylistProps, Choice[]>> = {
-    inertia: [["Off", false], ["On", true]],
-    panChanges: [["Off", "off"], ["Start", "start"], ["End", "end"]],
-    titleMusic: [["Ride", "ride"], ["Theme", "theme"], ["Unset", "keep"]],
-    titles: [["Overview", "overview"], ["On", "on"], ["Off", "off"], ["Unset", null]],
+    inertia: [["Off", false, "Pans move at an even speed"], ["On", true, "Pans ease in and out"]],
+    panChanges: [["Off", "off", "No turns or zooms on a pan: a change of angle or zoom cuts"],
+        ["Start", "start", "Turn and zoom as a pan sets off"], ["End", "end", "Turn and zoom as a pan arrives"]],
+    titleMusic: [["Ride", "ride", "The parks' ride music, following the view"], ["Theme", "theme", "The title theme"],
+        ["Unset", "keep", "The viewer's own music setting"]],
+    titles: [["Overview", "overview", "The park's name on its first view"], ["On", "on", "The park's name on every view"],
+        ["Off", "off", "No park names"], ["Unset", null, "The viewer's own titles setting"]],
 };
 
 /** A list that scrolls: its first row shown, and the thumb's drag. */
@@ -104,6 +107,7 @@ export class EditorPanel implements EditorView {
     private listRect: Rect = { x: 0, y: 0, width: 0, height: 0 }; // the route views' rows
     private eventsRect: Rect | undefined; // the event views' rows, when the park has any
     private clockShown = -1; // the park clock's second the event list last showed
+    private loadingShown = false; // a park change under way when the panes were last drawn
     private parksRect: Rect | undefined; // the park list, while open
     private pointsRect: Rect | undefined; // the restore points' rows
     private readonly views = new Scroll();
@@ -162,7 +166,7 @@ export class EditorPanel implements EditorView {
         const e = this.editor;
         // The event list's "in m:ss" counts down with the park's clock.
         const second = e && this.eventsRect && !this.hidden ? Math.floor(e.playback.parkClock / 40) : -1;
-        if (second >= 0 && second !== this.clockShown && !this.busy) {
+        if ((second >= 0 && second !== this.clockShown && !this.busy) || (e && e.playback.isLoading !== this.loadingShown)) {
             this.render();
         }
         if (!e || e.pinned || this.hidden || this.busy || this.over(this.mouse.x, this.mouse.y)) {
@@ -532,6 +536,7 @@ export class EditorPanel implements EditorView {
         if (!e) {
             return;
         }
+        this.loadingShown = e.playback.isLoading;
         this.boxes.clear();
         this.tips.clear();
         this.off.clear();
@@ -550,7 +555,8 @@ export class EditorPanel implements EditorView {
             tooltip(scene, "tip", tip, r.x + r.width / 2, below ? r.y + r.height + 4 + h : r.y - 4, this.mode.overlay, ui.width);
         }
         this.layer.render(scene);
-        if (e.mapMode) {
+        if (e.mapMode && !e.playback.isLoading) {
+            // During a park change the views are already the next park's: no boxes until it shows.
             this.map.render(e);
         } else {
             this.map.clear();
@@ -625,12 +631,18 @@ export class EditorPanel implements EditorView {
         const fieldOpen = this.dropdown !== undefined;
         scene.set("field", { type: "rect", ...field, fill: fieldOpen ? THEME.faceDown : this.hit() === "field" ? THEME.faceHover : THEME.editorList, z: Z.face });
         bevel(scene, "field", field, THEME.bevelDark, THEME.bevelLight, THEME.bevel, Z.bevel);
-        const count = many ? `${pos + 1} / ${order.length}  ▾` : "";
-        const countW = count ? measure(overlay, count, s.textSize, true).width : 0;
+        if (fieldOpen) {
+            scene.set("field.open", { type: "rect", ...field, fill: "#00000000", border: THEME.fieldOpen, borderWidth: 2, z: Z.icon });
+        }
+        const count = many ? `${pos + 1} / ${order.length}` : "";
+        if (many) {
+            foldMark(scene, "field.mark", fieldOpen, field.x + field.width - 24, field.y + field.height / 2, overlay);
+        }
+        const countW = count ? measure(overlay, count, s.textSize, true).width + 22 : 0;
         const name = fit(overlay, e.parkNames[e.parkIndex] ?? "No park", s.titleSize, field.width - countW - 28, true);
         label(scene, "text.park", name, { x: field.x + 8, y: field.y, width: 0, height: field.height }, s.titleSize, overlay, true);
         if (count) {
-            label(scene, "text.count", count, { x: field.x + field.width - 8 - countW, y: field.y, width: 0, height: field.height }, s.textSize, overlay, true);
+            label(scene, "text.count", count, { x: field.x + field.width - 6 - countW, y: field.y, width: 0, height: field.height }, s.textSize, overlay, true);
         }
         this.viewsList(e, scene, rows, route);
         if (this.eventsRect) {
@@ -853,7 +865,9 @@ export class EditorPanel implements EditorView {
         const groups: [string, [string, string, string, boolean, boolean?][]][] = [
             ["VIEW", [
                 ["add", "add", "Add a view (Insert)", loading || !e.playback.canEdit],
-                ["update", "set-camera", e.selectedLocked ? "Event views are locked (unlock on the map)" : "Set to camera (C)", fixedView],
+                ["update", "set-camera", e.selectedLocked ? "Event views are locked (unlock on the map)"
+                    : e.mapMode ? "Set to camera: the view moves to the map's centre (C)" : "Set to camera (on the map; here the view follows the camera)",
+                    fixedView || !e.mapMode],
                 ["delete", "delete", e.selectedLocked ? "Event views are locked (unlock on the map)" : "Delete the view (Delete)", fixedView],
             ]],
             ["CAMERA", [
@@ -937,8 +951,9 @@ export class EditorPanel implements EditorView {
         scene.set("boxHead", { type: "rect", ...head, fill: this.hit() === "boxHead" ? THEME.face : "#00000000", z: Z.face });
         const source = e.source();
         const sw = measure(overlay, source.text, s.boxHead).width;
-        const title = `${folded ? "▸" : "▾"} RESTORE POINTS · ${(e.parkNames[e.parkIndex] ?? "").toUpperCase()}`;
-        label(scene, "box.title", fit(overlay, title, s.boxHead, inner - sw - 12), head, s.boxHead, overlay);
+        foldMark(scene, "box.mark", !folded, x0 - 2, y + headH / 2, overlay);
+        const title = `RESTORE POINTS · ${(e.parkNames[e.parkIndex] ?? "").toUpperCase()}`;
+        label(scene, "box.title", fit(overlay, title, s.boxHead, inner - sw - 30), { ...head, x: head.x + 18 }, s.boxHead, overlay);
         scene.set("box.title", { ...scene.get("box.title")!, colour: THEME.textDim });
         label(scene, "box.source", source.text, { x: x0 + inner - sw, y, width: 0, height: headH }, s.boxHead, overlay);
         scene.set("box.source", { ...scene.get("box.source")!, colour: source.warning ? THEME.warning : THEME.textGood });
@@ -984,7 +999,7 @@ export class EditorPanel implements EditorView {
             button(scene, id, r, this.state(id), { icon, iconSize: s.toolIcon, text, textSize: 14, left: true }, overlay);
         };
         const editable = e.playback.canEdit && !e.playback.isLoading;
-        btn("checkpoint", "checkpoint", "Save checkpoint", x0, halfW, "Keep the park's views as they are now (10 per park)", !editable);
+        btn("checkpoint", "checkpoint", "Save checkpoint", x0, halfW, "Keep the park's views and the camera as they are now (the 10 most recent are kept)", !editable);
         btn("restore", "restore", "Restore selected", x0 + inner - halfW, halfW,
             this.picked ? "Go back to the highlighted restore point (Undo returns)" : "Highlight a restore point first", !editable || !this.picked);
         y += s.boxButton + 4;
@@ -995,8 +1010,7 @@ export class EditorPanel implements EditorView {
         const ph = this.place("propsHead", { x: x0, y, width: inner, height: s.propHeader }, this.propsOpen ? "Fold the playlist properties" : "Show the playlist properties");
         scene.set("propsHead", { type: "rect", ...ph, fill: this.hit() === "propsHead" ? THEME.faceHover : "#00000000", z: Z.face });
         bevel(scene, "propsHead", ph, THEME.backingLight, THEME.backingDark, THEME.bevel, Z.bevel);
-        const mark = this.propsOpen ? "▾" : "▸";
-        label(scene, "props.mark", mark, { x: x0 + 8, y, width: 0, height: s.propHeader }, 12, overlay, true);
+        foldMark(scene, "props.mark", this.propsOpen, x0 + 4, y + s.propHeader / 2, overlay);
         label(scene, "props.title", "Playlist", { x: x0 + 24, y, width: 0, height: s.propHeader }, 16, overlay, true);
         const tw = measure(overlay, "Playlist", 16, true).width;
         label(scene, "props.sub", "properties", { x: x0 + 24 + tw + 8, y: y + 1, width: 0, height: s.propHeader }, 13, overlay);
@@ -1055,9 +1069,9 @@ export class EditorPanel implements EditorView {
             const widths = choices.map(([t]) => Math.ceil(measure(overlay, t, 13, true).width) + 2 * s.segPad);
             let sx = x0 + inner - widths.reduce((a, w) => a + w, 0) - s.gap * (choices.length - 1);
             const sy = y + Math.round((s.propRow - s.segHeight) / 2);
-            choices.forEach(([t, value], i) => {
+            choices.forEach(([t, value, tip], i) => {
                 const id = `seg.${key}.${i}`;
-                const r = this.place(id, { x: sx, y: sy, width: widths[i], height: s.segHeight });
+                const r = this.place(id, { x: sx, y: sy, width: widths[i], height: s.segHeight }, tip);
                 button(scene, id, r, this.state(id, props[key as keyof typeof props] === value), { text: t, textSize: 13 }, overlay);
                 sx += widths[i] + s.gap;
             });
@@ -1094,6 +1108,13 @@ export class EditorPanel implements EditorView {
         segments("titles", "Show titles");
         return y + 6;
     }
+}
+
+/** An open (pointing down) or folded (pointing right) mark, its left edge at x, centred on cy. */
+function foldMark(scene: Scene, id: string, open: boolean, x: number, cy: number, overlay: Overlay): void {
+    const px = iconPixels(20, overlay.scale);
+    const side = px / overlay.scale;
+    scene.set(id, { type: "image", src: iconPath(open ? "fold-open" : "fold-closed", px), x: Math.round(x), y: Math.round(cy - side / 2), z: Z.icon });
 }
 
 /** Six dots: the drag handle of a row. */

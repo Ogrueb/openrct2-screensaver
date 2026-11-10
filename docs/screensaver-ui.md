@@ -245,19 +245,25 @@ The panel became three panes (round 8 of the mockups accepted, built the same da
   map only); HOLD and PAN as − value +; a footer of undo, redo, a gap, **Reset view** (the selected view
   back to its playlist version: each view remembers which playlist view it started as, `View.origin`,
   until install), and at the right the **pin** (on by default: the panes stay shown; off, they hide with
-  the cursor like the bar, `settings.editorPinned`) and **Play** ("P"). Every button's tooltip names it and
+  the cursor, and the controls bar with them, `settings.editorPinned`) and **Play** ("P"). Every button's tooltip names it and
   its key. Buttons that would do nothing are flat, pressed in and gray, their icons dimmed (owner).
-  Keys: Insert add, C set to camera, Delete, Ctrl+Up/Down move, Enter and Shift+Enter rotate right and
+  Set to camera works on the map only: in Frame mode the selected view already follows the camera (owner's
+  test, 2026-11-10), so the button is gray there and C does nothing. Keys: Insert add, C set to camera, Delete, Ctrl+Up/Down move, Enter and Shift+Enter rotate right and
   left, Page Up and Page Down zoom, L the event lock, P Play, [ and ] the hold, Shift+[ and Shift+] the pan
   share, M the map, Ctrl+Z and Ctrl+Y undo and redo, E closes.
 - **Top-right box.** A header "RESTORE POINTS · PARK" with where the views come from ("edited · saved in
   the game", "playlist views", or a warning); a click on it folds the box, and a window too narrow for it
   beside the views pane (960 game pixels wide) shows it folded. The restore points, 3.5 rows high (a half
-  row: there are more) with a scroll bar, newest first: **Editor opened** (the park's views when the editor
-  first showed it this run), **Checkpoint n** (Save checkpoint; 10 per park in `RCTScreensaver.checkpoints`,
-  the oldest goes), **Last install** (parks whose views came from the views file), **Generated** (the
+  row: there are more) with a scroll bar, all newest first by their times (presets included; owner,
+  2026-11-10): **Editor opened** (the park's views when the editor
+  first showed it this run), **Checkpoint n** (Save checkpoint; the 10 most recent per park in
+  `RCTScreensaver.checkpoints`; each keeps the camera's position, angle and zoom and the selected view,
+  restored with it, the map's camera only on the map), **Last install** (parks whose views came from the views file), **Generated** (the
   playlist's own views), each with its time (today: hh:mm; else the date; install and build times from the
   playlist, `installed` and `built`). Restore selected works on the highlighted row, as one undoable change.
+  Fold marks (the box's header, Playlist, the park field) are icons, as the game's font has no triangles;
+  the open park field has a gold border. On the map, the boxes clear while a park change is under way (the
+  views are already the next park's) and come back once it shows. Every Playlist button has a tooltip.
   Copy and Paste views are inactive for now (no clipboard in the mode yet; left for the end, owner).
   Under it the foldable **Playlist** properties (the playlist's name at the right): Motion (Inertia
   Off/On; Angle and zoom change Off/Start/End, where Off makes every pan that would turn or zoom a cut,

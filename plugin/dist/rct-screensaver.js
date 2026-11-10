@@ -887,7 +887,7 @@
         points.push({ id: "install", label: "Last install", tag: "install", time: this.player.installedAt });
       }
       points.push({ id: "generated", label: "Generated", tag: "build", time: this.player.builtAt });
-      return points;
+      return points.map((p, i) => ({ p, i })).sort((a, b) => (b.p.time ?? -Infinity) - (a.p.time ?? -Infinity) || a.i - b.i).map(({ p }) => p);
     }
     /** Saves the current park's views as a checkpoint (at most CHECKPOINTS_PER_PARK, the oldest goes). */
     saveCheckpoint() {
@@ -898,7 +898,15 @@
       const all = this.checkpoints;
       const list = all[key] ?? [];
       const n = list.reduce((m, c) => Math.max(m, c.n), 0) + 1;
-      list.push({ n, time: Date.now(), views: this.player.currentViews.map((v) => ({ ...v })), screen: [ui.width, ui.height] });
+      list.push({
+        n,
+        time: Date.now(),
+        views: this.player.currentViews.map((v) => ({ ...v })),
+        screen: [ui.width, ui.height],
+        camera: { ...this.camera },
+        selected: this.selected,
+        onMap: this.map
+      });
       all[key] = list.slice(-CHECKPOINTS_PER_PARK);
       saveCheckpoints(all);
       this.refresh();
@@ -922,8 +930,16 @@
         } else if (id.startsWith("checkpoint.")) {
           const c = (this.checkpoints[key] ?? []).find((cp) => `checkpoint.${cp.n}` === id);
           if (c) {
-            this.selected = 0;
-            this.player.setViews(c.views.map((v) => ({ ...v })), 0, true);
+            const sel = Math.max(0, Math.min(c.views.length - 1, c.selected ?? 0));
+            this.selected = sel;
+            this.player.setViews(c.views.map((v) => ({ ...v })), sel, true);
+            if (c.camera && !!c.onMap === this.map) {
+              this.camera = { ...c.camera };
+              this.applyCamera();
+            }
+            this.selected = sel;
+            this.refresh();
+            return;
           }
         }
         this.selected = this.player.viewIndex;
@@ -1426,6 +1442,8 @@
     // of day's cycle): the game's translucent olive/yellow.
     faceAlt: "#8a7a2eb3",
     faceAltHover: "#a8963ac0",
+    // The border of a field whose list is open (the park dropdown).
+    fieldOpen: "#e0c860",
     // The speed button's face, green at 1× to orange at 8× in even steps (owner, 2026-11-02).
     speedSlow: "#3d7a50b3",
     speedFast: "#c8782ab3",
@@ -3847,7 +3865,7 @@
     }
     /** Every ~100 ms: hides the bar after the mouse has been still, and follows key changes. */
     update() {
-      if (this.editorHooks?.editorOpen()) {
+      if (this.editorHooks?.editorOpen() && this.editorHooks.editorPinned()) {
         this.lastMove = Date.now();
         this.setShown(true);
       }
@@ -4879,6 +4897,10 @@
       return false;
     }
     render(editor2) {
+      if (editor2.playback.isLoading) {
+        this.clear();
+        return;
+      }
       this.place(editor2);
       const scene = /* @__PURE__ */ new Map();
       const views = this.placed;
@@ -5007,10 +5029,23 @@
   var HINT_MAP = "Drag a box or its corner. Right-click: adds a view.";
   var DRAG_Z = Z.tip - 2;
   var CHOICES = {
-    inertia: [["Off", false], ["On", true]],
-    panChanges: [["Off", "off"], ["Start", "start"], ["End", "end"]],
-    titleMusic: [["Ride", "ride"], ["Theme", "theme"], ["Unset", "keep"]],
-    titles: [["Overview", "overview"], ["On", "on"], ["Off", "off"], ["Unset", null]]
+    inertia: [["Off", false, "Pans move at an even speed"], ["On", true, "Pans ease in and out"]],
+    panChanges: [
+      ["Off", "off", "No turns or zooms on a pan: a change of angle or zoom cuts"],
+      ["Start", "start", "Turn and zoom as a pan sets off"],
+      ["End", "end", "Turn and zoom as a pan arrives"]
+    ],
+    titleMusic: [
+      ["Ride", "ride", "The parks' ride music, following the view"],
+      ["Theme", "theme", "The title theme"],
+      ["Unset", "keep", "The viewer's own music setting"]
+    ],
+    titles: [
+      ["Overview", "overview", "The park's name on its first view"],
+      ["On", "on", "The park's name on every view"],
+      ["Off", "off", "No park names"],
+      ["Unset", null, "The viewer's own titles setting"]
+    ]
   };
   var Scroll = class {
     constructor() {
@@ -5067,6 +5102,8 @@
       this.listRect = { x: 0, y: 0, width: 0, height: 0 };
       // the event views' rows, when the park has any
       this.clockShown = -1;
+      // the park clock's second the event list last showed
+      this.loadingShown = false;
       // the restore points' rows
       this.views = new Scroll();
       this.parks = new Scroll();
@@ -5113,7 +5150,7 @@
     update() {
       const e = this.editor;
       const second = e && this.eventsRect && !this.hidden ? Math.floor(e.playback.parkClock / 40) : -1;
-      if (second >= 0 && second !== this.clockShown && !this.busy) {
+      if (second >= 0 && second !== this.clockShown && !this.busy || e && e.playback.isLoading !== this.loadingShown) {
         this.render();
       }
       if (!e || e.pinned || this.hidden || this.busy || this.over(this.mouse.x, this.mouse.y)) {
@@ -5511,6 +5548,7 @@
       if (!e) {
         return;
       }
+      this.loadingShown = e.playback.isLoading;
       this.boxes.clear();
       this.tips.clear();
       this.off.clear();
@@ -5528,7 +5566,7 @@
         tooltip(scene, "tip", tip, r.x + r.width / 2, below ? r.y + r.height + 4 + h : r.y - 4, this.mode.overlay, ui.width);
       }
       this.layer.render(scene);
-      if (e.mapMode) {
+      if (e.mapMode && !e.playback.isLoading) {
         this.map.render(e);
       } else {
         this.map.clear();
@@ -5600,12 +5638,18 @@
       const fieldOpen = this.dropdown !== void 0;
       scene.set("field", { type: "rect", ...field, fill: fieldOpen ? THEME.faceDown : this.hit() === "field" ? THEME.faceHover : THEME.editorList, z: Z.face });
       bevel(scene, "field", field, THEME.bevelDark, THEME.bevelLight, THEME.bevel, Z.bevel);
-      const count = many ? `${pos + 1} / ${order.length}  \u25BE` : "";
-      const countW = count ? measure(overlay, count, s.textSize, true).width : 0;
+      if (fieldOpen) {
+        scene.set("field.open", { type: "rect", ...field, fill: "#00000000", border: THEME.fieldOpen, borderWidth: 2, z: Z.icon });
+      }
+      const count = many ? `${pos + 1} / ${order.length}` : "";
+      if (many) {
+        foldMark(scene, "field.mark", fieldOpen, field.x + field.width - 24, field.y + field.height / 2, overlay);
+      }
+      const countW = count ? measure(overlay, count, s.textSize, true).width + 22 : 0;
       const name = fit(overlay, e.parkNames[e.parkIndex] ?? "No park", s.titleSize, field.width - countW - 28, true);
       label(scene, "text.park", name, { x: field.x + 8, y: field.y, width: 0, height: field.height }, s.titleSize, overlay, true);
       if (count) {
-        label(scene, "text.count", count, { x: field.x + field.width - 8 - countW, y: field.y, width: 0, height: field.height }, s.textSize, overlay, true);
+        label(scene, "text.count", count, { x: field.x + field.width - 6 - countW, y: field.y, width: 0, height: field.height }, s.textSize, overlay, true);
       }
       this.viewsList(e, scene, rows, route);
       if (this.eventsRect) {
@@ -5874,7 +5918,12 @@
       const groups = [
         ["VIEW", [
           ["add", "add", "Add a view (Insert)", loading || !e.playback.canEdit],
-          ["update", "set-camera", e.selectedLocked ? "Event views are locked (unlock on the map)" : "Set to camera (C)", fixedView],
+          [
+            "update",
+            "set-camera",
+            e.selectedLocked ? "Event views are locked (unlock on the map)" : e.mapMode ? "Set to camera: the view moves to the map's centre (C)" : "Set to camera (on the map; here the view follows the camera)",
+            fixedView || !e.mapMode
+          ],
           ["delete", "delete", e.selectedLocked ? "Event views are locked (unlock on the map)" : "Delete the view (Delete)", fixedView]
         ]],
         ["CAMERA", [
@@ -5977,8 +6026,9 @@
       scene.set("boxHead", { type: "rect", ...head, fill: this.hit() === "boxHead" ? THEME.face : "#00000000", z: Z.face });
       const source = e.source();
       const sw = measure(overlay, source.text, s.boxHead).width;
-      const title = `${folded ? "\u25B8" : "\u25BE"} RESTORE POINTS \xB7 ${(e.parkNames[e.parkIndex] ?? "").toUpperCase()}`;
-      label(scene, "box.title", fit(overlay, title, s.boxHead, inner - sw - 12), head, s.boxHead, overlay);
+      foldMark(scene, "box.mark", !folded, x0 - 2, y + headH / 2, overlay);
+      const title = `RESTORE POINTS \xB7 ${(e.parkNames[e.parkIndex] ?? "").toUpperCase()}`;
+      label(scene, "box.title", fit(overlay, title, s.boxHead, inner - sw - 30), { ...head, x: head.x + 18 }, s.boxHead, overlay);
       scene.set("box.title", { ...scene.get("box.title"), colour: THEME.textDim });
       label(scene, "box.source", source.text, { x: x0 + inner - sw, y, width: 0, height: headH }, s.boxHead, overlay);
       scene.set("box.source", { ...scene.get("box.source"), colour: source.warning ? THEME.warning : THEME.textGood });
@@ -6023,7 +6073,7 @@
         button(scene, id, r, this.state(id), { icon, iconSize: s.toolIcon, text, textSize: 14, left: true }, overlay);
       };
       const editable = e.playback.canEdit && !e.playback.isLoading;
-      btn("checkpoint", "checkpoint", "Save checkpoint", x0, halfW, "Keep the park's views as they are now (10 per park)", !editable);
+      btn("checkpoint", "checkpoint", "Save checkpoint", x0, halfW, "Keep the park's views and the camera as they are now (the 10 most recent are kept)", !editable);
       btn(
         "restore",
         "restore",
@@ -6040,8 +6090,7 @@
       const ph = this.place("propsHead", { x: x0, y, width: inner, height: s.propHeader }, this.propsOpen ? "Fold the playlist properties" : "Show the playlist properties");
       scene.set("propsHead", { type: "rect", ...ph, fill: this.hit() === "propsHead" ? THEME.faceHover : "#00000000", z: Z.face });
       bevel(scene, "propsHead", ph, THEME.backingLight, THEME.backingDark, THEME.bevel, Z.bevel);
-      const mark = this.propsOpen ? "\u25BE" : "\u25B8";
-      label(scene, "props.mark", mark, { x: x0 + 8, y, width: 0, height: s.propHeader }, 12, overlay, true);
+      foldMark(scene, "props.mark", this.propsOpen, x0 + 4, y + s.propHeader / 2, overlay);
       label(scene, "props.title", "Playlist", { x: x0 + 24, y, width: 0, height: s.propHeader }, 16, overlay, true);
       const tw = measure(overlay, "Playlist", 16, true).width;
       label(scene, "props.sub", "properties", { x: x0 + 24 + tw + 8, y: y + 1, width: 0, height: s.propHeader }, 13, overlay);
@@ -6096,9 +6145,9 @@
         const widths = choices.map(([t]) => Math.ceil(measure(overlay, t, 13, true).width) + 2 * s.segPad);
         let sx = x0 + inner - widths.reduce((a, w) => a + w, 0) - s.gap * (choices.length - 1);
         const sy = y + Math.round((s.propRow - s.segHeight) / 2);
-        choices.forEach(([t, value], i) => {
+        choices.forEach(([t, value, tip], i) => {
           const id = `seg.${key}.${i}`;
-          const r = this.place(id, { x: sx, y: sy, width: widths[i], height: s.segHeight });
+          const r = this.place(id, { x: sx, y: sy, width: widths[i], height: s.segHeight }, tip);
           button(scene, id, r, this.state(id, props[key] === value), { text: t, textSize: 13 }, overlay);
           sx += widths[i] + s.gap;
         });
@@ -6135,6 +6184,11 @@
       return y + 6;
     }
   };
+  function foldMark(scene, id, open, x, cy, overlay) {
+    const px = iconPixels(20, overlay.scale);
+    const side = px / overlay.scale;
+    scene.set(id, { type: "image", src: iconPath(open ? "fold-open" : "fold-closed", px), x: Math.round(x), y: Math.round(cy - side / 2), z: Z.icon });
+  }
   function grip(scene, id, x, cy, z = Z.icon) {
     for (let r = 0; r < 3; r++) {
       for (let c = 0; c < 2; c++) {
@@ -6218,7 +6272,8 @@
     if (inMode) {
       bar = new ControlsBar(mode, () => player, settings, {
         toggleEditor: () => toggleEditor(),
-        editorOpen: () => editor?.isOpen ?? false
+        editorOpen: () => editor?.isOpen ?? false,
+        editorPinned: () => editor?.pinned ?? true
       });
       bar.open();
       captions = new Captions(mode, () => player, settings, () => editor?.isOpen ?? false, () => bar?.shown ?? false);
@@ -6318,7 +6373,9 @@
       ["addview", "Add a view (view editor)", ["INSERT"], either(() => {
       }, (e) => e.add())],
       ["setview", "Set the view to the camera (view editor)", ["C"], either(() => {
-      }, (e) => e.update())],
+      }, (e) => {
+        if (e.mapMode || !editorPanel) e.update();
+      })],
       ["deleteview", "Delete the view (view editor)", ["DELETE"], either(() => {
       }, (e) => e.remove())],
       ["viewup", "Move the view up (view editor)", ["CTRL+UP"], either(() => {
