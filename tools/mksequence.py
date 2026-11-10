@@ -30,7 +30,7 @@ Layouts:
 import argparse, collections, hashlib, json, pickle, math, statistics, os, random, re, shutil, subprocess, sys, tempfile, time, tomllib
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import companions, parkinfo, profiles, userdata  # noqa: E402
+import companions, livefile, parkinfo, profiles, userdata  # noqa: E402
 
 VIEW_DEFAULTS = {
     "method": "spots",  # how views are generated when a park lists none: "spots" or "grid"
@@ -2756,13 +2756,18 @@ class ParkCache:
                 os.remove(path)
 
 
-def prepare(playlist_path, use_edits=True, overrides=None, use_profiles=True, layout=None):
+def prepare(playlist_path, use_edits=True, overrides=None, use_profiles=True, layout=None, use_live=True, user_dir=None):
     """What a build reads before resolving its parks: the playlist, its entries in use, edits,
-    profiles, the companion library, and the playlist-wide context of a park's signature."""
+    profiles, the companion library, and the playlist-wide context of a park's signature. The game's
+    live file (tools/livefile.py), unless baked or `use_live` is off, goes over the playlist's files:
+    its properties and park order over the TOML, its views (with `use_edits`) over the views file."""
     with open(playlist_path, "rb") as f:
         playlist = tomllib.load(f)
     base_dir = os.path.dirname(os.path.abspath(playlist_path))
     name = playlist.get("name") or os.path.splitext(os.path.basename(playlist_path))[0]
+    live = livefile.for_playlist(playlist_path, name, user_dir) if use_live else None
+    if live:
+        playlist = apply_props(playlist, live["props"])
     if name.startswith("*"):
         raise ValueError("sequence names starting with '*' are reserved by OpenRCT2")
     layout = layout or playlist.get("layout", "plugin")
@@ -2781,6 +2786,8 @@ def prepare(playlist_path, use_edits=True, overrides=None, use_profiles=True, la
     if not park_scripts:
         entries = [dict(e, companions=[]) for e in entries]
     edits = {k: v for k, v in load_edits(edits_path(playlist_path)).items() if pinned(v)} if use_edits else {}
+    if live and use_edits:
+        edits = apply_live_edits(edits, live["edits"], {park_key(e) for e in playlist.get("park", [])})
     park_profiles = profiles.load() if use_profiles else {}
     park_plugins = playlist.get("park_plugins", False)
     if not isinstance(park_plugins, bool):
@@ -2791,7 +2798,7 @@ def prepare(playlist_path, use_edits=True, overrides=None, use_profiles=True, la
                "companions": None}
     return {"playlist": playlist, "base_dir": base_dir, "name": name, "layout": layout, "defaults": defaults,
             "entries": entries, "edits": edits, "park_profiles": park_profiles, "park_plugins": park_plugins,
-            "context": context}
+            "context": context, "live": live}
 
 
 def companion_context(entries, base_dir, park_profiles):
@@ -2803,11 +2810,11 @@ def companion_context(entries, base_dir, park_profiles):
                              "definitions": [{str(k): v for k, v in part.items()} for part in profiles.definitions(park_profiles)]})
 
 
-def changed_parks(playlist_path, cache_dir, use_edits=True, use_profiles=True, detail=False):
+def changed_parks(playlist_path, cache_dir, use_edits=True, use_profiles=True, detail=False, use_live=True, user_dir=None):
     """Keys of the playlist's parks in use that the next build resolves again (not in the cache). With
     `detail`, a dict: "parks" those changed themselves, "updated" those changed only by a generator update
     since they were cached (owner, 2026-11-02: one park's edit right after an update flagged all ten)."""
-    ctx = prepare(playlist_path, use_edits, use_profiles=use_profiles)
+    ctx = prepare(playlist_path, use_edits, use_profiles=use_profiles, use_live=use_live, user_dir=user_dir)
     if not os.path.isdir(cache_dir):
         keys = [park_key(e) for e in ctx["entries"]]
         return {"parks": keys, "updated": []} if detail else keys
@@ -2827,8 +2834,8 @@ def changed_parks(playlist_path, cache_dir, use_edits=True, use_profiles=True, d
 
 
 def build(playlist_path, out_dir, seed=None, layout=None, use_edits=True, overrides=None,
-          use_profiles=True, cache_dir=None):
-    ctx = prepare(playlist_path, use_edits, overrides, use_profiles, layout)
+          use_profiles=True, cache_dir=None, use_live=True, user_dir=None):
+    ctx = prepare(playlist_path, use_edits, overrides, use_profiles, layout, use_live, user_dir)
     playlist, base_dir, name, layout, defaults = ctx["playlist"], ctx["base_dir"], ctx["name"], ctx["layout"], ctx["defaults"]
     entries, edits, park_profiles, park_plugins = ctx["entries"], ctx["edits"], ctx["park_profiles"], ctx["park_plugins"]
     order = playlist.get("order", "playlist")
@@ -2908,7 +2915,8 @@ def build(playlist_path, out_dir, seed=None, layout=None, use_edits=True, overri
         json.dump({"name": name, "layout": layout, "playlist": data, "titleMusic": title_music, "companions": written,
                    "source": os.path.abspath(playlist_path)}, f)
     return {"name": name, "layout": layout, "dir": seq_dir, "parks": parks, "playlist": data, "titleMusic": title_music,
-            "companionDir": companion_dir, "companions": written}
+            "companionDir": companion_dir, "companions": written, "source": os.path.abspath(playlist_path),
+            "live": livefile.summary(ctx["live"]) if ctx["live"] else None}
 
 
 def load_built(result_path):
@@ -2952,10 +2960,16 @@ def read_store(store_path):
 def pull_edits(playlist_path, store_path):
     """Move views saved by the plugin's editor for this playlist's parks from the store into
     <playlist>.views.json. Returns (key, reset) pairs; they are removed from the store on install."""
-    with open(playlist_path, "rb") as f:
-        keys = {park_key(e) for e in tomllib.load(f).get("park", [])}
     stored = read_store(store_path).get(STORE_NAMESPACE, {})
     stored = stored.get("edits") if isinstance(stored, dict) else None
+    return merge_edits(playlist_path, stored)
+
+
+def merge_edits(playlist_path, stored):
+    """Write the editor's edits (by park key, as the plugin saves them: in its storage or the live
+    file) of this playlist's parks into <playlist>.views.json. Returns (key, reset) pairs."""
+    with open(playlist_path, "rb") as f:
+        keys = {park_key(e) for e in tomllib.load(f).get("park", [])}
     moved = {k: v for k, v in (stored or {}).items() if k in keys and isinstance(v, dict)}
     # Edits that pin nothing (generated views carried over unchanged) count as a reset.
     moved = {k: v if v.get("reset") or pinned(v) else {"reset": True} for k, v in moved.items()}
@@ -2970,6 +2984,19 @@ def pull_edits(playlist_path, store_path):
         edits.update({k: v for k, v in moved.items() if not v.get("reset")})
         save_edits(path, {k: v for k, v in edits.items() if not moved.get(k, {}).get("reset")})
     return sorted((k, bool(v.get("reset"))) for k, v in moved.items())
+
+
+def apply_live_edits(edits, live_edits, keys):
+    """The views file's pinned edits with a live file's on top (resets and unpinned edits drop a park's)."""
+    out = dict(edits)
+    for k, v in (live_edits or {}).items():
+        if k not in keys or not isinstance(v, dict):
+            continue
+        if v.get("reset") or not pinned(v):
+            out.pop(k, None)
+        else:
+            out[k] = {key: v[key] for key in ("views", "arranged", "screen") if key in v}
+    return out
 
 
 def playlist_name(playlist_path, playlist=None):
@@ -3062,16 +3089,25 @@ def pull_props(playlist_path, store_path):
     the playlist file (comments kept where tomlwrite can; the old file in <playlist>.toml.bak). Returns
     (whether the store had an entry for it, the names of what changed); the entry is removed on install."""
     with open(playlist_path, "rb") as f:
-        raw = f.read()
-    playlist = tomllib.loads(raw.decode("utf-8"))
+        playlist = tomllib.load(f)
     name = playlist_name(playlist_path, playlist)
     stored = read_store(store_path).get(STORE_NAMESPACE, {})
     props = (stored.get("playlistProps") or {}).get(name) if isinstance(stored, dict) else None
     if not isinstance(props, dict):
         return False, []
+    return True, write_props(playlist_path, props)
+
+
+def write_props(playlist_path, props):
+    """Write the editor's Playlist properties and park order (as the plugin saves them) into the
+    playlist file, comments kept where tomlwrite can, the old file in <playlist>.toml.bak. Returns the
+    names of what changed."""
+    with open(playlist_path, "rb") as f:
+        raw = f.read()
+    playlist = tomllib.loads(raw.decode("utf-8"))
     data = apply_props(playlist, props)
     if data == playlist:
-        return True, []
+        return []
     changed = [k for k, _, _ in PROPS if k in props] + (["park order"] if data.get("park") != playlist.get("park") else [])
     import tomlwrite
     text = reorder_parks(raw.decode("utf-8"), data.get("park")) if data.get("park") != playlist.get("park") else raw.decode("utf-8")
@@ -3079,7 +3115,7 @@ def pull_props(playlist_path, store_path):
     shutil.copy2(playlist_path, playlist_path + ".bak")
     with open(playlist_path, "w", encoding="utf-8", newline="\n") as f:
         f.write(out)
-    return True, changed
+    return changed
 
 
 def update_plugin_store(store_path, result, pulled=(), camera_log=False, props_pulled=False):
@@ -3096,6 +3132,8 @@ def update_plugin_store(store_path, result, pulled=(), camera_log=False, props_p
         ours = {}
     if result["playlist"] is not None:
         ours["playlist"] = dict(result["playlist"], installed=int(time.time() * 1000))
+        if result.get("source"):
+            ours["playlist"]["source"] = result["source"]  # the plugin names it in the live file
     elif isinstance(ours.get("playlist"), dict) and ours["playlist"].get("sequence") == result["name"]:
         del ours["playlist"]
     if isinstance(ours.get("edits"), dict):
@@ -3196,6 +3234,9 @@ def main():
     ap.add_argument("--ignore-edits", action="store_true",
                     help="play the playlist's own or generated views: views from the editor are still "
                          "moved into the views file, but not used")
+    ap.add_argument("--ignore-live", action="store_true",
+                    help="build without the game's live file (edits saved in the screensaver mode's view editor, "
+                         "<user dir>/screensaver/live; tools/bakelive.py writes them into the playlist)")
     ap.add_argument("--ignore-profiles", action="store_true",
                     help="build without the parks' profiles (parks/*.toml), e.g. while tuning the generator")
     ap.add_argument("--camera-log", action="store_true",
@@ -3235,8 +3276,19 @@ def main():
             if props_changed:
                 print("playlist properties from the editor -> %s (%s; the old file in %s.bak)"
                       % (args.playlist, ", ".join(props_changed), args.playlist))
+            # The game's storage holds everything its live file does: the live file is baked now.
+            live = livefile.for_playlist(args.playlist, playlist_name(args.playlist), user_dir, include_baked=True)
+            if live:
+                livefile.mark_baked(live, user_dir, "install")
         result = build(args.playlist, args.out, args.seed, args.layout, not args.ignore_edits, overrides,
-                       not args.ignore_profiles, args.cache)
+                       not args.ignore_profiles, args.cache, not args.ignore_live, user_dir)
+        if result.get("live"):
+            live = result["live"]
+            print("live edits from the game applied (%s); bake them into the playlist with tools/bakelive.py"
+                  % ", ".join(filter(None, ["views of %d park(s)" % len(live["views"]) if live["views"] else "",
+                                            "%d reset(s)" % len(live["resets"]) if live["resets"] else "",
+                                            "properties " + ", ".join(live["props"]) if live["props"] else "",
+                                            "park order" if live["order"] else ""])) or "nothing to change")
         for park in result["parks"]:
             views = ", ".join("(%g,%g r%d)" % (v["x"], v["y"], v["rotation"]) for v in park["views"])
             print("%-34s %d view(s) [%s] %s" % (park["fileName"], len(park["views"]), park["source"], views))

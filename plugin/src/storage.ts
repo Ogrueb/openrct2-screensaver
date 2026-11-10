@@ -144,6 +144,7 @@ export interface Playlist {
     panChanges?: PanChanges | "off";
     built?: number; // when the playlist was built and installed (ms since 1970): the editor's restore points
     installed?: number;
+    source?: string; // the playlist file it was installed from (mksequence.py --install), for the live file
     parks: ParkEntry[];
 }
 
@@ -170,6 +171,8 @@ export function savePlaylistProps(sequence: string, props: PlaylistProps): void 
     const all = context.sharedStorage.get<Record<string, PlaylistProps>>(NAMESPACE + ".playlistProps", {});
     all[sequence] = props;
     context.sharedStorage.set(NAMESPACE + ".playlistProps", all);
+    liveProps[sequence] = props;
+    writeLive();
 }
 
 /** A park's saved views to go back to (the view editor's restore points), newest last. */
@@ -270,6 +273,77 @@ export function loadEdits(): Edits {
 
 export function saveEdits(edits: Edits): void {
     context.sharedStorage.set(NAMESPACE + ".edits", edits);
+    liveEdits = edits;
+    writeLive();
+}
+
+// The live file (engine files API, patched engine): every save of the editor's edits or Playlist
+// properties also writes them, for the installed playlist, to <user dir>/screensaver/live/<name>.json,
+// where the tools pick them up without the game's storage: every build applies them, and
+// `tools/bakelive.py` writes them into the playlist's files. The game is the file's only writer.
+
+/** The files API of the patched engine (patch "plugin files in the user folder and the clipboard"). */
+export interface FilesApi {
+    readonly filesFolder: string;
+    readFile(name: string): string | null;
+    writeFile(name: string, text: string): boolean;
+    listFiles(): string[];
+    clipboard: string;
+}
+
+declare const screensaver: Partial<FilesApi> | undefined;
+
+/** The engine's files API, or undefined (stock engine, or a patched one without it). */
+export function filesApi(): FilesApi | undefined {
+    return typeof screensaver !== "undefined" && screensaver !== null && typeof screensaver.writeFile === "function"
+        ? screensaver as FilesApi : undefined;
+}
+
+/** The live file's name for a title sequence: characters outside letters, digits, '.', '_' and '-'
+ *  become '_' (tools/mksequence.py live_file_name does the same). */
+export function liveFileName(sequence: string): string {
+    const base = sequence.replace(/[^A-Za-z0-9._-]/g, "_").replace(/^\.+/, "").slice(0, 100) || "playlist";
+    return base + ".json";
+}
+
+/** What the live file holds (version 1). */
+export interface LiveFile {
+    version: 1;
+    sequence: string;
+    source?: string; // the playlist file, as installed
+    installed?: number; // the install this was edited on (ms since 1970)
+    saved: number; // when the game wrote it (ms since 1970)
+    edits: Edits; // the editor's edits of the playlist's parks, by park key
+    props: PlaylistProps; // the editor's saved Playlist properties and park order
+}
+
+let liveEdits: Edits | undefined;
+const liveProps: Record<string, PlaylistProps> = {};
+
+export function writeLive(): boolean {
+    const api = filesApi();
+    const playlist = api ? loadPlaylist() : undefined;
+    if (!api || !playlist) {
+        return false;
+    }
+    const all = liveEdits ?? loadEdits();
+    const keys = new Set(playlist.parks.map(p => p.key ?? p.fileName));
+    const edits: Edits = {};
+    for (const key of Object.keys(all)) {
+        if (keys.has(key)) {
+            edits[key] = all[key];
+        }
+    }
+    const props = liveProps[playlist.sequence] ?? loadPlaylistProps(playlist.sequence);
+    const file: LiveFile = {
+        version: 1, sequence: playlist.sequence, source: playlist.source, installed: playlist.installed,
+        saved: Date.now(), edits, props,
+    };
+    const ok = api.writeFile(liveFileName(playlist.sequence), JSON.stringify(file, null, 1));
+    if (!ok) {
+        console.log(`[rct-screensaver] could not write ${liveFileName(playlist.sequence)} in ${api.filesFolder}`);
+    }
+    return ok;
 }
 
 /** How often each park (by key) has been entered, for the order it plays next (circuit_variants);

@@ -279,6 +279,29 @@ The panel became three panes (round 8 of the mockups accepted, built the same da
   is a later stage (`docs/enhancements.md` section 2, item 6).
 - In map mode the panes take the mouse: a press on them never reaches the boxes underneath.
 
+### Live file (2026-11-10, owner's go-ahead in "Explore saving playlists without the Generator")
+
+On the patched engine (patch 0016's files API), every save of the editor (view edits, a reset, the park
+order, Playlist properties' Save) also writes the installed playlist's part of them to
+`<user dir>/screensaver/live/<sequence>.json` (characters other than letters, digits, `.`, `_`, `-` as `_`):
+`{version: 1, sequence, source, installed, saved, edits, props}`, `edits` in the storage's form for the
+playlist's parks only, `props` the saved Playlist properties with `order`. `source` is the playlist file
+`--install` recorded in the installed playlist (`Playlist.source`). The game is the file's only writer;
+the stock engine writes none and the storage stays as it was, so everything above works unchanged.
+
+- **Builds** (`mksequence.py`, the settings page) apply the live file over the playlist's files
+  (`prepare`): properties and park order over the TOML, views over the views file (a reset or an edit
+  that pins nothing drops a park's views), only for the playlist of that name whose file is `source`.
+  `--ignore-live` leaves it out; `--ignore-edits` leaves out its views too.
+- **Bake**: `python tools/bakelive.py [playlist ...]` (no argument: every live file whose `source` is
+  known; `--list` only shows them; `--user-dir` for a game that keeps its files elsewhere) writes it into
+  the files with the code `--install` uses (`merge_edits`, `write_props`) and records the bake in
+  `live/baked/<sequence>.json` (the file's `saved` time), so builds skip it until the game saves again.
+  The game can stay open: it keeps its storage, and its next save rewrites the whole file (baking again
+  changes nothing already baked). The settings page shows waiting live edits above the park list with a
+  "Bake into playlist" button, and a change of the live file marks the build out of date.
+- **Install** takes the same edits from the storage and marks the live file baked.
+
 ### Live editing (first stage of the live editor, 2026-11-09)
 
 The "Frame" stage of the live editor (`docs/enhancements.md` section 2): the mouse on the park, off the

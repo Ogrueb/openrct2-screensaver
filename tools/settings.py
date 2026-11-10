@@ -34,7 +34,7 @@ import argparse, hashlib, http.server, json, os, re, secrets, shutil, subprocess
 
 TOOLS = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, TOOLS)
-import bundle, companions, drawviews, mksequence, parkinfo, profiles, renderviews, tomlwrite, userdata  # noqa: E402
+import bakelive, bundle, companions, drawviews, livefile, mksequence, parkinfo, profiles, renderviews, tomlwrite, userdata  # noqa: E402
 
 ROOT = os.path.dirname(TOOLS)
 PAGE = os.path.join(TOOLS, "settings.html")
@@ -303,7 +303,7 @@ class Session:
         self.facts.save()
         return {"path": self.path, "relPath": playlist_label(self.path) if self.path else None,
                 "writtenHere": bool(self.path) and written_here(self.path), "data": self.data, "parks": parks,
-                "built": self.built() is not None, "builtAt": built_at(self.built()),
+                "built": self.built() is not None, "builtAt": built_at(self.built()), "live": self.live(),
                 "parkBytes": sum(os.path.getsize(os.path.join(self.base, e["file"])) for e in entries
                                  if e.get("use", True) and os.path.exists(os.path.join(self.base, e["file"])))}
 
@@ -351,7 +351,27 @@ class Session:
         return None
 
     def input_files(self):
-        return [self.path, mksequence.edits_path(self.path)] + profile_files()
+        name = mksequence.playlist_name(self.path, self.data)
+        return [self.path, mksequence.edits_path(self.path), livefile.path(name), livefile.baked_path(name)] + profile_files()
+
+    def live(self):
+        """The game's live edits waiting for this playlist (tools/livefile.py): a build applies them, Bake
+        writes them into the playlist's files."""
+        if not self.path:
+            return None
+        live = livefile.for_playlist(self.path, mksequence.playlist_name(self.path, self.data))
+        return livefile.summary(live) if live else None
+
+    def bake(self):
+        """Writes the game's live edits into the open playlist's files and reopens it."""
+        if not self.path:
+            raise ValueError("open a playlist first")
+        live = livefile.for_playlist(self.path, mksequence.playlist_name(self.path, self.data))
+        if not live:
+            raise ValueError("no live edits from the game are waiting for this playlist")
+        lines = bakelive.bake(self.path, live)
+        self.open(self.path)
+        return lines
 
     def input_stamps(self):
         """What a build of this playlist was made from, as {file: modification time or None}."""
@@ -873,7 +893,9 @@ class App:
             except OSError:
                 return 0
         folders = [d for d in (profiles.PROFILE_DIR, userdata.parks()) if d and os.path.isdir(d)]
+        name = mksequence.playlist_name(path, self.session.data)
         key = (path, stamp(path), stamp(mksequence.edits_path(path)), stamp(PARK_CACHE),
+               stamp(livefile.path(name)), stamp(livefile.baked_path(name)),
                tuple(max([stamp(d)] + [stamp(os.path.join(d, n)) for n in os.listdir(d)]) for d in folders))
         if getattr(self, "_rebuild", (None,))[0] != key:
             try:
@@ -1242,6 +1264,9 @@ def make_handler(app, token, port):
                     if not parks:
                         raise ValueError("no park %r in the playlist (save it first?)" % body["key"])
                     return {"action": reset_profile(parks[0]), "path": "parks/%s.toml" % parks[0]["profile"]}
+            elif path == "/api/bake":
+                with session.lock:
+                    return {"lines": session.bake()}
             elif path == "/api/build":
                 if not session.path:
                     raise ValueError("save the playlist first")

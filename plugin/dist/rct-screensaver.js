@@ -179,6 +179,8 @@
     const all = context.sharedStorage.get(NAMESPACE + ".playlistProps", {});
     all[sequence] = props;
     context.sharedStorage.set(NAMESPACE + ".playlistProps", all);
+    liveProps[sequence] = props;
+    writeLive();
   }
   var CHECKPOINTS_PER_PARK = 10;
   function loadCheckpoints() {
@@ -238,6 +240,47 @@
   }
   function saveEdits(edits) {
     context.sharedStorage.set(NAMESPACE + ".edits", edits);
+    liveEdits = edits;
+    writeLive();
+  }
+  function filesApi() {
+    return typeof screensaver !== "undefined" && screensaver !== null && typeof screensaver.writeFile === "function" ? screensaver : void 0;
+  }
+  function liveFileName(sequence) {
+    const base = sequence.replace(/[^A-Za-z0-9._-]/g, "_").replace(/^\.+/, "").slice(0, 100) || "playlist";
+    return base + ".json";
+  }
+  var liveEdits;
+  var liveProps = {};
+  function writeLive() {
+    const api = filesApi();
+    const playlist = api ? loadPlaylist() : void 0;
+    if (!api || !playlist) {
+      return false;
+    }
+    const all = liveEdits ?? loadEdits();
+    const keys = new Set(playlist.parks.map((p) => p.key ?? p.fileName));
+    const edits = {};
+    for (const key of Object.keys(all)) {
+      if (keys.has(key)) {
+        edits[key] = all[key];
+      }
+    }
+    const props = liveProps[playlist.sequence] ?? loadPlaylistProps(playlist.sequence);
+    const file = {
+      version: 1,
+      sequence: playlist.sequence,
+      source: playlist.source,
+      installed: playlist.installed,
+      saved: Date.now(),
+      edits,
+      props
+    };
+    const ok = api.writeFile(liveFileName(playlist.sequence), JSON.stringify(file, null, 1));
+    if (!ok) {
+      console.log(`[rct-screensaver] could not write ${liveFileName(playlist.sequence)} in ${api.filesFolder}`);
+    }
+    return ok;
   }
   function loadVisits() {
     return context.sharedStorage.get(NAMESPACE + ".visits", {});

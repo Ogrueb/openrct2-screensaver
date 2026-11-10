@@ -13,8 +13,8 @@ and plan: `docs/engine-patches.md`.
   `openrct2` binary, `libopenrct2.so` and `data/`): untar it and run `./openrct2` from the folder.
   Untested on a desktop yet (`docs/enhancements.md`, Linux item).
 
-A release build leaves out 0016 (diagnostics): run the workflow by hand with "Release build" ticked,
-which applies 0001-0015 only.
+A release build leaves out 0017 (diagnostics): run the workflow by hand with "Release build" ticked,
+which applies 0001-0016 only.
 With "publish_tag" set too (e.g. `v0.2.0`), it then makes a draft GitHub release from the build: the
 Windows zip and the AppImage (named `-beta`), the notes from `docs/releases/<tag>.md` (first line the
 title). Check the draft on the releases page and publish it there.
@@ -46,7 +46,8 @@ on top of the ones before it. Comments in the patches name no project and use US
 | 0013 | Screensaver mode | The overlay at the window's resolution |
 | 0014 | Screensaver mode | Renderer, volumes, weather and time of day settings |
 | 0015 | Screensaver mode | The menu icon and game sprites on the overlay |
-| 0016 | Diagnostics | Park load timings and the perf log (`--perf-log`); test builds only, dropped for release |
+| 0016 | Screensaver mode | Plugin files in `<user dir>/screensaver/live` and the clipboard (`screensaver.readFile`, `writeFile`, `listFiles`, `clipboard`) |
+| 0017 | Diagnostics | Park load timings and the perf log (`--perf-log`); test builds only, dropped for release |
 
 The final patched tree is the same as before the regrouping apart from comments.
 
@@ -55,3 +56,4 @@ The final patched tree is the same as before the regrouping apart from comments.
 Older notes, commits and PRs use the numbers by date. Old to new: 0001 → 0016 (timings),
 0002 → 0003, 0003 → 0004, 0004 → 0008, 0005-0007 unchanged, 0008 → 0001, 0009 → 0002, 0010 → 0009,
 0011-0013 unchanged, 0014 → 0010, 0015 → 0016 (perf log), 0016 → 0014, 0017 → 0015.
+On 2026-11-10 the files and clipboard patch came in as 0016 and diagnostics moved to 0017.

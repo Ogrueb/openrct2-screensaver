@@ -318,7 +318,7 @@ Revisit with that presentation if any interface stays on screen.
 
 ## Status (2026-10-27)
 
-The background loading patches (now 0003 to 0008, with the load timings in 0016) are built by the
+The background loading patches (now 0003 to 0008, with the load timings in 0017) are built by the
 workflow and were tested on the owner's PC: stage 0 (timings), stage 1 (approach B), stage 2
 (approach A) and the registration slicing. Patch 0001 (interface black, third version) was confirmed by the owner on the PC: Gardens of Light shows its
 white world, the interface stays black, other parks keep their dark backdrop. Local Visual Studio
@@ -349,7 +349,7 @@ the overlay to black, clears the hold, and fades in once the new park shows. A h
 stop the sequence. Upstream code touched: `ITitleSequencePlayer` (three virtuals with defaults), the
 LOAD branch of `TitleSequencePlayer::Update`, and `ScTitleSequence`.
 
-## Perf log (patch 0016, 2026-11-02)
+## Perf log (patch 0017, 2026-11-02; 0016 until 2026-11-10)
 
 For performance tests (`docs/performance-testing.md`). `--perf-log <file>` turns on
 `src/openrct2/PerfLog.{h,cpp}`. Scoped timers in `Context::Tick`, `RunFixedFrame`/`RunVariableFrame`
@@ -392,6 +392,26 @@ element's `font` may be a bare file name, looked up in the system's font folder 
 plugin folder (`georgiai.ttf` for the captions' italic byline). An image element can show part of its
 image (`cropX`, `cropY`, `cropWidth`, `cropHeight` in the image's pixels): the caption's marble mat is one
 large texture cropped to each mat's size.
+
+## Plugin files and the clipboard (patch 0016, 2026-11-10)
+
+The plugin API has no file access beyond `plugin.store.json`, so edits made in the screensaver mode's
+view editor reached the playlist's files only through `mksequence.py --install` (owner, 2026-11-10:
+"asking the user to run the Generator just to apply their edits is awkward"). The patch adds to the
+`screensaver` global:
+
+- `readFile(name)` (the text, or null), `writeFile(name, text)` (true when written) and `listFiles()`, all
+  in one folder, `<user directory>/screensaver/live` (`filesFolder`). A name is 1-128 characters of
+  letters, digits, `.`, `_` and `-`, not starting with `.`, ending in `.json`: no separators, so nothing
+  outside the folder is reachable. Files up to 8 MiB. A write goes to `<name>.tmp` first and is renamed
+  over the old file, so the tools never read half a file.
+- `clipboard`: the system clipboard's text (SDL), get and set, for the editor's Copy and Paste views
+  (still inactive in the editor).
+
+The plugin writes the live file on every save of the editor (`plugin/src/storage.ts` `writeLive`);
+the tools' side is `tools/livefile.py` and `tools/bakelive.py` (`docs/screensaver-ui.md`, "Live file").
+The game uses the folder of its own user directory, which on a portable install is not
+`Documents\OpenRCT2`: the tools then need `--user-dir`. The diagnostics patch moved to 0017.
 
 ## Plan (as made before building)
 

@@ -27,7 +27,7 @@ Requirements, each shippable alone:
    files, Python 3.11+ and Node 20+. Owner's step; blocks 4-6.
 2. **Linux engine build** (`.github/workflows/engine.yml`): a job `Linux x64` beside `Windows x64`, copied
    from OpenRCT2's own Ubuntu CI job (its container image or `apt` list, CMake with the release's
-   options), the same "Apply patches" step (the release input leaving out 0016), producing one artifact:
+   options), the same "Apply patches" step (the release input leaving out 0017), producing one artifact:
    a tarball of the install tree (`cmake --install` into a prefix; the binary, `libopenrct2.so` if built
    shared, and the `data/` folder), named `openrct2-<tag>-openrct2-screensaver-linux-x64[-release]`.
    An AppImage is a second step only if the tarball proves awkward to run (a decision for after 4).
@@ -55,7 +55,7 @@ Requirements, each shippable alone:
    Done when: every row passes or is listed in `docs/known-issues.md` with the display server named.
 5. **Tools with the Linux executable**: once each on the test machine, `renderviews.py --openrct2
    <path>`, `drawviews.py` (its renders), `importparks.py` with one `.sv6` (`openrct2 convert`) and
-   one loose-object download, `perfrun.py run perf/quick.toml --exe <path>` (the perf log with patch 0016,
+   one loose-object download, `perfrun.py run perf/quick.toml --exe <path>` (the perf log with patch 0017,
    and `--user-data-path` sandboxes), and `mksequence.py --install` into the XDG user folder
    (`~/.config/OpenRCT2`). Fix path and process differences as they show (expected: the `.com` vs `.exe`
    choice in `renderviews.py`, process names in `userdata.py`'s running check, `pythonw` in the launcher).
@@ -187,7 +187,17 @@ each turn re-anchored on another surface; fixed the same day (the anchor is kept
 6. Later stage: the live editor on its own, without the generator (owner, 2026-11-10). Edits already
    play from the game's storage on every run; what still needs the generator (writing edits and the park
    order into the playlist files, building, the rest of the settings page's functions) is to be drafted
-   for the live editor later.
+   for the live editor later. Plan approved 2026-11-10 (thread "Explore saving playlists without the
+   Generator"): (a) engine patch 0016, plugin files in `<user dir>/screensaver/live` and the clipboard;
+   (b) the plugin writes a live file per playlist on every editor save; (c) builds apply it, the settings
+   page shows it and bakes it into the playlist (`tools/bakelive.py`, a plain Python call in the meantime).
+   **Built 2026-11-10** (`docs/screensaver-ui.md` "Live file"); not yet tested in the game. Rejected: the
+   game writing the TOML (a second TOML writer), the settings server over a localhost socket (needs it
+   running), launching Python from the plugin. Next (approved for the later plan): **the engine starts
+   the build**, a patched `screensaver.build(playlist)` running `mksequence.py` with fixed arguments in
+   the background, the plugin reading the result through the files API and swapping the new playlist in
+   live (which also lets an install happen with the game open). Copy and Paste views can use
+   `screensaver.clipboard` (left for the end, owner).
 
 ## 3. Weather and day/night in the generator (low priority)
 

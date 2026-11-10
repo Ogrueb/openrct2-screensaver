@@ -1,0 +1,197 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: RCT Screensaver <noreply@example.invalid>
+Date: Tue, 10 Nov 2026 17:30:00 +0000
+Subject: [PATCH] Screensaver: plugin files in the user folder and the
+ clipboard
+
+screensaver.readFile(name), writeFile(name, text) and listFiles() reach plain
+JSON files in one folder, <user directory>/screensaver/live (filesFolder): bare
+names of letters, digits, '.', '_' and '-' ending in .json, up to 8 MiB each.
+Writes go to a temporary file renamed over the old one. The clipboard property
+gets and sets the system clipboard's text.
+---
+ src/openrct2-ui/scripting/ScScreensaver.hpp | 140 +++++++++++++++++++-
+ 1 file changed, 139 insertions(+), 1 deletion(-)
+
+diff --git a/src/openrct2-ui/scripting/ScScreensaver.hpp b/src/openrct2-ui/scripting/ScScreensaver.hpp
+index b00cef8..f12549e 100644
+--- a/src/openrct2-ui/scripting/ScScreensaver.hpp
++++ b/src/openrct2-ui/scripting/ScScreensaver.hpp
+@@ -7,7 +7,7 @@
+  * OpenRCT2 is licensed under the GNU General Public License version 3.
+  *****************************************************************************/
+ 
+-// The `screensaver` global (mode, settings, mouse, overlay).
++// The `screensaver` global (mode, settings, mouse, overlay, files, clipboard).
+ 
+ #pragma once
+ 
+@@ -16,9 +16,15 @@
+     #include "../screensaver/Overlay.h"
+     #include "../screensaver/Screensaver.h"
+ 
++    #include <SDL.h>
+     #include <openrct2/Context.h>
++    #include <openrct2/PlatformEnvironment.h>
++    #include <openrct2/core/FileSystem.hpp>
++    #include <openrct2/core/Path.hpp>
+     #include <openrct2/scripting/ScriptEngine.h>
+     #include <algorithm>
++    #include <fstream>
++    #include <iterator>
+     #include <vector>
+ 
+ namespace OpenRCT2::Scripting
+@@ -349,6 +355,85 @@ namespace OpenRCT2::Scripting
+                 std::erase_if(*listeners, [&plugin](const Listener& l) { return l.owner == plugin; });
+             }
+         }
++
++        // Files: plain text files in one folder, <user directory>/screensaver/live, by bare name.
++        // A name is 1-128 characters of letters, digits, '.', '_' and '-', not starting with '.',
++        // and ends in ".json": no path separators, so nothing outside the folder can be reached.
++        constexpr size_t kMaxFileSize = 8 * 1024 * 1024;
++
++        inline bool IsFileName(const std::string& name)
++        {
++            if (name.empty() || name.size() > 128 || name[0] == '.' || name.size() < 6
++                || name.compare(name.size() - 5, 5, ".json") != 0)
++                return false;
++            return std::all_of(name.begin(), name.end(), [](char c) {
++                return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' || c == '_'
++                    || c == '-';
++            });
++        }
++
++        inline u8string FilesFolder()
++        {
++            auto user = GetContext()->GetPlatformEnvironment().GetDirectoryPath(DirBase::user);
++            return Path::Combine(user, "screensaver", "live");
++        }
++
++        inline std::optional<std::string> ReadFile(const std::string& name)
++        {
++            if (!IsFileName(name))
++                return std::nullopt;
++            std::error_code ec;
++            auto path = fs::u8path(Path::Combine(FilesFolder(), name));
++            if (!fs::is_regular_file(path, ec) || fs::file_size(path, ec) > kMaxFileSize || ec)
++                return std::nullopt;
++            std::ifstream in(path, std::ios::binary);
++            if (!in)
++                return std::nullopt;
++            return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
++        }
++
++        // Written to a temporary file first, then renamed over the old one, so a reader never sees
++        // half a file.
++        inline bool WriteFile(const std::string& name, const std::string& text)
++        {
++            if (!IsFileName(name) || text.size() > kMaxFileSize)
++                return false;
++            std::error_code ec;
++            auto folder = fs::u8path(FilesFolder());
++            fs::create_directories(folder, ec);
++            auto path = folder / fs::u8path(name);
++            auto temp = folder / fs::u8path(name + ".tmp");
++            {
++                std::ofstream out(temp, std::ios::binary | std::ios::trunc);
++                if (!out)
++                    return false;
++                out.write(text.data(), static_cast<std::streamsize>(text.size()));
++                if (!out)
++                    return false;
++            }
++            fs::rename(temp, path, ec);
++            if (ec)
++            {
++                fs::remove(temp, ec);
++                return false;
++            }
++            return true;
++        }
++
++        inline std::vector<std::string> ListFiles()
++        {
++            std::vector<std::string> names;
++            std::error_code ec;
++            for (fs::directory_iterator it(fs::u8path(FilesFolder()), ec), end; !ec && it != end; it.increment(ec))
++            {
++                auto name = it->path().filename().u8string();
++                std::string s(name.begin(), name.end());
++                if (IsFileName(s) && it->is_regular_file(ec))
++                    names.push_back(s);
++            }
++            std::sort(names.begin(), names.end());
++            return names;
++        }
+     } // namespace ScreensaverJS
+ 
+     class ScScreensaverOverlay final : public ScBase
+@@ -445,6 +530,11 @@ namespace OpenRCT2::Scripting
+                 JS_CFUNC_DEF("configure", 1, ScScreensaver::configure),
+                 JS_CFUNC_DEF("onChange", 1, ScScreensaver::onChange),
+                 JS_CFUNC_DEF("onMouse", 1, ScScreensaver::onMouse),
++                JS_CGETSET_DEF("filesFolder", ScScreensaver::filesFolder_get, nullptr),
++                JS_CFUNC_DEF("readFile", 1, ScScreensaver::readFile),
++                JS_CFUNC_DEF("writeFile", 2, ScScreensaver::writeFile),
++                JS_CFUNC_DEF("listFiles", 0, ScScreensaver::listFiles),
++                JS_CGETSET_DEF("clipboard", ScScreensaver::clipboard_get, ScScreensaver::clipboard_set),
+             };
+             RegisterBase(ctx, "Screensaver", nullptr, funcs);
+             ScreensaverJS::InstallListeners();
+@@ -519,6 +609,54 @@ namespace OpenRCT2::Scripting
+             ScreensaverJS::AddListener(ScreensaverJS::MouseListeners(), ctx, argv[0]);
+             return JS_UNDEFINED;
+         }
++
++        // Files in <user directory>/screensaver/live (see ScreensaverJS::IsFileName).
++        static JSValue filesFolder_get(JSContext* ctx, JSValue)
++        {
++            return JSFromStdString(ctx, ScreensaverJS::FilesFolder());
++        }
++
++        // The file's text, or null when the name is not allowed or there is no such file.
++        static JSValue readFile(JSContext* ctx, JSValue, int argc, JSValue* argv)
++        {
++            if (argc < 1 || !JS_IsString(argv[0]))
++                return JS_NULL;
++            auto text = ScreensaverJS::ReadFile(JSToStdString(ctx, argv[0]));
++            return text ? JSFromStdString(ctx, *text) : JS_NULL;
++        }
++
++        // Whether the file was written.
++        static JSValue writeFile(JSContext* ctx, JSValue, int argc, JSValue* argv)
++        {
++            if (argc < 2 || !JS_IsString(argv[0]) || !JS_IsString(argv[1]))
++                return JS_NewBool(ctx, false);
++            return JS_NewBool(ctx, ScreensaverJS::WriteFile(JSToStdString(ctx, argv[0]), JSToStdString(ctx, argv[1])));
++        }
++
++        static JSValue listFiles(JSContext* ctx, JSValue, int, JSValue*)
++        {
++            JSValue array = JS_NewArray(ctx);
++            uint32_t i = 0;
++            for (const auto& name : ScreensaverJS::ListFiles())
++                JS_SetPropertyUint32(ctx, array, i++, JSFromStdString(ctx, name));
++            return array;
++        }
++
++        // The system clipboard's text ("" when it holds none).
++        static JSValue clipboard_get(JSContext* ctx, JSValue)
++        {
++            char* text = SDL_GetClipboardText();
++            std::string result = text != nullptr ? text : "";
++            SDL_free(text);
++            return JSFromStdString(ctx, result);
++        }
++
++        static JSValue clipboard_set(JSContext* ctx, JSValue, JSValue value)
++        {
++            if (JS_IsString(value))
++                SDL_SetClipboardText(JSToStdString(ctx, value).c_str());
++            return JS_UNDEFINED;
++        }
+     };
+ 
+     inline JSValue ScScreensaver::overlay_get(JSContext* ctx, JSValue)

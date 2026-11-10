@@ -46,27 +46,27 @@ Read by tools/perfreport.py; runs driven by tools/perfrun.py.
  create mode 100644 src/openrct2/PerfLog.h
 
 diff --git a/src/openrct2-ui/scripting/ScScreensaver.hpp b/src/openrct2-ui/scripting/ScScreensaver.hpp
-index b00cef8..4a5d301 100644
+index f12549e..535b965 100644
 --- a/src/openrct2-ui/scripting/ScScreensaver.hpp
 +++ b/src/openrct2-ui/scripting/ScScreensaver.hpp
-@@ -17,6 +17,7 @@
-     #include "../screensaver/Screensaver.h"
+@@ -18,6 +18,7 @@
  
+     #include <SDL.h>
      #include <openrct2/Context.h>
 +    #include <openrct2/PerfLog.h>
-     #include <openrct2/scripting/ScriptEngine.h>
-     #include <algorithm>
-     #include <vector>
-@@ -445,6 +446,8 @@ namespace OpenRCT2::Scripting
-                 JS_CFUNC_DEF("configure", 1, ScScreensaver::configure),
-                 JS_CFUNC_DEF("onChange", 1, ScScreensaver::onChange),
-                 JS_CFUNC_DEF("onMouse", 1, ScScreensaver::onMouse),
+     #include <openrct2/PlatformEnvironment.h>
+     #include <openrct2/core/FileSystem.hpp>
+     #include <openrct2/core/Path.hpp>
+@@ -535,6 +536,8 @@ namespace OpenRCT2::Scripting
+                 JS_CFUNC_DEF("writeFile", 2, ScScreensaver::writeFile),
+                 JS_CFUNC_DEF("listFiles", 0, ScScreensaver::listFiles),
+                 JS_CGETSET_DEF("clipboard", ScScreensaver::clipboard_get, ScScreensaver::clipboard_set),
 +                JS_CGETSET_DEF("perfLog", ScScreensaver::perfLog_get, nullptr),
 +                JS_CFUNC_DEF("perfMark", 1, ScScreensaver::perfMark),
              };
              RegisterBase(ctx, "Screensaver", nullptr, funcs);
              ScreensaverJS::InstallListeners();
-@@ -466,6 +469,19 @@ namespace OpenRCT2::Scripting
+@@ -556,6 +559,19 @@ namespace OpenRCT2::Scripting
              return JS_NewBool(ctx, Ui::Screensaver::IsActive());
          }
  
