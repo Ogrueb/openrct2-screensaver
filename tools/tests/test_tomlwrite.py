@@ -66,6 +66,17 @@ class Patch(unittest.TestCase):
         out = self.check(lambda d: d.__setitem__("companions", False))
         self.assertLess(out.index("companions = false"), out.index("[match]"))
 
+    def test_key_added_after_a_wrapped_comment(self):
+        doc = 'music = "keep"   # first line of a comment\n                 # its second line\n\n[views]\ncount = 4\n'
+        data = tomllib.loads(doc)
+        data["titles"] = "overview"
+        out = tomlwrite.patch(doc, data)
+        self.assertEqual(tomllib.loads(out), data)
+        self.assertIn("# its second line\ntitles = ", out)
+        del data["titles"], data["music"]
+        out = tomlwrite.patch(doc, data)
+        self.assertNotIn("second line", out)
+
     def test_array_entry_edited_in_place(self):
         out = self.check(lambda d: (d["park"][0].__setitem__("use", False),
                                     d["park"][0].setdefault("views", {}).__setitem__("count", 3)))
