@@ -290,12 +290,17 @@
      * camera stays where it was over the void. */
     anchor() {
       const c = this.camera;
+      const pv = this.pivot;
+      if (pv && Math.abs(c.x - pv.x) <= 1 && Math.abs(c.y - pv.y) <= 1 && Math.abs(c.z - pv.z) <= 1) {
+        return;
+      }
       const p = toScreen(c.x, c.y, c.z, c.rotation);
       const z = surfaceZ(p, c.rotation);
       if (z !== void 0) {
         const world = toWorld(p, z, c.rotation);
         this.camera = { ...c, x: world.x, y: world.y, z };
       }
+      this.pivot = { x: this.camera.x, y: this.camera.y, z: this.camera.z };
     }
     // Undo and redo, per park.
     stacks() {

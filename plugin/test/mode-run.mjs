@@ -313,6 +313,19 @@ assert.ok(scene.get("rcts.bar.titles.icon").src.includes("titles-off"), "on -> o
     // A view set from the camera sits at the height of what is at the screen's centre (the mock's ground, 48).
     assert.equal(edits()[0].z, 48, "the view's height is the ground under the centre");
     assert.equal(ed("fit"), undefined, "no Fit height button: the height is set by itself");
+    // Turning many times over uneven buildings pivots on one point: the camera comes back to it.
+    {
+        const flat = sandbox.map.getTile;
+        sandbox.map.getTile = (tx, ty) => ({ elements: [{ type: "surface", baseZ: 48 },
+            { type: "small_scenery", clearanceZ: 48 + ((tx * 7 + ty * 13) % 5) * 40 }] });
+        edClick("rotr");
+        const start = JSON.stringify(viewport.centre);
+        for (let i = 0; i < 4 * 6; i++) edClick(i % 3 === 0 ? "rotl" : "rotr");
+        // 8 left, 16 right: a whole number of turns
+        assert.equal(JSON.stringify(viewport.centre), start, "many turns do not drift the camera");
+        for (let i = 0; i < 4 * 6; i++) edClick(i % 3 === 0 ? "rotr" : "rotl");
+        sandbox.map.getTile = flat;
+    }
     // During Play a drag only stops Play: no view moves.
     shortcuts["rctscreensaver.hold"]();
     const playing = tile();

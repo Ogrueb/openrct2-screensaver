@@ -223,7 +223,10 @@ panel and the bar, edits the selected view directly.
   sits at the height of what is seen at the screen's centre (the first tile top, ground or water met
   walking down the heights that point could show; over the void it keeps its height). The picture never
   moves for it; what it changes is the pivot of a turn: a pan's turn and the Rotate buttons (which anchor
-  the camera the same way first) keep what is at the centre in the centre.
+  the camera the same way first) keep what is at the centre in the centre. The anchor is found once and
+  kept until the camera moves, so turning again and again pivots on the same point (each angle sees another
+  surface at the centre, and anchoring after every turn drifted the camera a little per turn; owner's test
+  2026-11-10).
 - **Set to camera** keeps the view's pan, turn, inertia and event settings (it used to drop them); a framed
   overview loses its `overview` flag, so it plays as framed.
 - **Undo and redo** (the panel's Undo and Redo, Ctrl+Z, Ctrl+Y or Ctrl+Shift+Z): every change to a park's
