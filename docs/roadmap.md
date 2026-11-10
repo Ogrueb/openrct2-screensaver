@@ -532,9 +532,14 @@ release step:
 
 The mode's UI is built in the order controls bar and load cover, captions, then the editor
 (`docs/screensaver-ui.md`). That editor is the simple one. A more complex "live" editor is left as
-an enhancement: drag boxes on the playing park, the views list, holds, pans and Play, replacing
-the drawing page. Design and stages in `docs/enhancements.md` section 2 (2026-11-09); stage 1 (Frame
-mode: drag the park to move the selected view, wheel zoom, the height set by itself, undo and redo) done; stages 2-4 (the map on M: boxes, markers, dotted pan lines, drag, corner zoom, right-click add, locked event views) done 2026-11-10, untested.
+an enhancement: drag boxes on the playing park, the views list, holds, pans and Play, alongside
+the drawing page (both stay, owner 2026-11-10). Design and stages in `docs/enhancements.md` section 2 (2026-11-09); stage 1 (Frame
+mode: drag the park to move the selected view, wheel zoom, the height set by itself, undo and redo) done; stages 2-4 (the map on M: boxes, markers, dotted pan lines, drag, corner zoom, right-click add, locked event views) done and passed the owner's test 2026-11-10.
+
+Later stage (owner, 2026-11-10): the live editor on its own, without the generator. Edits already play
+from the game's storage; writing them and the park order into the playlist files, builds, and the rest of the
+settings page's functions are to be drafted for the live editor later (`docs/enhancements.md` section 2, item 6).
+Next before that: the editing UI redesign (item 5, mockups in the project files' `editor-ui/`).
 
 ### Weather and day/night in the generator (owner, 2026-11-02)
 

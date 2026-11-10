@@ -171,6 +171,22 @@ the corner handle, right-click add with undo, double-click framing, locked event
 and Sambhava's Rest; install and play after map edits skipped). Repeated turns drifted the camera, as
 each turn re-anchored on another surface; fixed the same day (the anchor is kept until the camera moves).
 
+5. Editing UI (owner, 2026-11-10; mockups in the project files' `editor-ui/`, rounds 1-4): a views pane at
+   the top left (park name as a dropdown: press and hold opens it and jumps on release, a click keeps it
+   open as the playlist's park order with drag handles; views reordered by dragging rows); a toolbox at the
+   bottom left (option A: a Frame | Map switch on top with a one-line hint, then View, Camera and the event
+   lock, Hold and Pan, and a footer of undo, redo, reset view, the pin toggle and Play; icons with tooltips
+   naming their keys; buttons that do nothing gray and flat); a block at the top right with the park's
+   restore points (a list 3.5 rows high with a scroll bar: editor opened, checkpoints, last install,
+   generated, each with its time; Restore works on the selected entry), Save checkpoint, Copy and Paste
+   views (the drawing page's text format; needs a clipboard call in the mode's engine patches), and a
+   Playlist section for playlist-wide settings (turns and zoom changes, inertia, time scale). Mockup
+   approved in part; not built yet.
+6. Later stage: the live editor on its own, without the generator (owner, 2026-11-10). Edits already
+   play from the game's storage on every run; what still needs the generator (writing edits and the park
+   order into the playlist files, building, the rest of the settings page's functions) is to be drafted
+   for the live editor later.
+
 ## 3. Weather and day/night in the generator (low priority)
 
 Goal: the playlist decides the light and weather of the show rather than each park's saved date and the
