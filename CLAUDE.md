@@ -308,7 +308,7 @@ See README.md for usage.
 - `tools/drawviews.py` + `tools/drawviews.html`: draw views as boxes in the browser on headless
   renders of each park from all four angles (`openrct2 screenshot` with a known viewport, so a box
   maps exactly to a view); saves pinned (`arranged`) entries into `<playlist>.views.json` as it
-  goes. Separate from the in-game editor by the owner's choice (2026-10-27): drag boxes in the game
+  goes. Separate from the in-game editor by the owner's choice (2026-10-27); both stay, as they work in different contexts (owner, 2026-11-10): drag boxes in the game
   wait for the minimal-UI presentation. The settings page serves it as its view-drawing page (owner,
   2026-11-01: Edit views in the park list or on the renders page, on the last build; Copy/Paste of a
   park's views and event settings as text; the Events panel, with event times in seconds; Reset views
