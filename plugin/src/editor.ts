@@ -136,6 +136,7 @@ export class Editor {
     private undoStacks = new Map<number, { undo: Snapshot[]; redo: Snapshot[] }>(); // by park index
     private gesture: { commit: boolean; moved: boolean } | undefined; // a drag on the park
     private map = false; // the map: every view a box on a camera stepped out
+    private mapPark = -1; // the park the map's camera was set on
     private eventsUnlocked = false; // the map lets event views be dragged
     private opened = new Map<string, { time: number; snapshot: Snapshot }>(); // each park's views as the editor first showed it
     private base: { park: number; views: View[] } | undefined; // the current park's playlist views (Reset view)
@@ -432,6 +433,7 @@ export class Editor {
         if (this.map) {
             const view = this.player.currentViews[this.selected];
             this.camera.zoom = Math.min(MAX_ZOOM, (view?.zoom ?? this.camera.zoom) + MAP_OUT);
+            this.mapPark = this.player.parkIndex;
             this.applyCamera();
         } else if (this.selectedIndex >= 0) {
             this.player.showViewAt(this.selected); // calls viewShown
@@ -444,6 +446,18 @@ export class Editor {
     frame(index: number): void {
         this.map = false;
         this.select(index);
+    }
+
+    /** On the map, puts the camera back on the viewport when the engine turned or zoomed it (a park
+     *  load sets its own angle a frame after the plugin's), so the boxes match the picture. */
+    syncMap(): void {
+        if (!this.map || this.player.isLoading) {
+            return;
+        }
+        const vp = ui.mainViewport;
+        if (vp.rotation !== this.camera.rotation || vp.zoom !== this.camera.zoom) {
+            this.applyCamera();
+        }
     }
 
     /** The camera as it is (the map projects the views through it). */
@@ -883,6 +897,13 @@ export class Editor {
         this.noteOpened();
         if (this.map && !this.player.isPreviewing) {
             this.selected = this.player.viewIndex;
+            if (this.mapPark !== this.player.parkIndex && view) {
+                // Another park: the old camera's spot and angle mean nothing here, so the map steps out
+                // from the view shown, at its angle (boxes were drawn at the old angle, owner's test).
+                this.cameraFromView(view);
+                this.camera.zoom = Math.min(MAX_ZOOM, view.zoom + MAP_OUT);
+                this.mapPark = this.player.parkIndex;
+            }
             this.applyCamera(); // the map keeps its camera
             return;
         }

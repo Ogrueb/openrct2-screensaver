@@ -343,6 +343,8 @@
       // a drag on the park
       this.map = false;
       // the map: every view a box on a camera stepped out
+      this.mapPark = -1;
+      // the park the map's camera was set on
       this.eventsUnlocked = false;
       // the map lets event views be dragged
       this.opened = /* @__PURE__ */ new Map();
@@ -602,6 +604,7 @@
       if (this.map) {
         const view = this.player.currentViews[this.selected];
         this.camera.zoom = Math.min(MAX_ZOOM2, (view?.zoom ?? this.camera.zoom) + MAP_OUT);
+        this.mapPark = this.player.parkIndex;
         this.applyCamera();
       } else if (this.selectedIndex >= 0) {
         this.player.showViewAt(this.selected);
@@ -613,6 +616,17 @@
     frame(index) {
       this.map = false;
       this.select(index);
+    }
+    /** On the map, puts the camera back on the viewport when the engine turned or zoomed it (a park
+     *  load sets its own angle a frame after the plugin's), so the boxes match the picture. */
+    syncMap() {
+      if (!this.map || this.player.isLoading) {
+        return;
+      }
+      const vp = ui.mainViewport;
+      if (vp.rotation !== this.camera.rotation || vp.zoom !== this.camera.zoom) {
+        this.applyCamera();
+      }
     }
     /** The camera as it is (the map projects the views through it). */
     get cameraPose() {
@@ -1017,6 +1031,11 @@
       this.noteOpened();
       if (this.map && !this.player.isPreviewing) {
         this.selected = this.player.viewIndex;
+        if (this.mapPark !== this.player.parkIndex && view) {
+          this.cameraFromView(view);
+          this.camera.zoom = Math.min(MAX_ZOOM2, view.zoom + MAP_OUT);
+          this.mapPark = this.player.parkIndex;
+        }
         this.applyCamera();
         return;
       }
@@ -5149,6 +5168,7 @@
     /** Called every update: with the pin off the panes hide once the mouse has rested a while. */
     update() {
       const e = this.editor;
+      e?.syncMap();
       const second = e && this.eventsRect && !this.hidden ? Math.floor(e.playback.parkClock / 40) : -1;
       if (second >= 0 && second !== this.clockShown && !this.busy || e && e.playback.isLoading !== this.loadingShown) {
         this.render();
@@ -5549,6 +5569,7 @@
         return;
       }
       this.loadingShown = e.playback.isLoading;
+      this.hovered = this.hit();
       this.boxes.clear();
       this.tips.clear();
       this.off.clear();
@@ -5677,7 +5698,7 @@
         true
       ));
       const top = list.y + s.rowHeight;
-      const hover = this.hit();
+      const hover = this.hovered;
       const r = this.rowDrag?.list === "views" && this.rowDrag.moving ? this.rowDrag : void 0;
       for (let i = 0; i < s.visibleRows; i++) {
         const index = route[this.views.first + i];
@@ -5755,7 +5776,7 @@
         true
       ));
       const top = list.y + s.rowHeight;
-      const hover = this.hit();
+      const hover = this.hovered;
       for (let i = 0; i < s.eventRows; i++) {
         const k = this.events.first + i;
         const index = events[k];
@@ -5823,6 +5844,7 @@
       const z = Z.tip - 4;
       scene.set("parks", { type: "rect", ...area, fill: "#0b170fff", z });
       bevel(scene, "parks", area, THEME.bevelDark, THEME.bevelLight, THEME.bevel, z);
+      scene.set("parks.open", { type: "rect", ...area, fill: "#00000000", border: THEME.fieldOpen, borderWidth: 2, z: z + 3 });
       const head = this.dropdown?.persistent ? "Playlist order" : "Release on a park to go there";
       label(scene, "parks.head", head, { x: area.x + 8, y: area.y, width: 0, height: s.parkRow }, s.textSize, overlay, true);
       scene.set("parks.head", { ...scene.get("parks.head"), z: z + 2 });
@@ -5834,7 +5856,7 @@
       }
       const width = area.width - bar2;
       const top = area.y + s.parkRow;
-      const hover = this.hit();
+      const hover = this.hovered;
       const r = this.rowDrag?.list === "parks" && this.rowDrag.moving ? this.rowDrag : void 0;
       const countW = measure(overlay, "000 views", s.textSize).width;
       for (let i = 0; i < visible; i++) {
@@ -5844,7 +5866,8 @@
           break;
         }
         const box = this.place(`park.${p}`, { x: area.x, y: top + i * s.parkRow, width, height: s.parkRow });
-        const fill = index === e.parkIndex ? THEME.faceOn : hover === `park.${p}` && !r ? THEME.faceHover : i % 2 ? THEME.face : "#00000000";
+        const jump = !this.dropdown?.persistent && hover === `park.${p}`;
+        const fill = jump ? THEME.faceAltHover : index === e.parkIndex ? THEME.faceOn : hover === `park.${p}` && !r ? THEME.faceHover : i % 2 ? THEME.face : "#00000000";
         scene.set(`park.${p}`, { type: "rect", ...box, fill, z: z + 1 });
         if (this.dropdown?.persistent) {
           grip(scene, `pgrip.${i}`, box.x + 5, box.y + box.height / 2, z + 2);
@@ -6049,7 +6072,7 @@
       this.pointsRect = { x: x0, y, width: inner, height: listH };
       this.points.layout({ x: x0 + inner - s.scrollBar, y, width: s.scrollBar, height: listH }, points.length, s.boxRows);
       scene.set("points", { type: "rect", ...this.pointsRect, fill: THEME.editorList, z: Z.face });
-      const hover = this.hit();
+      const hover = this.hovered;
       const first = Math.floor(this.points.first);
       for (let i = 0; first + i < points.length && i * s.boxRow < listH; i++) {
         const p = points[first + i];
@@ -6080,7 +6103,7 @@
         "Restore selected",
         x0 + inner - halfW,
         halfW,
-        this.picked ? "Go back to the highlighted restore point (Undo returns)" : "Highlight a restore point first",
+        this.picked ? "Go back to the highlighted restore point" : "Highlight a restore point first",
         !editable || !this.picked
       );
       y += s.boxButton + 4;

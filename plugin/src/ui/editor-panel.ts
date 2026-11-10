@@ -108,6 +108,7 @@ export class EditorPanel implements EditorView {
     private eventsRect: Rect | undefined; // the event views' rows, when the park has any
     private clockShown = -1; // the park clock's second the event list last showed
     private loadingShown = false; // a park change under way when the panes were last drawn
+    private hovered: string | undefined; // the element under the mouse, from the last layout
     private parksRect: Rect | undefined; // the park list, while open
     private pointsRect: Rect | undefined; // the restore points' rows
     private readonly views = new Scroll();
@@ -164,6 +165,7 @@ export class EditorPanel implements EditorView {
     /** Called every update: with the pin off the panes hide once the mouse has rested a while. */
     update(): void {
         const e = this.editor;
+        e?.syncMap();
         // The event list's "in m:ss" counts down with the park's clock.
         const second = e && this.eventsRect && !this.hidden ? Math.floor(e.playback.parkClock / 40) : -1;
         if ((second >= 0 && second !== this.clockShown && !this.busy) || (e && e.playback.isLoading !== this.loadingShown)) {
@@ -537,6 +539,9 @@ export class EditorPanel implements EditorView {
             return;
         }
         this.loadingShown = e.playback.isLoading;
+        // What the mouse is over, from the last layout: a list row is placed only as its row is
+        // drawn, so asking during the drawing misses the rows below.
+        this.hovered = this.hit();
         this.boxes.clear();
         this.tips.clear();
         this.off.clear();
@@ -664,7 +669,7 @@ export class EditorPanel implements EditorView {
         EDITOR_COLUMNS.forEach((h, c) => label(scene, `head.${c}`, h,
             { x: list.x + cols[c] + 4, y: list.y, width: 0, height: s.rowHeight }, s.textSize, overlay, true));
         const top = list.y + s.rowHeight;
-        const hover = this.hit();
+        const hover = this.hovered;
         const r = this.rowDrag?.list === "views" && this.rowDrag.moving ? this.rowDrag : undefined;
         for (let i = 0; i < s.visibleRows; i++) {
             const index = route[this.views.first + i];
@@ -717,7 +722,7 @@ export class EditorPanel implements EditorView {
         EVENT_COLUMNS.forEach((h, c) => label(scene, `ehead.${c}`, h,
             { x: list.x + cols[c] + 4, y: list.y, width: 0, height: s.rowHeight }, s.textSize, overlay, true));
         const top = list.y + s.rowHeight;
-        const hover = this.hit();
+        const hover = this.hovered;
         for (let i = 0; i < s.eventRows; i++) {
             const k = this.events.first + i;
             const index = events[k];
@@ -779,6 +784,8 @@ export class EditorPanel implements EditorView {
         const z = Z.tip - 4; // over the views list
         scene.set("parks", { type: "rect", ...area, fill: "#0b170fff", z });
         bevel(scene, "parks", area, THEME.bevelDark, THEME.bevelLight, THEME.bevel, z);
+        // The open list carries the field's gold border (owner, 2026-11-10).
+        scene.set("parks.open", { type: "rect", ...area, fill: "#00000000", border: THEME.fieldOpen, borderWidth: 2, z: z + 3 });
         const head = this.dropdown?.persistent ? "Playlist order" : "Release on a park to go there";
         label(scene, "parks.head", head, { x: area.x + 8, y: area.y, width: 0, height: s.parkRow }, s.textSize, overlay, true);
         scene.set("parks.head", { ...scene.get("parks.head")!, z: z + 2 });
@@ -790,7 +797,7 @@ export class EditorPanel implements EditorView {
         }
         const width = area.width - bar;
         const top = area.y + s.parkRow;
-        const hover = this.hit();
+        const hover = this.hovered;
         const r = this.rowDrag?.list === "parks" && this.rowDrag.moving ? this.rowDrag : undefined;
         const countW = measure(overlay, "000 views", s.textSize).width;
         for (let i = 0; i < visible; i++) {
@@ -800,7 +807,10 @@ export class EditorPanel implements EditorView {
                 break;
             }
             const box = this.place(`park.${p}`, { x: area.x, y: top + i * s.parkRow, width, height: s.parkRow });
-            const fill = index === e.parkIndex ? THEME.faceOn : hover === `park.${p}` && !r ? THEME.faceHover : i % 2 ? THEME.face : "#00000000";
+            // Held to jump, the park under the mouse is the one a release goes to: gold (owner, 2026-11-10).
+            const jump = !this.dropdown?.persistent && hover === `park.${p}`;
+            const fill = jump ? THEME.faceAltHover : index === e.parkIndex ? THEME.faceOn
+                : hover === `park.${p}` && !r ? THEME.faceHover : i % 2 ? THEME.face : "#00000000";
             scene.set(`park.${p}`, { type: "rect", ...box, fill, z: z + 1 });
             if (this.dropdown?.persistent) {
                 grip(scene, `pgrip.${i}`, box.x + 5, box.y + box.height / 2, z + 2);
@@ -975,7 +985,7 @@ export class EditorPanel implements EditorView {
         this.pointsRect = { x: x0, y, width: inner, height: listH };
         this.points.layout({ x: x0 + inner - s.scrollBar, y, width: s.scrollBar, height: listH }, points.length, s.boxRows);
         scene.set("points", { type: "rect", ...this.pointsRect, fill: THEME.editorList, z: Z.face });
-        const hover = this.hit();
+        const hover = this.hovered;
         const first = Math.floor(this.points.first);
         for (let i = 0; first + i < points.length && i * s.boxRow < listH; i++) {
             const p = points[first + i];
@@ -1001,7 +1011,7 @@ export class EditorPanel implements EditorView {
         const editable = e.playback.canEdit && !e.playback.isLoading;
         btn("checkpoint", "checkpoint", "Save checkpoint", x0, halfW, "Keep the park's views and the camera as they are now (the 10 most recent are kept)", !editable);
         btn("restore", "restore", "Restore selected", x0 + inner - halfW, halfW,
-            this.picked ? "Go back to the highlighted restore point (Undo returns)" : "Highlight a restore point first", !editable || !this.picked);
+            this.picked ? "Go back to the highlighted restore point" : "Highlight a restore point first", !editable || !this.picked);
         y += s.boxButton + 4;
         btn("copy", "copy", "Copy views", x0, halfW, "Copy the park's views as text (later)", true);
         btn("paste", "paste", "Paste views", x0 + inner - halfW, halfW, "Paste views from text (later)", true);

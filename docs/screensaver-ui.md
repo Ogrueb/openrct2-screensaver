@@ -262,8 +262,8 @@ The panel became three panes (round 8 of the mockups accepted, built the same da
   playlist's own views), each with its time (today: hh:mm; else the date; install and build times from the
   playlist, `installed` and `built`). Restore selected works on the highlighted row, as one undoable change.
   Fold marks (the box's header, Playlist, the park field) are icons, as the game's font has no triangles;
-  the open park field has a gold border. On the map, the boxes clear while a park change is under way (the
-  views are already the next park's) and come back once it shows. Every Playlist button has a tooltip.
+  the open park field and its list have a gold border, and held to jump, the park under the mouse is gold. On the map, the boxes clear while a park change is under way (the
+  views are already the next park's) and come back once it shows; on another park the map steps out from the view shown, at its angle, and follows the viewport when a load turns it. Every Playlist button has a tooltip.
   Copy and Paste views are inactive for now (no clipboard in the mode yet; left for the end, owner).
   Under it the foldable **Playlist** properties (the playlist's name at the right): Motion (Inertia
   Off/On; Angle and zoom change Off/Start/End, where Off makes every pan that would turn or zoom a cut,
