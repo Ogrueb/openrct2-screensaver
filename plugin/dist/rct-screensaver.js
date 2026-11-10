@@ -5048,22 +5048,22 @@
   var HINT_MAP = "Drag a box or its corner. Right-click: adds a view.";
   var DRAG_Z = Z.tip - 2;
   var CHOICES = {
-    inertia: [["Off", false, "Pans move at an even speed"], ["On", true, "Pans ease in and out"]],
+    inertia: [["Off", false, "Even pan speed"], ["On", true, "Eased pans"]],
     panChanges: [
-      ["Off", "off", "No turns or zooms on a pan: a change of angle or zoom cuts"],
-      ["Start", "start", "Turn and zoom as a pan sets off"],
-      ["End", "end", "Turn and zoom as a pan arrives"]
+      ["Off", "off", "Cut on angle or zoom change"],
+      ["Start", "start", "Turn and zoom at pan start"],
+      ["End", "end", "Turn and zoom at pan end"]
     ],
     titleMusic: [
-      ["Ride", "ride", "The parks' ride music, following the view"],
-      ["Theme", "theme", "The title theme"],
-      ["Unset", "keep", "The viewer's own music setting"]
+      ["Ride", "ride", "Ride music"],
+      ["Theme", "theme", "Title theme"],
+      ["Unset", "keep", "Viewer's setting"]
     ],
     titles: [
-      ["Overview", "overview", "The park's name on its first view"],
-      ["On", "on", "The park's name on every view"],
-      ["Off", "off", "No park names"],
-      ["Unset", null, "The viewer's own titles setting"]
+      ["Overview", "overview", "First view"],
+      ["On", "on", "Every view"],
+      ["Off", "off", "No names"],
+      ["Unset", null, "Viewer's setting"]
     ]
   };
   var Scroll = class {
@@ -5612,11 +5612,11 @@
       const closeX = x0 + inner - t;
       const nextX = closeX - s.groupGap - t;
       this.place("nextPark", { x: nextX, y, width: t, height: t }, "Next park", !many || e.playback.isLoading);
-      this.place("close", { x: closeX, y, width: t, height: t }, "Close the editor (E)");
+      this.place("close", { x: closeX, y, width: t, height: t }, "Close (E)");
       const field = this.place(
         "field",
         { x: x0 + t + s.gap, y, width: nextX - s.gap - (x0 + t + s.gap), height: t },
-        many ? "Hold to pick a park; click for the playlist's order" : void 0
+        many ? "Hold: jump to a park. Click: reorder" : void 0
       );
       y += t + s.gap;
       const rows = e.rows();
@@ -5915,8 +5915,8 @@
       const noView = e.selectedIndex < 0 || loading;
       const fixedView = noView || e.selectedLocked;
       const half = Math.floor((inner - s.gap) / 2);
-      this.place("frameMode", { x: x0, y, width: half, height: s.switchHeight }, "Frame: edit through the camera (M switches)", loading);
-      this.place("mapMode", { x: x0 + inner - half, y, width: half, height: s.switchHeight }, "Map: every view as a box (M)", loading);
+      this.place("frameMode", { x: x0, y, width: half, height: s.switchHeight }, "Frame: edit through the camera (M)", loading);
+      this.place("mapMode", { x: x0 + inner - half, y, width: half, height: s.switchHeight }, "Map: all views as boxes (M)", loading);
       button(
         scene,
         "frameMode",
@@ -5940,14 +5940,14 @@
       y += s.hintHeight;
       const groups = [
         ["VIEW", [
-          ["add", "add", "Add a view (Insert)", loading || !e.playback.canEdit],
+          ["add", "add", "Add view (Insert)", loading || !e.playback.canEdit],
           [
             "update",
             "set-camera",
-            e.selectedLocked ? "Event views are locked (unlock on the map)" : e.mapMode ? "Set to camera: the view moves to the map's centre (C)" : "Set to camera (on the map; here the view follows the camera)",
+            e.selectedLocked ? "Locked event (unlock on map)" : e.mapMode ? "Move view to center (C)" : "Map only (C)",
             fixedView || !e.mapMode
           ],
-          ["delete", "delete", e.selectedLocked ? "Event views are locked (unlock on the map)" : "Delete the view (Delete)", fixedView]
+          ["delete", "delete", e.selectedLocked ? "Locked event (unlock on map)" : "Delete view (Delete)", fixedView]
         ]],
         ["CAMERA", [
           ["rotl", "rotate-left", "Rotate left (Shift+Enter)", loading],
@@ -5959,7 +5959,7 @@
           [
             "lock",
             e.eventsLocked ? "events-locked" : "events-unlocked",
-            e.eventsLocked ? "Event views locked: unlock to move them on the map (L)" : "Event views unlocked (L)",
+            e.eventsLocked ? "Events locked (L)" : "Events unlocked (L)",
             !e.mapMode,
             !e.eventsLocked
           ]
@@ -5997,13 +5997,13 @@
         "panMore",
         view ? `${Math.round(e.playback.panOf(view) * 100)}%` : "-",
         holdEnd + s.groupGap,
-        ["Less of the hold panning (Shift+[)", "More of the hold panning (Shift+])"]
+        ["Less panning (Shift+[)", "More panning (Shift+])"]
       );
       y += s.labelHeight + b + 8;
       const foot = [
         ["undo", "undo", "Undo (Ctrl+Z)", !e.canUndo, x0],
         ["redo", "redo", "Redo (Ctrl+Y)", !e.canRedo, x0 + b + s.gap],
-        ["reset", "reset-view", "Reset the view to the playlist's", !e.canResetView, x0 + 2 * b + s.gap + s.footerGap]
+        ["reset", "reset-view", "Reset to playlist view", !e.canResetView, x0 + 2 * b + s.gap + s.footerGap]
       ];
       for (const [id, icon, tip, disabled, fx] of foot) {
         const r = this.place(id, { x: fx, y, width: b, height: b }, tip, disabled);
@@ -6012,13 +6012,13 @@
       const play = this.place(
         "play",
         { x: x0 + inner - s.playWidth, y, width: s.playWidth, height: b },
-        e.isPlaying ? "Stop playing (P; moving the camera stops it too)" : "Play the park's views (P)",
+        e.isPlaying ? "Stop (P)" : "Play (P)",
         loading
       );
       const pin = this.place(
         "pin",
         { x: play.x - s.gap - b, y, width: b, height: b },
-        e.pinned ? "Pinned: the editor stays shown" : "Unpinned: the editor hides with the cursor"
+        e.pinned ? "Pinned" : "Unpinned: hides when idle"
       );
       button(scene, "pin", pin, this.state("pin", e.pinned), { icon: "pin", iconSize: s.toolIcon }, overlay);
       button(
@@ -6045,7 +6045,7 @@
       let y = top + s.pad;
       const folded = this.boxFolded();
       const headH = 20;
-      const head = this.place("boxHead", { x: x0, y, width: inner, height: headH }, folded ? "Show the restore points and playlist" : "Fold this box");
+      const head = this.place("boxHead", { x: x0, y, width: inner, height: headH }, folded ? "Unfold" : "Fold");
       scene.set("boxHead", { type: "rect", ...head, fill: this.hit() === "boxHead" ? THEME.face : "#00000000", z: Z.face });
       const source = e.source();
       const sw = measure(overlay, source.text, s.boxHead).width;
@@ -6096,21 +6096,21 @@
         button(scene, id, r, this.state(id), { icon, iconSize: s.toolIcon, text, textSize: 14, left: true }, overlay);
       };
       const editable = e.playback.canEdit && !e.playback.isLoading;
-      btn("checkpoint", "checkpoint", "Save checkpoint", x0, halfW, "Keep the park's views and the camera as they are now (the 10 most recent are kept)", !editable);
+      btn("checkpoint", "checkpoint", "Save checkpoint", x0, halfW, "Save views and camera (last 10 kept)", !editable);
       btn(
         "restore",
         "restore",
         "Restore selected",
         x0 + inner - halfW,
         halfW,
-        this.picked ? "Go back to the highlighted restore point" : "Highlight a restore point first",
+        this.picked ? "Restore highlighted point" : "Highlight a point first",
         !editable || !this.picked
       );
       y += s.boxButton + 4;
-      btn("copy", "copy", "Copy views", x0, halfW, "Copy the park's views as text (later)", true);
-      btn("paste", "paste", "Paste views", x0 + inner - halfW, halfW, "Paste views from text (later)", true);
+      btn("copy", "copy", "Copy views", x0, halfW, "Copy views (coming later)", true);
+      btn("paste", "paste", "Paste views", x0 + inner - halfW, halfW, "Paste views (coming later)", true);
       y += s.boxButton + 10;
-      const ph = this.place("propsHead", { x: x0, y, width: inner, height: s.propHeader }, this.propsOpen ? "Fold the playlist properties" : "Show the playlist properties");
+      const ph = this.place("propsHead", { x: x0, y, width: inner, height: s.propHeader }, this.propsOpen ? "Fold" : "Unfold");
       scene.set("propsHead", { type: "rect", ...ph, fill: this.hit() === "propsHead" ? THEME.faceHover : "#00000000", z: Z.face });
       bevel(scene, "propsHead", ph, THEME.backingLight, THEME.backingDark, THEME.bevel, Z.bevel);
       foldMark(scene, "props.mark", this.propsOpen, x0 + 4, y + s.propHeader / 2, overlay);
@@ -6128,9 +6128,9 @@
       }
       const third = Math.floor((inner - 8) / 3);
       const unsaved = e.playback.playlistPropsUnsaved;
-      btn("save", "save", "Save", x0, third, unsaved ? "Save the playlist properties in the game (the next install writes them to the playlist)" : "Nothing to save", !unsaved);
-      btn("import", "import", "Import", x0 + third + 4, third, "Import a playlist (later)", true);
-      btn("export", "export", "Export", x0 + inner - third, third, "Export the playlist (later)", true);
+      btn("save", "save", "Save", x0, third, unsaved ? "Save (written to the playlist at install)" : "Nothing to save", !unsaved);
+      btn("import", "import", "Import", x0 + third + 4, third, "Import playlist (coming later)", true);
+      btn("export", "export", "Export", x0 + inner - third, third, "Export playlist (coming later)", true);
       y += s.boxButton;
       const frame = { x: x0 - s.pad, y: top, width, height: y - top + s.pad };
       this.frames.push(frame);
@@ -6197,10 +6197,10 @@
       segments("panChanges", "Angle and zoom change");
       section("TIMING");
       if (props.panChanges !== "off") {
-        stepper("changeHold", "Change hold", "Still after an angle or zoom change");
-        stepper("arriveHold", "Arrival hold", "Rest at a view before its angle or zoom changes");
+        stepper("changeHold", "Change hold", "Pause after a turn or zoom");
+        stepper("arriveHold", "Arrival hold", "Pause before a turn or zoom");
       }
-      stepper("returnHold", "Return hold", "Hold at the first view after the return pan, before the next park");
+      stepper("returnHold", "Return hold", "Pause at first view before next park");
       section("PRESENTATION");
       segments("titleMusic", "Title music");
       segments("titles", "Show titles");
