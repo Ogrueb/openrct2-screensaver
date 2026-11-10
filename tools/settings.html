@@ -83,6 +83,8 @@ tr.missing td { color: var(--error); background: color-mix(in srgb, var(--error)
 button:disabled { opacity: 0.45; cursor: default; }
 .failbox:not([hidden]) { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; padding: 10px 14px; border: 1px solid var(--error); color: var(--error); background: var(--card); }
 .failbox span { flex: 1; user-select: all; }
+.livebox:not([hidden]) { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; padding: 10px 14px; border: 1px solid var(--accent); background: var(--card); }
+.livebox span { flex: 1; }
 label.inline { display: flex; align-items: center; gap: 10px; min-height: 34px; }
 .holds { display: flex; flex-wrap: wrap; gap: 16px; }
 .holds label { display: flex; align-items: center; gap: 8px; color: var(--text2); font-size: 14px; }
@@ -196,6 +198,8 @@ body.light .bandhead a.button.primary { background: var(--alt); color: var(--ona
   <div class="wrap">
     <div class="error" id="banner" hidden></div>
     <div class="failbox" id="failBox" hidden><span id="failText"></span><button id="failClose">Dismiss</button></div>
+    <div class="livebox" id="liveBox" hidden><span id="liveText"></span>
+      <button id="bakeBtn" title="Write the edits made in the game into this playlist's files: views into its views file, properties and park order into the playlist (the old file kept as .bak). The game can stay open.">Bake into playlist</button></div>
     <div class="grid2">
       <div class="col">
         <section class="card" id="sourceCard">
@@ -422,6 +426,14 @@ function render() {
     : !S.built ? ["Not built yet", false]
     : S.installedAt ? [`Built ${S.builtAt} · installed ${S.installedAt}`, false]
     : [`Built ${S.builtAt} · ready to render, install or export`, false];
+  const live = S.live;
+  $("liveBox").hidden = !live || dirty;
+  if (live) {
+    const parts = [live.views.length ? `views of ${live.views.length} park${live.views.length === 1 ? "" : "s"}` : "",
+                   live.resets.length ? `${live.resets.length} reset${live.resets.length === 1 ? "" : "s"}` : "",
+                   live.props.length ? "playlist properties" : "", live.order ? "park order" : ""].filter(Boolean);
+    $("liveText").textContent = `Edits from the game's view editor (${parts.join(", ") || "no changes"}, saved ${new Date(live.saved).toLocaleString()}): Build applies them; Bake writes them into this playlist.`;
+  }
   $("status").textContent = status[0];
   $("status").classList.toggle("warn", status[1]);
   const open = $("openList"), list = (S.path ? [] : [{ path: "", label: S.label }]).concat(S.playlists);
@@ -656,6 +668,13 @@ async function openBackups() {
 $("backupsBtn").addEventListener("click", openBackups);
 $("paramBackups").addEventListener("click", openBackups);
 $("failClose").addEventListener("click", () => $("failBox").hidden = true);
+$("bakeBtn").addEventListener("click", async () => {
+  try {
+    const r = await api("/api/bake", {});
+    await load();
+    toast(r.lines.length === 1 ? r.lines[0] : `Baked: ${r.lines.length} changes`);
+  } catch (e) { fail(e); }
+});
 $("logClose").addEventListener("click", () => $("log").classList.remove("open"));
 function follow(job, title) {
   busy = title; render();

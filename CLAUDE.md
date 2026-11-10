@@ -114,6 +114,11 @@ See README.md for usage.
   `arranged` (reordered, deleted from, holds changed). `--ignore-edits` skips the views file
   (owner: use it for every test install while tuning the generator). Drawn views get the park's event
   views (animation stops, cut-ins, shows) on top at build where events are on (owner, 2026-11-01).
+  Live file (owner, 2026-11-10; `docs/screensaver-ui.md` "Live file"): on the patched engine (patch 0016,
+  files in `<user dir>/screensaver/live` and the clipboard) every editor save also writes the playlist's
+  edits and properties to `live/<sequence>.json`; every build applies it (`--ignore-live`), and
+  `tools/bakelive.py` (the settings page's "Bake into playlist") writes it into the playlist files and marks
+  it baked, so users need no install to keep their edits. Next stage (approved): the engine starts the build.
 - **Palette index 10** is both the void outside the map and the UI black; a packed water
   object that lightens it (Gardens of Light) washes out the stock interface (the white void was intended, but the UI must not suffer).
   Engine patch 0001 splits the two properly (the viewport painter rewrites its own index-10
@@ -139,8 +144,8 @@ See README.md for usage.
   `.github/workflows/engine.yml` builds Windows x64 binaries (about 15 min) that replace
   `openrct2.exe`/`openrct2.com` in a stock install, plus a Linux tarball (Ubuntu 24.04 libraries) and an AppImage (any distribution; Fedora uses it), on pushes to `main` touching `engine/`
   or by manual run (pick the branch). The series is grouped by topic (owner, 2026-11-03; table in `engine/README.md`): 0001 palette,
-  0002 ride music, 0003-0008 background loading, 0009-0010 plugin API, 0011-0015 screensaver mode, and last
-  0016 diagnostics (park load timings and the perf log), which stays for testing and is dropped for release
+  0002 ride music, 0003-0008 background loading, 0009-0010 plugin API, 0011-0016 screensaver mode, and last
+  0017 diagnostics (park load timings and the perf log), which stays for testing and is dropped for release
   (owner, 2026-10-27). Patch comments carry no project name and use US English, so groups can go upstream. Patch 0002 adds "Ride music" to Options → Sound → Title screen music
   (`title_theme = 5`): the parks' ride music follows the view on the title screen instead of a theme. It
   cross-fades across park switches (1.5 s) and plays a park's single custom music object evenly (centered, any view).
@@ -158,7 +163,7 @@ See README.md for usage.
   3 min 42 s, incremental 30-40 s; the owner copies `bin\openrct2.exe` into the portable install
   themselves, as the PC's permission check blocks that step for Remote Control sessions).
 - **Performance testing** (roadmap step 3, a potential enhancement since 2026-11-07 grouped with the overnight soaks; `docs/performance-testing.md`; owner 2026-11-02: automated
-  and log-based, not manual): engine patch 0016 `--perf-log` writes per-frame stage times (tick, plugin,
+  and log-based, not manual): engine patch 0017 `--perf-log` writes per-frame stage times (tick, plugin,
   input, paint, present, with the camera), 10 s samples (memory, handles, QuickJS heap, image list
   fragmentation, entity counts) and events (load stages, plugin marks); it stays in every build until
   release. `tools/perfrun.py` runs the suites in `perf/` in sandbox user folders (`--user-data-path`,
@@ -299,6 +304,8 @@ See README.md for usage.
   `.sv6` with `openrct2 convert`, installs loose objects under the user `object/rct-screensaver/`
   (`installed.json` there: which import, by its downloads, uses each file; an import replaces only
   its own, 2026-10-31). Python unit tests: `python -m unittest discover -s tools/tests`.
+- `tools/livefile.py`, `tools/bakelive.py`: the game's live file (edits from the mode's editor) and baking
+  it into the playlist files (see "Hand-set views").
 - `tools/unzstd.py`: zstd for v0.5.x parks (stdlib `compression.zstd` on 3.14+, else
   `zstandard`/the `zstd` tool, else a plain-Python decoder, ~3-6 s per park).
 - `tools/viewstability.py`: rebuilds views with each spot's score jittered (±5% by default) and

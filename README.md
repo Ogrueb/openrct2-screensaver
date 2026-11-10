@@ -342,6 +342,13 @@ make them (in `plugin.store.json`) and play straight away. The next
 "Use playlist views" still works for those parks: the next install drops them from that file
 and keeps them in `playlists/example.views.bak.json`.
 
+On the patched engine, the screensaver mode's editor also writes its edits (views, Playlist
+properties, park order) to a live file, `screensaver/live/<playlist name>.json` in OpenRCT2's user
+folder. Every build applies it, so a rebuild never loses edits made in the game, and
+`python tools/bakelive.py` writes it into the playlist files (views into the views file, properties
+and park order into the TOML, comments kept) without closing the game. The settings page offers the
+same as "Bake into playlist". `--ignore-live` builds without it.
+
 ### Drawing views in the browser
 
 A quicker way to set many views: draw them as boxes on pictures of each park. The settings page

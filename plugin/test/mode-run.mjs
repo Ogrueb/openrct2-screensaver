@@ -55,6 +55,12 @@ const mode = {
     set(active) { this.active = active; this.listeners.forEach(cb => cb(active)); },
     exits: 0,
     exit() { this.exits++; },
+    // The files API (engine patch 0016): the live file the editor's saves write.
+    files: new Map(), filesFolder: "C:/Users/me/Documents/OpenRCT2/screensaver/live",
+    readFile(name) { return this.files.get(name) ?? null; },
+    writeFile(name, text) { if (!/^[A-Za-z0-9_-][A-Za-z0-9._-]*\.json$/.test(name)) return false; this.files.set(name, text); return true; },
+    listFiles() { return [...this.files.keys()].sort(); },
+    clipboard: "",
 };
 const shortcuts = {};
 const toolbox = [];
@@ -320,6 +326,14 @@ assert.ok(scene.get("rcts.bar.titles.icon").src.includes("titles-off"), "on -> o
     assert.equal(ed("cell.0.6").text, "you", "set by hand");
     const moved = tile();
     assert.ok(edits()[0]?.manual, "saved to the edits");
+    const liveName = playlist.sequence.replace(/[^A-Za-z0-9._-]/g, "_").replace(/^\.+/, "").slice(0, 100) + ".json";
+    const live = JSON.parse(mode.files.get(liveName) ?? "null");
+    assert.ok(live, "the save also writes the live file");
+    assert.equal(live.sequence, playlist.sequence);
+    assert.ok(Object.keys(live.edits).length > 0, "with the edits");
+    for (const [key, edit] of Object.entries(live.edits)) {
+        assert.deepEqual(edit, JSON.parse(JSON.stringify(saved["RCTScreensaver.edits"][key])), "the same edits as the storage");
+    }
     shortcuts["rctscreensaver.undo"]();
     assert.equal(tile(), before, "Ctrl+Z undoes the drag");
     shortcuts["rctscreensaver.redo"]();
@@ -495,6 +509,8 @@ assert.ok(scene.get("rcts.bar.titles.icon").src.includes("titles-off"), "on -> o
         mouse("move", p0.x + 6, p0.y + 30); mouse("move", p2.x + 6, p2.y + p2.height + 2);
         mouse("up", p2.x + 6, p2.y + p2.height + 2);
         const order = saved["RCTScreensaver.playlistProps"]?.[playlist.sequence]?.order;
+        const liveOrder = JSON.parse(mode.files.get(playlist.sequence.replace(/[^A-Za-z0-9._-]/g, "_") + ".json")).props.order;
+        assert.deepEqual(liveOrder, JSON.parse(JSON.stringify(order)), "the park order goes to the live file too");
         assert.deepEqual(JSON.parse(JSON.stringify(order)), [playlist.parks[1].key, playlist.parks[2].key, playlist.parks[0].key], "the park order is saved");
         assert.equal(ed("pname.2").text, playlist.parks[0].name, "and shown");
         assert.equal(ed("text.park").text, name0, "the park on screen stays");
@@ -747,7 +763,7 @@ tick(10);
 assert.equal(scene.has("rcts.cover"), false, "and is removed");
 console.log("ok: park changes dip through black in the mode (patch 0010)");
 
-// Performance runs (engine patch 0016, tools/perfrun.py): the plugin's events go into the engine's
+// Performance runs (engine patch 0017, tools/perfrun.py): the plugin's events go into the engine's
 // perf log as marks; bench mode keeps the mouse from showing the bar (marked instead) and starts
 // OpenRCT2's function profiler, exported on an interval.
 const marks = [];
@@ -769,6 +785,6 @@ assert.ok(marks.includes("input move"), "and the input is marked for the report 
 assert.ok(legacy.includes("profiler_start"), "the function profiler starts");
 assert.ok(intervals.some(v => v.ms === 60000), "and is exported every minute");
 assert.ok(legacy.includes('profiler_export "C:/perf run/profiler.csv"'), "to the quoted path");
-console.log("ok: perf marks, bench mode and the profiler (patch 0016)");
+console.log("ok: perf marks, bench mode and the profiler (patch 0017)");
 
 console.log("ok: screensaver mode (start, stop, keys, settings, no toolbox items)");

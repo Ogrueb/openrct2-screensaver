@@ -14,6 +14,7 @@ records the audit of 2026-10-31: where the mockup and the scripts disagreed and 
 | Build | `tools/mksequence.py <playlist>` | Saves first (no prompt) only when the page changed the playlist. Render, Install and Export are grayed until there is a build. |
 | Render | `tools/renderviews.py <seq>.playlist.json` | Renders the build's views, each at its own angle (`--angles`: the overview from all four). Needs OpenRCT2, so it runs on the PC. |
 | Install | `mksequence.py --install-built <seq>.result.json` | Installs the build as it is. Refuses while OpenRCT2 runs. |
+| Bake into playlist | `tools/bakelive.py <playlist>` | Shown above the park list while the game's live file (`docs/screensaver-ui.md` "Live file") has edits the playlist files lack; Build applies them either way. |
 | Export | `tools/bundle.py export` | A bundle (.zip) of the playlist, its views and changed profiles; optionally the park files and the build. |
 | Import | `tools/bundle.py import` | Next to the playlist selector (highlighted with New while nothing is loaded). Parks not in the bundle are looked for in the Source parks directory; missing ones show red and can be unticked. |
 | Source parks: directory | `tools/importparks.py <dir> -o <library>` | Writes a library and a playlist of every park; `.sv6` needs `--openrct2`. The UI then edits that playlist. |
