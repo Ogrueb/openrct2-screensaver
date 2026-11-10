@@ -11,7 +11,7 @@ import { EDITOR, THEME, TIMING, Z } from "./theme";
 
 type HitId =
     | "close" | "prevPark" | "nextPark" | `row.${number}` | "scrollUp" | "scrollDown"
-    | "add" | "update" | "fit" | "delete" | "up" | "down" | "revert" | "undo" | "redo"
+    | "add" | "update" | "delete" | "up" | "down" | "revert" | "undo" | "redo"
     | "holdLess" | "holdMore" | "panLess" | "panMore" | "turn" | "inertia"
     | "rotl" | "rotr" | "zoomin" | "zoomout" | "play";
 
@@ -155,7 +155,6 @@ export class EditorPanel implements EditorView {
             case "nextPark": e.goToPark(e.parkIndex + 1); break;
             case "add": e.add(); break;
             case "update": e.update(); break;
-            case "fit": e.fit(); break;
             case "undo": e.undo(); break;
             case "redo": e.redo(); break;
             case "delete": e.remove(); break;
@@ -230,7 +229,7 @@ export class EditorPanel implements EditorView {
             this.track = { x: bx, y: rowsTop + bar, width: bar - 2, height: rowsBottom - rowsTop - 2 * bar };
         }
         y = this.list.y + this.list.height + s.gap;
-        buttonRow(["add", "update", "fit", "delete"]);
+        buttonRow(["add", "update", "delete"]);
         buttonRow(["up", "down", "revert"]);
         // Hold and pan on one line, each a value centred between its − and + (owner, 2026-11-02).
         const half = Math.round((inner - s.sectionGap) / 2);
@@ -313,7 +312,6 @@ export class EditorPanel implements EditorView {
         }
         textButton("add", "Add view");
         textButton("update", "Set to camera");
-        textButton("fit", "Fit height");
         textButton("delete", "Delete");
         textButton("up", "Move up");
         textButton("down", "Move down");

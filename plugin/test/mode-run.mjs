@@ -308,9 +308,9 @@ assert.ok(scene.get("rcts.bar.titles.icon").src.includes("titles-off"), "on -> o
     assert.equal(Number(ed("cell.0.3").text), Math.max(-2, zoom - 1), "a step up zooms the view in");
     mouse("wheel", 1400, 700, 0, -1);
     assert.equal(Number(ed("cell.0.3").text), zoom, "a step down zooms it out");
-    // Fit: the view's height becomes what is under the screen's centre (the mock's ground, 48).
-    edClick("fit");
-    assert.equal(edits()[0].z, 48, "Fit sets the view's height to the ground under the centre");
+    // A view set from the camera sits at the height of what is at the screen's centre (the mock's ground, 48).
+    assert.equal(edits()[0].z, 48, "the view's height is the ground under the centre");
+    assert.equal(ed("fit"), undefined, "no Fit height button: the height is set by itself");
     // During Play a drag only stops Play: no view moves.
     shortcuts["rctscreensaver.hold"]();
     const playing = tile();

@@ -150,7 +150,8 @@ the wheel zooms it, so what is seen is what plays; no engine change. **Map** (Ta
 draws every view as a box to drag, as requirements 1-3 and 5 describe; its pan lines need a `line` overlay
 element (a small patch in the mode group). Stages, one PR each:
 
-1. Frame mode and undo. **Done 2026-11-09** (`docs/screensaver-ui.md` "Live editing"; tests in
+1. Frame mode and undo. **Done 2026-11-09**; the Fit height button gave way to setting the height
+   by itself on 2026-11-10 (owner's test: no visible effect) (`docs/screensaver-ui.md` "Live editing"; tests in
    `plugin/test/editor-unit.mjs` and `mode-run.mjs`, which now also runs on a small fixture playlist).
 2. Map mode: boxes, other-angle markers, drag, Shift+wheel zoom, right-click add, double-click to frame;
    a perf-log run while panning in Map mode (the overlay unites changes into one dirty rect, so moving

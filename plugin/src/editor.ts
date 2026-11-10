@@ -6,8 +6,9 @@
 // every edit plays on again from the selected view a second later. Moving the camera by hand stops it. Edited views are saved to
 // shared storage as they change (see Player.setViews) and replace the park's playlist views.
 // Live editing (docs/screensaver-ui.md, "Live editing"): in the mode, dragging the park moves the camera and
-// the selected view goes where it ends, the wheel zooms the selected view, Fit sets its height to what is
-// under the screen's centre, and every change can be undone (per park, while the plugin runs).
+// the selected view goes where it ends, the wheel zooms the selected view, and every change can be undone
+// (per park, while the plugin runs). A view set from the camera sits at the height of what is at the
+// screen's centre, so a turn pivots on it (the Rotate buttons too).
 
 import { toScreen, toWorld } from "./fit";
 import { Player } from "./player";
@@ -204,21 +205,16 @@ export class Editor {
         }
     }
 
-    /** Sets the camera's height to what is under the screen's centre, without moving the picture,
-     * and the selected view's with it. */
-    fit(): void {
-        this.stopPreview();
+    /** Puts the camera's point at the height of what is seen at the screen's centre (a building's
+     * top, the ground or water), without moving the picture: a view set there turns about it, and the
+     * camera stays where it was over the void. */
+    private anchor(): void {
         const c = this.camera;
         const p = toScreen(c.x, c.y, c.z, c.rotation);
         const z = surfaceZ(p, c.rotation);
-        if (z === undefined) {
-            return;
-        }
-        const world = toWorld(p, z, c.rotation);
-        this.camera = { ...c, x: world.x, y: world.y, z };
-        this.applyCamera();
-        if (this.selectedIndex >= 0) {
-            this.update();
+        if (z !== undefined) {
+            const world = toWorld(p, z, c.rotation);
+            this.camera = { ...c, x: world.x, y: world.y, z };
         }
     }
 
@@ -307,6 +303,7 @@ export class Editor {
 
     rotate(delta: number): void {
         this.stopPreview();
+        this.anchor(); // turn about what is at the screen's centre, which stays there
         this.camera.rotation = (this.camera.rotation + delta + 4) % 4;
         this.applyCamera();
     }
@@ -374,6 +371,7 @@ export class Editor {
 
     add(): void {
         this.change(() => {
+            this.anchor();
             const views = this.views();
             const at = this.selected >= 0 ? this.selected + 1 : views.length;
             views.splice(at, 0, this.cameraView(views[this.selected]?.hold ?? DEFAULT_HOLD));
@@ -387,6 +385,7 @@ export class Editor {
             if (!views[this.selected]) {
                 return;
             }
+            this.anchor();
             // Keeps how the view pans on and its flags; only where it looks changes.
             views[this.selected] = { ...views[this.selected], ...this.cameraView(views[this.selected].hold) };
             delete views[this.selected].overview; // a framed overview plays as framed

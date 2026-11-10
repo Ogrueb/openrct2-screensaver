@@ -218,9 +218,12 @@ panel and the bar, edits the selected view directly.
   A plain click changes nothing; a drag that runs over the panel or the bar keeps going to the release.
   With no view selected, or while Play is on, a drag only moves the camera (and stops Play).
 - **Wheel** over the park: the selected view zooms a level per step (up: in).
-- **Fit height** (panel): the camera's height becomes what is seen at the screen's centre (the first tile
-  top, ground or water met walking down the heights that point could show), without moving the picture,
-  and the selected view takes it; a later drag then moves on that plane.
+- **Height, set by itself** (owner's test, 2026-11-10: a Fit height button was "not clear what this does", as
+  it changed nothing on screen): a view set from the camera (a drag, the wheel, Set to camera, Add view)
+  sits at the height of what is seen at the screen's centre (the first tile top, ground or water met
+  walking down the heights that point could show; over the void it keeps its height). The picture never
+  moves for it; what it changes is the pivot of a turn: a pan's turn and the Rotate buttons (which anchor
+  the camera the same way first) keep what is at the centre in the centre.
 - **Set to camera** keeps the view's pan, turn, inertia and event settings (it used to drop them); a framed
   overview loses its `overview` flag, so it plays as framed.
 - **Undo and redo** (the panel's Undo and Redo, Ctrl+Z, Ctrl+Y or Ctrl+Shift+Z): every change to a park's

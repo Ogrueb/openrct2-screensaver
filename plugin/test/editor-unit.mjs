@@ -1,6 +1,6 @@
 // Checks the live editor's geometry in plugin/src/editor.ts and fit.ts directly: a drag moves the camera
-// by the dragged distance on screen at every angle and zoom, and Fit finds the height seen at a screen
-// point. Usage: node test/editor-unit.mjs
+// by the dragged distance on screen at every angle and zoom, and finds the height seen at a screen point
+// (where a view set from the camera sits). Usage: node test/editor-unit.mjs
 import assert from "node:assert/strict";
 import { build } from "esbuild";
 
@@ -22,7 +22,7 @@ for (let r = 0; r < 4; r++) {
     }
 }
 
-// Fit: flat ground at 48 everywhere is found from any angle.
+// The height seen: flat ground at 48 everywhere is found from any angle.
 const flat = () => 48;
 for (let r = 0; r < 4; r++) {
     assert.equal(surfaceZ(toScreen(3200, 3200, 48, r), r, flat), 48, `flat ground at angle ${r}`);
@@ -38,4 +38,4 @@ for (let r = 0; r < 4; r++) {
 }
 // Off the map: nothing.
 assert.equal(surfaceZ({ x: 0, y: -5000 }, 0, () => undefined), undefined, "the void");
-console.log("ok: live editor geometry (drag, Fit)");
+console.log("ok: live editor geometry (drag, height under the centre)");
