@@ -264,6 +264,10 @@ export class ViewMap {
     }
 
     render(editor: Editor): void {
+        if (editor.playback.isLoading) {
+            this.clear(); // the views are already the next park's: nothing until it shows
+            return;
+        }
         this.place(editor);
         const scene: Scene = new Map();
         const views = this.placed;

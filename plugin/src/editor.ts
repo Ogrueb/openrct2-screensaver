@@ -730,6 +730,7 @@ export class Editor {
         if (key === undefined) {
             return [];
         }
+        // Newest first, the presets among them by their times (owner, 2026-11-10); none: last.
         const points: RestorePoint[] = [];
         const opened = this.opened.get(key);
         if (opened) {
@@ -742,7 +743,9 @@ export class Editor {
             points.push({ id: "install", label: "Last install", tag: "install", time: this.player.installedAt });
         }
         points.push({ id: "generated", label: "Generated", tag: "build", time: this.player.builtAt });
-        return points;
+        return points.map((p, i) => ({ p, i }))
+            .sort((a, b) => (b.p.time ?? -Infinity) - (a.p.time ?? -Infinity) || a.i - b.i)
+            .map(({ p }) => p);
     }
 
     /** Saves the current park's views as a checkpoint (at most CHECKPOINTS_PER_PARK, the oldest goes). */
@@ -754,7 +757,8 @@ export class Editor {
         const all = this.checkpoints;
         const list = all[key] ?? [];
         const n = list.reduce((m, c) => Math.max(m, c.n), 0) + 1;
-        list.push({ n, time: Date.now(), views: this.player.currentViews.map(v => ({ ...v })), screen: [ui.width, ui.height] });
+        list.push({ n, time: Date.now(), views: this.player.currentViews.map(v => ({ ...v })), screen: [ui.width, ui.height],
+            camera: { ...this.camera }, selected: this.selected, onMap: this.map });
         all[key] = list.slice(-CHECKPOINTS_PER_PARK);
         saveCheckpoints(all);
         this.refresh();
@@ -779,8 +783,19 @@ export class Editor {
             } else if (id.startsWith("checkpoint.")) {
                 const c = (this.checkpoints[key] ?? []).find(cp => `checkpoint.${cp.n}` === id);
                 if (c) {
-                    this.selected = 0;
-                    this.player.setViews(c.views.map(v => ({ ...v })), 0, true);
+                    // The views, the selection and the camera as they were (owner, 2026-11-10).
+                    const sel = Math.max(0, Math.min(c.views.length - 1, c.selected ?? 0));
+                    this.selected = sel;
+                    this.player.setViews(c.views.map(v => ({ ...v })), sel, true);
+                    // In Frame mode the camera is the selected view, shown by setViews; the map's
+                    // camera comes back only on the map.
+                    if (c.camera && !!c.onMap === this.map) {
+                        this.camera = { ...c.camera };
+                        this.applyCamera();
+                    }
+                    this.selected = sel;
+                    this.refresh();
+                    return;
                 }
             }
             this.selected = this.player.viewIndex;

@@ -32,6 +32,7 @@ const SECONDARY: ButtonId[] = ["speed", "shuffle", "titles", "music", "time", "e
 export interface EditorHooks {
     toggleEditor(): void;
     editorOpen(): boolean;
+    editorPinned(): boolean; // the editor's panes stay shown; with the pin off the bar hides with them
 }
 
 const TITLES_NEXT: Record<Settings["titles"], Settings["titles"]> = { overview: "on", on: "off", off: "overview" };
@@ -235,8 +236,8 @@ export class ControlsBar {
 
     /** Every ~100 ms: hides the bar after the mouse has been still, and follows key changes. */
     update(): void {
-        if (this.editorHooks?.editorOpen()) {
-            this.lastMove = Date.now(); // the editor keeps the bar and the cursor up
+        if (this.editorHooks?.editorOpen() && this.editorHooks.editorPinned()) {
+            this.lastMove = Date.now(); // the pinned editor keeps the bar and the cursor up
             this.setShown(true);
         }
         const over = this.covers(this.mouse.x, this.mouse.y);

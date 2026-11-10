@@ -257,6 +257,14 @@ assert.ok(scene.get("rcts.bar.titles.icon").src.includes("titles-off"), "on -> o
     assert.equal(ed("redo").fill, "#2a2e2c80", "an inactive tool is flat and gray (nothing to redo)");
     assert.equal(ed("redo.icon").opacity, 0.35, "its icon dimmed");
     assert.equal(ed("copy").fill, "#2a2e2c80", "Copy views waits for later");
+    assert.equal(ed("update").fill, "#2a2e2c80", "Set to camera waits for the map: in Frame mode the view follows the camera");
+    assert.ok(ed("box.mark").src.includes("/fold-open-") && ed("props.mark").src.includes("/fold-open-"), "fold marks are icons");
+    {
+        const sg = ed("seg.inertia.1");
+        mouse("move", sg.x + 3, sg.y + 3);
+        assert.equal(ed("tip.text").text, "Pans ease in and out", "the playlist's buttons have tooltips");
+        mouse("move", 1200, 650);
+    }
     dump("editor");
     assert.ok(scene.get("rcts.bar.edit.icon").src.includes("/edit-"), "edit icon");
     const rows = [...scene.keys()].filter(k => /^rcts\.ed\.cell\.\d+\.0$/.test(k)).length;
@@ -452,6 +460,7 @@ assert.ok(scene.get("rcts.bar.titles.icon").src.includes("titles-off"), "on -> o
         assert.equal(viewport.zoom, Math.min(3, zoom0 + 2), "the map steps out two levels");
         assert.equal(ed("mapMode").fill, "#8a7a2eb3", "the Map switch shows it on, olive");
         assert.notEqual(ed("lock").fill, "#2a2e2c80", "the event lock works on the map");
+        assert.notEqual(ed("update").fill, "#2a2e2c80", "Set to camera works on the map");
         const box = map("box.0");
         assert.ok(box, "the selected view is a box");
         assert.ok(Math.abs(box.x + box.width / 2 - 960) <= 1 && Math.abs(box.y + box.height / 2 - 540) <= 1,
@@ -560,8 +569,12 @@ assert.ok(scene.get("rcts.bar.titles.icon").src.includes("titles-off"), "on -> o
         const f = ed("field");
         const fx = f.x + 20, fy = f.y + 10;
         const name0 = ed("text.park").text;
+        assert.ok(ed("field.mark").src.includes("/fold-closed-"), "the field's fold mark is an icon");
+        assert.equal(ed("field.open"), undefined);
         mouse("move", fx, fy); mouse("down", fx, fy); mouse("up", fx, fy);
         assert.ok(ed("park.0") && ed("park.2"), "a click opens the park list");
+        assert.ok(ed("field.open")?.border, "the open field has an accent border");
+        assert.ok(ed("field.mark").src.includes("/fold-open-"), "and its mark points down");
         assert.equal(ed("parks.head").text, "Playlist order", "as the playlist's order");
         dump("parks");
         assert.ok(ed("pname.1").text.length > 0 && ed("pcount.0").text.endsWith("views"), "names and view counts");
@@ -604,12 +617,16 @@ assert.ok(scene.get("rcts.bar.titles.icon").src.includes("titles-off"), "on -> o
         assert.equal(ed("restore").fill, "#2a2e2c80", "Restore waits for a highlighted point");
         edClick("row.0");
         const t = ed("cell.0.1").text;
+        tick(10);
         edClick("checkpoint");
-        assert.equal(saved["RCTScreensaver.checkpoints"]?.[playlist.parks[1].key]?.length, 1, "Save checkpoint keeps the views");
-        assert.equal(ed("pt.1").text, "Checkpoint 1", "listed after Editor opened");
+        const cp = saved["RCTScreensaver.checkpoints"]?.[playlist.parks[1].key];
+        assert.equal(cp?.length, 1, "Save checkpoint keeps the views");
+        assert.ok(cp[0].camera && typeof cp[0].camera.zoom === "number", "and the camera (position, angle, zoom)");
+        assert.equal(ed("pt.0").text, "Checkpoint 1", "newest first: before Editor opened");
+        assert.equal(ed("pt.1").text, "Editor opened");
         mouse("move", 1400, 700); mouse("down", 1400, 700); mouse("move", 1000, 600); mouse("up", 1000, 600);
         assert.notEqual(ed("cell.0.1").text, t);
-        edClick("point.1");
+        edClick("point.0");
         assert.notEqual(ed("restore").fill, "#2a2e2c80", "a highlighted point enables Restore");
         edClick("restore");
         assert.equal(ed("cell.0.1").text, t, "Restore selected brings the checkpoint back");
@@ -655,8 +672,10 @@ assert.ok(scene.get("rcts.bar.titles.icon").src.includes("titles-off"), "on -> o
         mouse("move", 1200, 650);
         tick(40);
         assert.equal(ed("frame").opacity, 0, "unpinned, the panes hide with the cursor");
+        assert.equal(shown("strip"), false, "and so does the controls bar");
         mouse("move", 1210, 650);
         assert.equal(ed("frame").opacity, 1, "and come back on a move");
+        assert.equal(shown("strip"), true, "the bar too");
         edClick("pin");
         tick(40);
         assert.equal(ed("frame").opacity, 1, "pinned, they stay");
