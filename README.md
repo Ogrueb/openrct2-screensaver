@@ -316,6 +316,14 @@ tile 255, so the plugin layout leaves it out there.
 
 ## Setting views by hand
 
+In the screensaver mode of the patched engine, the editor (beta since v0.3.0) works on the playing
+park: in **Frame** the selected view is the camera (drag the park to move it, the wheel zooms it),
+and **Map** (M) shows every view as a box to drag, with its pans and cuts as dotted lines. Its panes
+hold the views and the park order (both reordered by dragging), a toolbox (every button's tooltip
+names its key; Ctrl+Z and Ctrl+Y undo and redo), restore points and the playlist-wide properties.
+Details in `docs/screensaver-ui.md`, "View editor". The rest of this section describes what both
+editors share, and the stock engine's editor window.
+
 Press E in the screensaver mode (or the bar's Edit views button; on the stock engine, E on the title
 screen or toolbox menu → "RCT Screensaver: edit views") to open the view editor. Playback pauses while it is open, unless you press "Play": then the park's views play
 with their pans, looping in that park (it never moves on to the next park), and each change you
