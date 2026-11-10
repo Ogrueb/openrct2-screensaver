@@ -242,9 +242,24 @@ class _Doc:
             while t[start] in " \t":
                 start += 1
             end = self.value_end(start)
-            self.keys[table + path] = (line, start, end, self.after_line(end))
-            self.tables[table]["last"] = self.after_line(end)
-            i = self.after_line(end)
+            after = self.after_line(end)
+            if "#" in t[end:after]:  # an end-of-line comment: its continuation lines go with it
+                after = self.after_comments(after)
+            self.keys[table + path] = (line, start, end, after)
+            self.tables[table]["last"] = after
+            i = after
+
+    def after_comments(self, i):
+        """Past the indented comment lines that continue a key's own end-of-line comment, so a key
+        inserted after it (or its removal) keeps the comment whole."""
+        while i < self.n:
+            j = i
+            while j < self.n and self.text[j] in " \t":
+                j += 1
+            if j == i or j >= self.n or self.text[j] != "#":
+                break
+            i = self.after_line(j)
+        return i
 
 
 BARE_KEY_RUN = re.compile(r"[A-Za-z0-9_-]+")

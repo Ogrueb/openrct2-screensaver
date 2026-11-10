@@ -20,7 +20,7 @@ enhancements"). Problems in parks or other people's content that the project doe
 | 5 | Configurable generator (final version) | Done (2026-10-31 to 11-02): the settings page, renders and drawing pages in daily use on the PC; Show titles wired 2026-11-03 |
 | 2 | Wallpaper wrapper | Done (2026-10-31 to 11-03; PRs up to #158): screensaver mode, overlay, controls bar, settings panel, view editor, park name captions with frame styles; live-tested by the owner |
 | 3 | Performance testing with logging, and optimizations | Potential enhancement (2026-11-07), grouped with the overnight soaks: framework built 2026-11-02, first runs 2026-11-03, PresentMon next |
-| 6 | Release | Done: v0.1.0 (2026-11-03, github.com/Ogrueb/openrct2-screensaver), v0.2.0 (2026-11-05, fixes and a Linux beta), v0.2.1 (2026-11-06, import fixes) |
+| 6 | Release | Done: v0.1.0 (2026-11-03, github.com/Ogrueb/openrct2-screensaver), v0.2.0 (2026-11-05, fixes and a Linux beta), v0.2.1 (2026-11-06, import fixes); v0.3.0 (the live view editor as a beta) prepared 2026-11-10 |
 | 7 | Standalone tool builds (settings page, drawing page) | Potential enhancement (2026-11-07), split out of the release step |
 | L | Basic Linux support | Done (2026-11-03 to 11-05), shipped as a beta AppImage in v0.2.0 |
 
@@ -33,7 +33,9 @@ the release engine build (0001-0015) and the source archive. Since then (notes i
 v0.2.0, fixes found after v0.1.0 (stock windows over the mode, the settings page's folder and build
 state, unticked parks in bundles) and the Linux AppImage as a beta; v0.2.1, park import fixes
 (a folder of loose RCT1/RCT2 saves imports every save, `.sv4`/`.sc4` convert, a failed convert lists
-every missing object), the settings page's footer link to the repository, and a smaller AppImage.
+every missing object), the settings page's footer link to the repository, and a smaller AppImage;
+v0.3.0, the live view editor as a beta (owner, 2026-11-10: release it once mostly functional), with
+engine patch 0016 (plugin files, the live file) in the release build.
 The standalone tool builds became a potential enhancement.
 
 - License: GPLv3 (owner, 2026-11-03; `LICENSE`, the plugin's `package.json`).
