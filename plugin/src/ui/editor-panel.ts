@@ -20,6 +20,7 @@ import { ViewMap } from "./view-map";
 
 const PAN_SHARE_STEP = 0.1;
 const HINT_FRAME = "Drag the park: moves the view. Wheel: zooms it.";
+const HINT_LOCKED = "An event view, locked: dragging the park moves the camera.";
 const HINT_MAP = "Drag a box or its corner. Right-click: adds a view.";
 const DRAG_Z = Z.tip - 2; // a dragged row over the rest of the pane
 
@@ -742,6 +743,7 @@ export class EditorPanel implements EditorView {
         let y = frame.y + s.pad;
         const loading = e.playback.isLoading;
         const noView = e.selectedIndex < 0 || loading;
+        const fixedView = noView || e.selectedLocked; // a locked event view: only the camera moves
         // Frame | Map: the map changes the whole approach, so it stands out (olive while on).
         const half = Math.floor((inner - s.gap) / 2);
         this.place("frameMode", { x: x0, y, width: half, height: s.switchHeight }, "Frame: edit through the camera (M switches)", loading);
@@ -751,7 +753,7 @@ export class EditorPanel implements EditorView {
         button(scene, "mapMode", this.boxes.get("mapMode")!, this.state("mapMode", e.mapMode, true),
             { icon: "map", iconSize: s.toolIcon, text: "Map", textSize: 15, hint: "M" }, overlay);
         y += s.switchHeight + 2;
-        const hint = fit(overlay, e.mapMode ? HINT_MAP : HINT_FRAME, s.hintSize, inner);
+        const hint = fit(overlay, e.mapMode ? HINT_MAP : e.selectedLocked ? HINT_LOCKED : HINT_FRAME, s.hintSize, inner);
         label(scene, "hint", hint, { x: x0, y, width: 0, height: s.hintHeight }, s.hintSize, overlay);
         scene.set("hint", { ...scene.get("hint")!, colour: THEME.textDim });
         y += s.hintHeight;
@@ -759,8 +761,8 @@ export class EditorPanel implements EditorView {
         const groups: [string, [string, string, string, boolean, boolean?][]][] = [
             ["VIEW", [
                 ["add", "add", "Add a view (Insert)", loading || !e.playback.canEdit],
-                ["update", "set-camera", "Set to camera (C)", noView],
-                ["delete", "delete", "Delete the view (Delete)", noView],
+                ["update", "set-camera", e.selectedLocked ? "Event views are locked (unlock on the map)" : "Set to camera (C)", fixedView],
+                ["delete", "delete", e.selectedLocked ? "Event views are locked (unlock on the map)" : "Delete the view (Delete)", fixedView],
             ]],
             ["CAMERA", [
                 ["rotl", "rotate-left", "Rotate left (Shift+Enter)", loading],
@@ -787,9 +789,9 @@ export class EditorPanel implements EditorView {
         const stepper = (name: string, less: string, more: string, text: string, sx: number, tips: [string, string]) => {
             this.sectionLabel(scene, `label.${name}`, name, sx, y);
             const ry = y + s.labelHeight;
-            const l = this.place(less, { x: sx, y: ry, width: b, height: b }, tips[0], noView);
+            const l = this.place(less, { x: sx, y: ry, width: b, height: b }, tips[0], fixedView);
             const value = { x: sx + b + s.gap, y: ry, width: s.stepValue, height: b };
-            const m = this.place(more, { x: value.x + value.width + s.gap, y: ry, width: b, height: b }, tips[1], noView);
+            const m = this.place(more, { x: value.x + value.width + s.gap, y: ry, width: b, height: b }, tips[1], fixedView);
             button(scene, less, l, this.state(less), { icon: "less", iconSize: s.toolIcon }, overlay);
             button(scene, more, m, this.state(more), { icon: "add", iconSize: s.toolIcon }, overlay);
             scene.set(`${name}.value`, { type: "rect", ...value, fill: THEME.editorList, z: Z.face });

@@ -223,7 +223,11 @@ The panel became three panes (round 8 of the mockups accepted, built the same da
   grip column: a row dragged 5 px lifts (the dragged row follows the mouse, its place dims, an orange line
   shows where it lands) and drops there as one change (undoable; Ctrl+Up and Ctrl+Down move the selected
   view too). Event views stay put while the event lock is on and say "event (locked)"; generated views say
-  "generated". The wheel and the thin scroll bar (thumb drag, track click) scroll past ten rows. The status
+  "generated". The lock covers every edit of a selected event view (owner, 2026-11-10), as its timing comes
+  from the park (its clock, a train, a show), not from its place in the list: Set to camera, Delete, Hold,
+  Pan and Reset view go gray, and a drag or the wheel on the park moves only the camera (the hint says so).
+  Edits around event views keep the visit's cut-in record: played and pending cut-ins are tracked by their
+  trigger, not their row (`Player.remapCues`), so an insert or delete above one neither replays nor skips it. The wheel and the thin scroll bar (thumb drag, track click) scroll past ten rows. The status
   and help lines went (the toolbox's hint and the box's header say it).
 - **Toolbox, bottom left.** The **Frame | Map** switch on top (Map olive while on, "M" beside it), a
   one-line hint for the mode, then icon buttons under small labels: VIEW (add, set to camera, delete),
