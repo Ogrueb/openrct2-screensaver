@@ -8,7 +8,8 @@
 // Live editing (docs/screensaver-ui.md, "Live editing"): in the mode, dragging the park moves the camera and
 // the selected view goes where it ends, the wheel zooms the selected view, and every change can be undone
 // (per park, while the plugin runs). A view set from the camera sits at the height of what is at the
-// screen's centre, so a turn pivots on it (the Rotate buttons too).
+// screen's centre, so a turn pivots on it (the Rotate buttons too). The map (M, or the panel's Map button)
+// steps the camera out and shows every view as a box to drag (ui/view-map.ts); its edits are below.
 
 import { toScreen, toWorld } from "./fit";
 import { Player } from "./player";
@@ -29,9 +30,11 @@ const PAN_SHARE_STEP = 0.1;
 const UNDO_DEPTH = 100; // changes kept per park
 const MAX_Z = 2040; // the highest world height (255 height steps of 8)
 const Z_STEP = 8; // one height step
+const MAP_OUT = 2; // zoom levels the map steps out from the selected view
 
 /** What shows the editor: opened and closed by it, refreshed after every change. */
 export interface EditorView {
+    readonly supportsMap?: boolean; // draws the map (the overlay panel; the stock window does not)
     open(editor: Editor): void;
     close(): void;
     refresh(): void;
@@ -42,7 +45,7 @@ export type EditorRow = [index: string, tile: string, angle: string, zoom: strin
 export const EDITOR_COLUMNS = ["#", "Tile", "Angle", "Zoom", "Hold", "Pan", "Set by"];
 
 /** Camera position: world coordinates of the screen centre, as the plugin moves it. */
-interface Camera {
+export interface Camera {
     x: number;
     y: number;
     z: number;
@@ -114,6 +117,8 @@ export class Editor {
     private selected = -1;
     private undoStacks = new Map<number, { undo: Snapshot[]; redo: Snapshot[] }>(); // by park index
     private gesture: { commit: boolean; moved: boolean } | undefined; // a drag on the park
+    private map = false; // the map: every view a box on a camera stepped out
+    private eventsUnlocked = false; // the map lets event views be dragged
 
     constructor(private readonly player: Player, private readonly view: EditorView = new WindowView()) {}
 
@@ -198,7 +203,7 @@ export class Editor {
     /** The wheel over the park: zooms the camera a level (delta > 0 in) and the selected view with
      * it; during Play it only stops Play. */
     wheel(delta: number): void {
-        const commit = !this.player.isPreviewing && this.selectedIndex >= 0;
+        const commit = !this.map && !this.player.isPreviewing && this.selectedIndex >= 0;
         this.zoom(delta > 0 ? -1 : 1);
         if (commit) {
             this.update();
@@ -317,6 +322,7 @@ export class Editor {
     /** Play on or off: the park's views play with their pans while the editor stays open. */
     togglePreview(): void {
         const on = !this.player.isPreviewing;
+        this.map = false; // Play moves the camera through the views: back to the frame
         if (!on) {
             this.cameraFromViewport(); // stay where playback left the camera
         }
@@ -345,14 +351,145 @@ export class Editor {
             return;
         }
         this.shown = false;
+        this.map = false;
         this.player.onViewShown = undefined;
         this.player.setEditing(false);
     }
 
     select(index: number): void {
         this.selected = index;
+        if (this.map) {
+            this.centreOn(index); // the map keeps its zoom
+            return;
+        }
         this.player.showViewAt(index); // calls viewShown
         this.replay();
+    }
+
+    // The map (ui/view-map.ts): the camera stepped out, every view a box.
+
+    get mapMode(): boolean {
+        return this.map;
+    }
+
+    get eventsLocked(): boolean {
+        return !this.eventsUnlocked;
+    }
+
+    toggleEventLock(): void {
+        this.eventsUnlocked = !this.eventsUnlocked;
+        this.refresh();
+    }
+
+    /** The map on or off: on, the camera steps out from the selected view; off, it frames it. */
+    toggleMap(): void {
+        if (this.player.isLoading || !this.view.supportsMap) {
+            return;
+        }
+        this.stopPreview();
+        this.map = !this.map;
+        if (this.map) {
+            const view = this.player.currentViews[this.selected];
+            this.camera.zoom = Math.min(MAX_ZOOM, (view?.zoom ?? this.camera.zoom) + MAP_OUT);
+            this.applyCamera();
+        } else if (this.selectedIndex >= 0) {
+            this.player.showViewAt(this.selected); // calls viewShown
+        } else {
+            this.refresh();
+        }
+    }
+
+    /** A box double-clicked on the map: back to the frame, on that view. */
+    frame(index: number): void {
+        this.map = false;
+        this.select(index);
+    }
+
+    /** The camera as it is (the map projects the views through it). */
+    get cameraPose(): Camera {
+        return { ...this.camera };
+    }
+
+    /** Pans the camera by window pixels (the map's drag on empty park). */
+    panBy(dx: number, dy: number): void {
+        this.stopPreview();
+        this.moveCamera(dx, dy);
+    }
+
+    /** Zooms the camera a level (delta > 0 in) without touching a view (the map's wheel). */
+    zoomCamera(delta: number): void {
+        this.zoom(delta > 0 ? -1 : 1);
+    }
+
+    /** Selects a view without moving the camera (a click on its box). */
+    pick(index: number): void {
+        if (this.player.currentViews[index]) {
+            this.selected = index;
+            this.refresh();
+        }
+    }
+
+    /** Centres the camera on a view, turning to its angle so it shows as a box. */
+    private centreOn(index: number): void {
+        const view = this.player.currentViews[index];
+        if (view) {
+            this.camera = { ...this.camera, x: view.x * TILE + TILE / 2, y: view.y * TILE + TILE / 2, z: view.z, rotation: view.rotation };
+            this.applyCamera();
+        }
+    }
+
+    /** Moves a view to a tile position (its height and the rest unchanged): a box dragged on the map. */
+    moveView(index: number, x: number, y: number): void {
+        this.mapEdit(index, v => ({ x: round2(x), y: round2(y) }));
+    }
+
+    /** Changes a view's zoom: a box's corner dragged on the map. */
+    zoomView(index: number, zoom: number): void {
+        this.mapEdit(index, () => ({ zoom: Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, Math.round(zoom))) }));
+    }
+
+    private mapEdit(index: number, edit: (view: View) => Partial<View>): void {
+        this.change(() => {
+            const views = this.views();
+            const view = views[index];
+            if (!view) {
+                return;
+            }
+            views[index] = { ...view, ...edit(view), manual: true };
+            delete views[index].overview; // placed by hand: plays as placed
+            this.selected = index;
+            this.player.setViews(views, -1); // the camera stays on the map
+            this.refresh();
+        });
+    }
+
+    /** Adds a view at a world point after the selected one, at the camera's angle and the selected
+     * view's zoom (a right click on the map). */
+    addAt(x: number, y: number, z: number): void {
+        this.change(() => {
+            const views = this.views();
+            const at = this.selected >= 0 ? this.selected + 1 : views.length;
+            const near = views[this.selected];
+            views.splice(at, 0, {
+                x: round2((x - TILE / 2) / TILE), y: round2((y - TILE / 2) / TILE), z: Math.round(z),
+                rotation: this.camera.rotation,
+                zoom: near?.zoom ?? Math.max(MIN_ZOOM, this.camera.zoom - MAP_OUT),
+                hold: near?.hold ?? DEFAULT_HOLD, manual: true,
+            });
+            this.selected = at;
+            this.player.setViews(views, -1);
+            this.refresh();
+        });
+    }
+
+    /** What a view's pan does next: a pan (true) or a cut, for the map's lines. */
+    pans(view: View): boolean {
+        return this.player.panOf(view) > 0;
+    }
+
+    /** The park's views as they play (generated ones fitted to the window). */
+    get currentViews(): View[] {
+        return this.player.currentViews;
     }
 
     /** The views to change: the park's current views, copied (generated ones are fitted).
@@ -370,6 +507,11 @@ export class Editor {
     }
 
     add(): void {
+        if (this.map) {
+            this.anchor(); // on the map: a new view at the screen's centre, at the selected view's zoom
+            this.addAt(this.camera.x, this.camera.y, this.camera.z);
+            return;
+        }
         this.change(() => {
             this.anchor();
             const views = this.views();
@@ -380,6 +522,16 @@ export class Editor {
     }
 
     update(): void {
+        if (this.map) {
+            // On the map: the selected view moves to the screen's centre (its zoom and angle kept).
+            this.anchor();
+            const c = this.camera;
+            this.mapEdit(this.selected, () => ({
+                x: round2((c.x - TILE / 2) / TILE), y: round2((c.y - TILE / 2) / TILE), z: Math.round(c.z),
+                rotation: c.rotation,
+            }));
+            return;
+        }
         this.change(() => {
             const views = this.views();
             if (!views[this.selected]) {
@@ -489,6 +641,11 @@ export class Editor {
     /** A view was shown (selected, the park finished loading, or Play moved on): follow it, so
      * the list highlights the view on screen and edits apply to it. */
     private viewShown(view: View | undefined): void {
+        if (this.map && !this.player.isPreviewing) {
+            this.selected = this.player.viewIndex;
+            this.applyCamera(); // the map keeps its camera
+            return;
+        }
         if (view) {
             this.cameraFromView(view);
         } else {

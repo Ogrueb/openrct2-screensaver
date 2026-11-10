@@ -154,6 +154,7 @@ function registerShortcuts(): void {
         ["shuffle", "Shuffle on / off", ["S"], p => p.toggleShuffle()],
         ["edit", "Open / close view editor", ["E"], () => toggleEditor()],
         ["undo", "Undo (view editor)", ["CTRL+Z"], either(() => {}, e => e.undo())],
+        ["map", "Map of the views on / off (view editor)", ["M"], either(() => {}, e => e.toggleMap())],
         ["redo", "Redo (view editor)", ["CTRL+Y", "CTRL+SHIFT+Z"], either(() => {}, e => e.redo())],
     ];
     for (const [id, text, bindings, action] of shortcuts) {

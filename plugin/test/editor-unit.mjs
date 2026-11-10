@@ -4,9 +4,9 @@
 import assert from "node:assert/strict";
 import { build } from "esbuild";
 
-const out = await build({ stdin: { contents: 'export { surfaceZ } from "./editor"; export { toScreen, toWorld } from "./fit";',
+const out = await build({ stdin: { contents: 'export { surfaceZ } from "./editor"; export { toScreen, toWorld } from "./fit"; export { clip } from "./ui/view-map";',
     resolveDir: new URL("../src", import.meta.url).pathname, loader: "ts" }, bundle: true, format: "esm", write: false, logLevel: "error" });
-const { surfaceZ, toScreen, toWorld } = await import("data:text/javascript," + encodeURIComponent(out.outputFiles[0].text));
+const { surfaceZ, toScreen, toWorld, clip } = await import("data:text/javascript," + encodeURIComponent(out.outputFiles[0].text));
 
 // toWorld undoes toScreen on the view's plane, at every angle.
 for (let r = 0; r < 4; r++) {
@@ -38,4 +38,8 @@ for (let r = 0; r < 4; r++) {
 }
 // Off the map: nothing.
 assert.equal(surfaceZ({ x: 0, y: -5000 }, 0, () => undefined), undefined, "the void");
+// The map's pan lines are clipped to the window.
+assert.deepEqual(clip(-100, 50, 100, 50, 1920, 1080), [0, 50, 100, 50], "clipped at the left edge");
+assert.equal(clip(-100, -50, -10, -5, 1920, 1080), undefined, "a line off the window is dropped");
+assert.deepEqual(clip(10, 10, 20, 20, 1920, 1080), [10, 10, 20, 20], "a line inside is kept");
 console.log("ok: live editor geometry (drag, height under the centre)");

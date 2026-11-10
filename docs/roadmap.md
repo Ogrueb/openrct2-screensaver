@@ -534,7 +534,7 @@ The mode's UI is built in the order controls bar and load cover, captions, then 
 (`docs/screensaver-ui.md`). That editor is the simple one. A more complex "live" editor is left as
 an enhancement: drag boxes on the playing park, the views list, holds, pans and Play, replacing
 the drawing page. Design and stages in `docs/enhancements.md` section 2 (2026-11-09); stage 1 (Frame
-mode: drag the park to move the selected view, wheel zoom, the height set by itself, undo and redo) done.
+mode: drag the park to move the selected view, wheel zoom, the height set by itself, undo and redo) done; stages 2-4 (the map on M: boxes, markers, dotted pan lines, drag, corner zoom, right-click add, locked event views) done 2026-11-10, untested.
 
 ### Weather and day/night in the generator (owner, 2026-11-02)
 

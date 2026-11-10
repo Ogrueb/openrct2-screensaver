@@ -78,6 +78,19 @@ Live editing (screensaver mode only, `docs/screensaver-ui.md` "Live editing"):
 - [ ] With Play on, a drag stops Play and moves no view.
 - [ ] With the settings panel open, a click on the park closes it (no drag).
 
+The map (M or the Map button; `docs/screensaver-ui.md` "The map"):
+- [ ] M steps the camera out; each view at this angle is a numbered box the size of its window, views at
+      other angles are numbered markers; dotted lines join the views in play order (dense yellow: a pan,
+      sparse cyan: a cut). Boxes stay on their spots while you pan (drag empty park, arrows) and zoom (wheel).
+- [ ] Drag a box: it follows the mouse and the view moves on release; the camera stays. Drag the selected
+      box's orange corner: the box snaps a zoom level bigger or smaller.
+- [ ] Right-click empty park: a new view appears there. Ctrl+Z removes it.
+- [ ] Double-click a box: the map closes on that view. Click a row in the list with the map on: the map
+      centres on it.
+- [ ] On a park with event views: their boxes say "event (locked)" and don't drag until the panel's
+      Event views button unlocks them.
+- [ ] Close the editor and reopen: the map is off. Install and play: map edits play as set.
+
 ### View panning (`docs/view-panning.md`)
 - [ ] Default (`pan` unset): views still and cut exactly as before.
 - [ ] A view with `pan` holds still, then pans to the next view and arrives exactly; angle/zoom

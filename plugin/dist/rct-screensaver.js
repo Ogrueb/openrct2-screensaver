@@ -152,6 +152,7 @@
   var UNDO_DEPTH = 100;
   var MAX_Z = 2040;
   var Z_STEP = 8;
+  var MAP_OUT = 2;
   var EDITOR_COLUMNS = ["#", "Tile", "Angle", "Zoom", "Hold", "Pan", "Set by"];
   function round2(n) {
     return Math.round(n * 100) / 100;
@@ -194,7 +195,7 @@
     }
   }
   var Editor = class {
-    // a drag on the park
+    // the map lets event views be dragged
     constructor(player2, view = new WindowView()) {
       this.player = player2;
       this.view = view;
@@ -202,6 +203,10 @@
       this.camera = { x: 0, y: 0, z: 0, rotation: 0, zoom: 0 };
       this.selected = -1;
       this.undoStacks = /* @__PURE__ */ new Map();
+      // a drag on the park
+      this.map = false;
+      // the map: every view a box on a camera stepped out
+      this.eventsUnlocked = false;
     }
     get isOpen() {
       return this.shown;
@@ -274,7 +279,7 @@
     /** The wheel over the park: zooms the camera a level (delta > 0 in) and the selected view with
      * it; during Play it only stops Play. */
     wheel(delta) {
-      const commit = !this.player.isPreviewing && this.selectedIndex >= 0;
+      const commit = !this.map && !this.player.isPreviewing && this.selectedIndex >= 0;
       this.zoom(delta > 0 ? -1 : 1);
       if (commit) {
         this.update();
@@ -378,6 +383,7 @@
     /** Play on or off: the park's views play with their pans while the editor stays open. */
     togglePreview() {
       const on = !this.player.isPreviewing;
+      this.map = false;
       if (!on) {
         this.cameraFromViewport();
       }
@@ -403,13 +409,130 @@
         return;
       }
       this.shown = false;
+      this.map = false;
       this.player.onViewShown = void 0;
       this.player.setEditing(false);
     }
     select(index) {
       this.selected = index;
+      if (this.map) {
+        this.centreOn(index);
+        return;
+      }
       this.player.showViewAt(index);
       this.replay();
+    }
+    // The map (ui/view-map.ts): the camera stepped out, every view a box.
+    get mapMode() {
+      return this.map;
+    }
+    get eventsLocked() {
+      return !this.eventsUnlocked;
+    }
+    toggleEventLock() {
+      this.eventsUnlocked = !this.eventsUnlocked;
+      this.refresh();
+    }
+    /** The map on or off: on, the camera steps out from the selected view; off, it frames it. */
+    toggleMap() {
+      if (this.player.isLoading || !this.view.supportsMap) {
+        return;
+      }
+      this.stopPreview();
+      this.map = !this.map;
+      if (this.map) {
+        const view = this.player.currentViews[this.selected];
+        this.camera.zoom = Math.min(MAX_ZOOM2, (view?.zoom ?? this.camera.zoom) + MAP_OUT);
+        this.applyCamera();
+      } else if (this.selectedIndex >= 0) {
+        this.player.showViewAt(this.selected);
+      } else {
+        this.refresh();
+      }
+    }
+    /** A box double-clicked on the map: back to the frame, on that view. */
+    frame(index) {
+      this.map = false;
+      this.select(index);
+    }
+    /** The camera as it is (the map projects the views through it). */
+    get cameraPose() {
+      return { ...this.camera };
+    }
+    /** Pans the camera by window pixels (the map's drag on empty park). */
+    panBy(dx, dy) {
+      this.stopPreview();
+      this.moveCamera(dx, dy);
+    }
+    /** Zooms the camera a level (delta > 0 in) without touching a view (the map's wheel). */
+    zoomCamera(delta) {
+      this.zoom(delta > 0 ? -1 : 1);
+    }
+    /** Selects a view without moving the camera (a click on its box). */
+    pick(index) {
+      if (this.player.currentViews[index]) {
+        this.selected = index;
+        this.refresh();
+      }
+    }
+    /** Centres the camera on a view, turning to its angle so it shows as a box. */
+    centreOn(index) {
+      const view = this.player.currentViews[index];
+      if (view) {
+        this.camera = { ...this.camera, x: view.x * TILE2 + TILE2 / 2, y: view.y * TILE2 + TILE2 / 2, z: view.z, rotation: view.rotation };
+        this.applyCamera();
+      }
+    }
+    /** Moves a view to a tile position (its height and the rest unchanged): a box dragged on the map. */
+    moveView(index, x, y) {
+      this.mapEdit(index, (v) => ({ x: round2(x), y: round2(y) }));
+    }
+    /** Changes a view's zoom: a box's corner dragged on the map. */
+    zoomView(index, zoom) {
+      this.mapEdit(index, () => ({ zoom: Math.min(MAX_ZOOM2, Math.max(MIN_ZOOM2, Math.round(zoom))) }));
+    }
+    mapEdit(index, edit) {
+      this.change(() => {
+        const views = this.views();
+        const view = views[index];
+        if (!view) {
+          return;
+        }
+        views[index] = { ...view, ...edit(view), manual: true };
+        delete views[index].overview;
+        this.selected = index;
+        this.player.setViews(views, -1);
+        this.refresh();
+      });
+    }
+    /** Adds a view at a world point after the selected one, at the camera's angle and the selected
+     * view's zoom (a right click on the map). */
+    addAt(x, y, z) {
+      this.change(() => {
+        const views = this.views();
+        const at = this.selected >= 0 ? this.selected + 1 : views.length;
+        const near = views[this.selected];
+        views.splice(at, 0, {
+          x: round2((x - TILE2 / 2) / TILE2),
+          y: round2((y - TILE2 / 2) / TILE2),
+          z: Math.round(z),
+          rotation: this.camera.rotation,
+          zoom: near?.zoom ?? Math.max(MIN_ZOOM2, this.camera.zoom - MAP_OUT),
+          hold: near?.hold ?? DEFAULT_HOLD,
+          manual: true
+        });
+        this.selected = at;
+        this.player.setViews(views, -1);
+        this.refresh();
+      });
+    }
+    /** What a view's pan does next: a pan (true) or a cut, for the map's lines. */
+    pans(view) {
+      return this.player.panOf(view) > 0;
+    }
+    /** The park's views as they play (generated ones fitted to the window). */
+    get currentViews() {
+      return this.player.currentViews;
     }
     /** The views to change: the park's current views, copied (generated ones are fitted).
      * Empty while a park is loading, so nothing is changed until its views are on screen. */
@@ -429,6 +552,11 @@
       };
     }
     add() {
+      if (this.map) {
+        this.anchor();
+        this.addAt(this.camera.x, this.camera.y, this.camera.z);
+        return;
+      }
       this.change(() => {
         this.anchor();
         const views = this.views();
@@ -438,6 +566,17 @@
       });
     }
     update() {
+      if (this.map) {
+        this.anchor();
+        const c = this.camera;
+        this.mapEdit(this.selected, () => ({
+          x: round2((c.x - TILE2 / 2) / TILE2),
+          y: round2((c.y - TILE2 / 2) / TILE2),
+          z: Math.round(c.z),
+          rotation: c.rotation
+        }));
+        return;
+      }
       this.change(() => {
         const views = this.views();
         if (!views[this.selected]) {
@@ -534,6 +673,11 @@
     /** A view was shown (selected, the park finished loading, or Play moved on): follow it, so
      * the list highlights the view on screen and edits apply to it. */
     viewShown(view) {
+      if (this.map && !this.player.isPreviewing) {
+        this.selected = this.player.viewIndex;
+        this.applyCamera();
+        return;
+      }
       if (view) {
         this.cameraFromView(view);
       } else {
@@ -3865,16 +4009,354 @@
     return scale <= 1 ? 1 : scale <= 2 ? 2 : 3;
   }
 
+  // src/ui/view-map.ts
+  var TILE4 = 32;
+  var MIN_ZOOM4 = -2;
+  var MAX_ZOOM5 = 3;
+  var HANDLE = 14;
+  var MARKER = 26;
+  var DOUBLE_CLICK_MS = 400;
+  var CLICK_SLOP = 4;
+  var DOT = 3;
+  var PAN_GAP = 8;
+  var CUT_GAP = 20;
+  var MAX_DOTS = 80;
+  var TEXT_SIZE = 14;
+  var EDGE = 24;
+  var MAP_COLOURS = {
+    generated: "#ce93d8",
+    manual: "#4fc3f7",
+    event: "#ffb000",
+    selected: "#ff6a1a",
+    pan: "#ffd54fe0",
+    cut: "#4dd0e1c0",
+    labelBacking: "#000000b0",
+    text: "#ffffff"
+  };
+  var Z_LINE = 40;
+  var Z_BOX = 42;
+  var Z_LABEL = 44;
+  function isEvent(view) {
+    return view.cue !== void 0 || view.animation !== void 0 || view.show !== void 0;
+  }
+  function screenOf2(view, rotation) {
+    return toScreen(view.x * TILE4 + TILE4 / 2, view.y * TILE4 + TILE4 / 2, view.z, rotation);
+  }
+  var ViewMap = class {
+    constructor(overlay, now = () => Date.now()) {
+      this.overlay = overlay;
+      this.now = now;
+      this.placed = [];
+      this.lastDown = { time: -Infinity, x: 0, y: 0, index: -1 };
+      this.layer = new Layer(overlay, "rcts.map.");
+    }
+    get dragging() {
+      return this.drag !== void 0;
+    }
+    clear() {
+      this.drag = void 0;
+      this.placed = [];
+      this.layer.clear();
+    }
+    /** Window pixels of a screen point (zoom 0 units) through the camera. */
+    toWindow(p, cam) {
+      const c = toScreen(cam.x, cam.y, cam.z, cam.rotation);
+      const k = Math.pow(2, -cam.zoom);
+      return { x: ui.width / 2 + (p.x - c.x) * k, y: ui.height / 2 + (p.y - c.y) * k };
+    }
+    /** The screen point (zoom 0 units) under a window pixel. */
+    fromWindow(x, y, cam) {
+      const c = toScreen(cam.x, cam.y, cam.z, cam.rotation);
+      const k = Math.pow(2, cam.zoom);
+      return { x: c.x + (x - ui.width / 2) * k, y: c.y + (y - ui.height / 2) * k };
+    }
+    /** The view as the drag in progress shows it (moved or zoomed, not saved yet). */
+    shownView(index, view, cam) {
+      const d = this.drag;
+      if (d?.kind === "box" && d.index === index && d.moved) {
+        const s = screenOf2(view, cam.rotation);
+        const k = Math.pow(2, cam.zoom);
+        const w = toWorld({ x: s.x + (d.x - d.x0) * k, y: s.y + (d.y - d.y0) * k }, view.z, cam.rotation);
+        return { ...view, x: (w.x - TILE4 / 2) / TILE4, y: (w.y - TILE4 / 2) / TILE4 };
+      }
+      if (d?.kind === "handle" && d.index === index) {
+        return { ...view, zoom: d.zoom };
+      }
+      return view;
+    }
+    place(editor2) {
+      const cam = editor2.cameraPose;
+      this.placed = editor2.currentViews.map((original, index) => {
+        const view = this.shownView(index, original, cam);
+        const c = this.toWindow(screenOf2(view, cam.rotation), cam);
+        if (view.rotation === cam.rotation) {
+          const k = Math.pow(2, view.zoom - cam.zoom);
+          const w = ui.width * k;
+          const h = ui.height * k;
+          return { index, view, cx: c.x, cy: c.y, box: { x: c.x - w / 2, y: c.y - h / 2, width: w, height: h } };
+        }
+        return { index, view, cx: c.x, cy: c.y, marker: { x: c.x - MARKER / 2, y: c.y - MARKER / 2, width: MARKER, height: MARKER } };
+      });
+    }
+    /** The selected box's zoom handle (bottom right corner), if it can be dragged. */
+    handleOf(editor2) {
+      const p = this.placed[editor2.selectedIndex];
+      if (!p?.box || isEvent(p.view) && editor2.eventsLocked) {
+        return void 0;
+      }
+      const b = p.box;
+      return { x: b.x + b.width - HANDLE / 2, y: b.y + b.height - HANDLE / 2, width: HANDLE, height: HANDLE };
+    }
+    /** The view under a window pixel: markers first, then the selected box, then the others (the
+     * later ones on top). A large box counts only near its edge, so a press inside it still pans. */
+    hit(editor2, x, y) {
+      for (const p of this.placed) {
+        if (p.marker && contains(p.marker, x, y)) {
+          return p.index;
+        }
+      }
+      const order = [...this.placed].reverse();
+      const sel = this.placed[editor2.selectedIndex];
+      if (sel) {
+        order.unshift(sel);
+      }
+      for (const p of order) {
+        if (p.box && contains(p.box, x, y)) {
+          const big = p.box.width > ui.width / 2 || p.box.height > ui.height / 2;
+          const inner = { x: p.box.x + EDGE, y: p.box.y + EDGE, width: p.box.width - 2 * EDGE, height: p.box.height - 2 * EDGE };
+          if (!big || !contains(inner, x, y)) {
+            return p.index;
+          }
+        }
+      }
+      return void 0;
+    }
+    /** A mouse event on the park while the map is on; true when it was the map's. */
+    onMouse(e, editor2) {
+      this.place(editor2);
+      const d = this.drag;
+      if (e.type === "wheel") {
+        editor2.zoomCamera(e.delta);
+        return true;
+      }
+      if (e.type === "down" && e.button === 0) {
+        const handle = this.handleOf(editor2);
+        if (handle && contains(handle, e.x, e.y, 4)) {
+          const view2 = editor2.currentViews[editor2.selectedIndex];
+          this.drag = { kind: "handle", index: editor2.selectedIndex, zoom: view2.zoom };
+          return true;
+        }
+        const index = this.hit(editor2, e.x, e.y);
+        if (index === void 0) {
+          this.drag = { kind: "pan", x: e.x, y: e.y };
+          return true;
+        }
+        const last = this.lastDown;
+        const double = index === last.index && this.now() - last.time < DOUBLE_CLICK_MS && Math.abs(e.x - last.x) <= CLICK_SLOP && Math.abs(e.y - last.y) <= CLICK_SLOP;
+        this.lastDown = { time: this.now(), x: e.x, y: e.y, index };
+        if (double) {
+          this.lastDown.time = -Infinity;
+          editor2.frame(index);
+          return true;
+        }
+        editor2.pick(index);
+        const view = editor2.currentViews[index];
+        if (!(isEvent(view) && editor2.eventsLocked)) {
+          this.drag = { kind: "box", index, x0: e.x, y0: e.y, x: e.x, y: e.y, moved: false };
+        }
+        return true;
+      }
+      if (e.type === "down" && e.button === 1) {
+        this.drag = { kind: "right", x0: e.x, y0: e.y, moved: false };
+        return true;
+      }
+      if (e.type === "move" && d) {
+        if (d.kind === "pan") {
+          editor2.panBy(d.x - e.x, d.y - e.y);
+          d.x = e.x;
+          d.y = e.y;
+        } else if (d.kind === "box") {
+          d.x = e.x;
+          d.y = e.y;
+          d.moved = d.moved || Math.abs(e.x - d.x0) > CLICK_SLOP || Math.abs(e.y - d.y0) > CLICK_SLOP;
+          this.render(editor2);
+        } else if (d.kind === "handle") {
+          const p = this.placed[d.index];
+          const view = editor2.currentViews[d.index];
+          if (p && view) {
+            const half = {
+              w: ui.width * Math.pow(2, view.zoom - editor2.cameraPose.zoom) / 2,
+              h: ui.height * Math.pow(2, view.zoom - editor2.cameraPose.zoom) / 2
+            };
+            const ratio = Math.max(Math.abs(e.x - p.cx) / half.w, Math.abs(e.y - p.cy) / half.h, 1e-3);
+            d.zoom = Math.min(MAX_ZOOM5, Math.max(MIN_ZOOM4, view.zoom + Math.round(Math.log2(ratio))));
+            this.render(editor2);
+          }
+        } else if (d.kind === "right") {
+          d.moved = d.moved || Math.abs(e.x - d.x0) > CLICK_SLOP || Math.abs(e.y - d.y0) > CLICK_SLOP;
+        }
+        return true;
+      }
+      if (e.type === "up" && d) {
+        const shown = d.kind === "box" ? this.shownView(d.index, editor2.currentViews[d.index], editor2.cameraPose) : void 0;
+        this.drag = void 0;
+        if (d.kind === "box" && d.moved && e.button === 0 && shown) {
+          editor2.moveView(d.index, shown.x, shown.y);
+        } else if (d.kind === "handle" && e.button === 0) {
+          if (d.zoom !== editor2.currentViews[d.index]?.zoom) {
+            editor2.zoomView(d.index, d.zoom);
+          }
+        } else if (d.kind === "right" && e.button === 1 && !d.moved) {
+          const index = this.hit(editor2, e.x, e.y);
+          if (index !== void 0) {
+            editor2.pick(index);
+          } else {
+            const cam = editor2.cameraPose;
+            const p = this.fromWindow(e.x, e.y, cam);
+            const z = surfaceZ(p, cam.rotation) ?? cam.z;
+            const w = toWorld(p, z, cam.rotation);
+            editor2.addAt(w.x, w.y, z);
+          }
+        }
+        this.render(editor2);
+        return true;
+      }
+      return false;
+    }
+    render(editor2) {
+      this.place(editor2);
+      const scene = /* @__PURE__ */ new Map();
+      const views = this.placed;
+      if (views.length > 1) {
+        views.forEach((p, i) => {
+          const q = views[(i + 1) % views.length];
+          this.line(scene, `line.${i}`, p.cx, p.cy, q.cx, q.cy, editor2.pans(editor2.currentViews[i]));
+        });
+      }
+      const sel = editor2.selectedIndex;
+      for (const p of views) {
+        const event = isEvent(p.view);
+        const colour = p.index === sel ? MAP_COLOURS.selected : event ? MAP_COLOURS.event : p.view.manual ? MAP_COLOURS.manual : MAP_COLOURS.generated;
+        const text = `${p.index + 1}${event ? editor2.eventsLocked ? " event (locked)" : " event" : ""}`;
+        if (p.box) {
+          const width = p.index === sel ? 3 : 2;
+          scene.set(`box.${p.index}`, {
+            type: "rect",
+            ...round(p.box),
+            fill: "#00000000",
+            border: colour,
+            borderWidth: width,
+            z: Z_BOX + (p.index === sel ? 1 : 0)
+          });
+          this.tag(scene, `tag.${p.index}`, text, p.box.x + width, p.box.y + width, colour);
+        } else if (p.marker) {
+          scene.set(`mark.${p.index}`, {
+            type: "rect",
+            ...round(p.marker),
+            fill: MAP_COLOURS.labelBacking,
+            border: colour,
+            borderWidth: 2,
+            z: Z_BOX
+          });
+          scene.set(`mark.${p.index}.text`, {
+            type: "text",
+            text: String(p.index + 1),
+            size: TEXT_SIZE,
+            bold: true,
+            colour: MAP_COLOURS.text,
+            x: Math.round(p.cx),
+            y: Math.round(p.cy - TEXT_SIZE * 0.65),
+            align: "center",
+            z: Z_LABEL
+          });
+        }
+      }
+      const handle = this.handleOf(editor2);
+      if (handle) {
+        scene.set("handle", { type: "rect", ...round(handle), fill: MAP_COLOURS.selected, border: "#000000", borderWidth: 1, z: Z_LABEL });
+      }
+      this.layer.render(scene);
+      this.layer.show(true, 0);
+    }
+    /** A number tag at a box's top left corner. */
+    tag(scene, id, text, x, y, colour) {
+      const m = measure(this.overlay, text, TEXT_SIZE, true);
+      scene.set(id, {
+        type: "rect",
+        x: Math.round(x),
+        y: Math.round(y),
+        width: Math.ceil(m.width) + 10,
+        height: Math.ceil(m.height) + 4,
+        fill: MAP_COLOURS.labelBacking,
+        z: Z_LABEL
+      });
+      scene.set(`${id}.text`, { type: "text", text, size: TEXT_SIZE, bold: true, colour, x: Math.round(x) + 5, y: Math.round(y) + 2, z: Z_LABEL + 1 });
+    }
+    /** A dotted line between two window points, clipped to the window: dense for a pan, sparse for a cut. */
+    line(scene, id, x0, y0, x1, y1, pan) {
+      const clipped = clip(x0, y0, x1, y1, ui.width, ui.height);
+      if (!clipped) {
+        return;
+      }
+      const [ax, ay, bx, by] = clipped;
+      const length = Math.hypot(bx - ax, by - ay);
+      const gap = Math.max(pan ? PAN_GAP : CUT_GAP, length / MAX_DOTS);
+      const n = Math.floor(length / gap);
+      for (let i = 0; i <= n; i++) {
+        const t = n === 0 ? 0 : i / n;
+        scene.set(`${id}.${i}`, {
+          type: "rect",
+          x: Math.round(ax + (bx - ax) * t - DOT / 2),
+          y: Math.round(ay + (by - ay) * t - DOT / 2),
+          width: DOT,
+          height: DOT,
+          fill: pan ? MAP_COLOURS.pan : MAP_COLOURS.cut,
+          z: Z_LINE
+        });
+      }
+    }
+  };
+  function round(r) {
+    return { x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.width), height: Math.round(r.height) };
+  }
+  function clip(x0, y0, x1, y1, w, h) {
+    let t0 = 0;
+    let t1 = 1;
+    const dx = x1 - x0;
+    const dy = y1 - y0;
+    const edges = [[-dx, x0], [dx, w - x0], [-dy, y0], [dy, h - y0]];
+    for (const [p, q] of edges) {
+      if (p === 0) {
+        if (q < 0) {
+          return void 0;
+        }
+      } else {
+        const r = q / p;
+        if (p < 0) {
+          t0 = Math.max(t0, r);
+        } else {
+          t1 = Math.min(t1, r);
+        }
+      }
+    }
+    return t0 <= t1 ? [x0 + t0 * dx, y0 + t0 * dy, x0 + t1 * dx, y0 + t1 * dy] : void 0;
+  }
+
   // src/ui/editor-panel.ts
   var PAN_SHARE_STEP2 = 0.1;
   var HELP = [
     "Drag the park: moves the selected view. Wheel: zooms it.",
     "Arrows pan the camera (Shift: faster). Ctrl+Z undoes. E closes."
   ];
+  var MAP_HELP = [
+    "Drag a box: moves it; its corner: zooms it. Drag the park: pans.",
+    "Right-click: adds a view. Double-click a box: frames it. M closes."
+  ];
   var EditorPanel = class {
     // a left drag on the park: where the mouse last was
     constructor(mode2) {
       this.mode = mode2;
+      this.supportsMap = true;
       this.mouse = { x: -1, y: -1 };
       this.boxes = /* @__PURE__ */ new Map();
       this.texts = /* @__PURE__ */ new Map();
@@ -3884,6 +4366,7 @@
       // first row shown
       this.followed = -1;
       this.layer = new Layer(mode2.overlay, "rcts.ed.");
+      this.map = new ViewMap(mode2.overlay);
     }
     get isOpen() {
       return this.editor !== void 0;
@@ -3900,13 +4383,14 @@
       this.downOn = void 0;
       this.drag = void 0;
       this.layer.clear();
+      this.map.clear();
     }
     refresh() {
       this.render();
     }
     /** Handles a mouse event over the panel (or a press that started on it); false lets it through. */
     onMouse(e) {
-      if (!this.editor || this.drag) {
+      if (!this.editor || this.drag || this.map.dragging) {
         return false;
       }
       if (e.type !== "wheel") {
@@ -3936,6 +4420,9 @@
       if (!editor2) {
         return false;
       }
+      if (editor2.mapMode || this.map.dragging) {
+        return this.map.onMouse(e, editor2);
+      }
       if (e.type === "down" && e.button === 0) {
         this.drag = { x: e.x, y: e.y };
         editor2.dragStart();
@@ -3959,7 +4446,7 @@
     }
     /** A drag on the park is going on (every mouse event is the park's until it ends). */
     get dragging() {
-      return this.drag !== void 0;
+      return this.drag !== void 0 || this.map.dragging;
     }
     hit() {
       for (const [id, r] of this.boxes) {
@@ -4053,6 +4540,12 @@
         case "play":
           e.togglePreview();
           break;
+        case "map":
+          e.toggleMap();
+          break;
+        case "lock":
+          e.toggleEventLock();
+          break;
       }
     }
     /** Places every control; rows of equal buttons fill the panel's width. */
@@ -4126,6 +4619,7 @@
       this.boxes.set("inertia", { x: x0 + inner - half, y, width: half, height: s.buttonHeight });
       y += s.buttonHeight + s.gap;
       buttonRow(["rotl", "rotr", "zoomin", "zoomout"]);
+      buttonRow(["map", "lock"]);
       const small = Math.round((inner - 2 * s.gap) / 6);
       this.boxes.set("undo", { x: x0, y, width: small, height: s.buttonHeight });
       this.boxes.set("redo", { x: x0 + small + s.gap, y, width: small, height: s.buttonHeight });
@@ -4135,7 +4629,7 @@
       const status = e.status();
       this.texts.set("status", { text: status.text, warning: status.warning, r: { x: x0, y, width: inner, height: s.lineHeight } });
       y += s.lineHeight;
-      for (const [i, help] of HELP.entries()) {
+      for (const [i, help] of (e.mapMode ? MAP_HELP : HELP).entries()) {
         this.texts.set(`help${i}`, { text: help, r: { x: x0, y, width: inner, height: s.lineHeight } });
         y += s.lineHeight;
       }
@@ -4214,6 +4708,8 @@
       textButton("rotr", "Rotate right");
       textButton("zoomin", "Zoom in");
       textButton("zoomout", "Zoom out");
+      textButton("map", e.mapMode ? "Map (M): on" : "Map (M): off", e.mapMode);
+      textButton("lock", e.eventsLocked ? "Event views: locked" : "Event views: unlocked", !e.eventsLocked);
       textButton("undo", "Undo");
       textButton("redo", "Redo");
       textButton("play", e.isPlaying ? "Play: on (moving the camera stops it)" : "Play: off", e.isPlaying);
@@ -4227,6 +4723,11 @@
         }
       }
       this.layer.render(scene);
+      if (e.mapMode) {
+        this.map.render(e);
+      } else {
+        this.map.clear();
+      }
     }
   };
   function columnStarts(width, rows, overlay) {
@@ -4378,6 +4879,8 @@
       ["edit", "Open / close view editor", ["E"], () => toggleEditor()],
       ["undo", "Undo (view editor)", ["CTRL+Z"], either(() => {
       }, (e) => e.undo())],
+      ["map", "Map of the views on / off (view editor)", ["M"], either(() => {
+      }, (e) => e.toggleMap())],
       ["redo", "Redo (view editor)", ["CTRL+Y", "CTRL+SHIFT+Z"], either(() => {
       }, (e) => e.redo())]
     ];
