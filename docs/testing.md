@@ -73,6 +73,8 @@ Live editing (screensaver mode only, `docs/screensaver-ui.md` "Live editing"):
 - [ ] Centre a tall building, then Rotate left or right: the building stays in the centre (the camera
       turns about its top, not about the ground behind it). Set to camera there, and a pan's turn into
       that view also keeps the building centred.
+- [ ] Rotate ten or more times in a row over uneven buildings: after each full turn the picture is back
+      where it started (no drift).
 - [ ] Ctrl+Z and the Undo button step back through drags, zooms, holds, adds and deletes; Ctrl+Y (or
       Ctrl+Shift+Z) and Redo step forward; undoing everything shows "auto" views again.
 - [ ] With Play on, a drag stops Play and moves no view.

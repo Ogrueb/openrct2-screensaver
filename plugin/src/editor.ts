@@ -114,6 +114,8 @@ function groundZ(x: number, y: number): number {
 export class Editor {
     private shown = false;
     private camera: Camera = { x: 0, y: 0, z: 0, rotation: 0, zoom: 0 };
+    /** The point the last anchor() set: turns pivot on it until the camera moves elsewhere. */
+    private pivot?: { x: number; y: number; z: number };
     private selected = -1;
     private undoStacks = new Map<number, { undo: Snapshot[]; redo: Snapshot[] }>(); // by park index
     private gesture: { commit: boolean; moved: boolean } | undefined; // a drag on the park
@@ -215,12 +217,18 @@ export class Editor {
      * camera stays where it was over the void. */
     private anchor(): void {
         const c = this.camera;
+        const pv = this.pivot;
+        if (pv && Math.abs(c.x - pv.x) <= 1 && Math.abs(c.y - pv.y) <= 1 && Math.abs(c.z - pv.z) <= 1) {
+            return; // still on the point set last time: each angle sees another surface there, so
+            // anchoring again after a turn would move the pivot a little every turn
+        }
         const p = toScreen(c.x, c.y, c.z, c.rotation);
         const z = surfaceZ(p, c.rotation);
         if (z !== undefined) {
             const world = toWorld(p, z, c.rotation);
             this.camera = { ...c, x: world.x, y: world.y, z };
         }
+        this.pivot = { x: this.camera.x, y: this.camera.y, z: this.camera.z };
     }
 
     // Undo and redo, per park.
