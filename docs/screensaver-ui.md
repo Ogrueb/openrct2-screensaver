@@ -263,6 +263,9 @@ Play closes the map (it moves the camera through the views).
 Left for later: the overlay redraws the whole window while boxes move (the engine unites changes into one
 dirty rect); a perf-log run while panning on the map decides whether an engine `line` element or
 per-element dirty rects are worth a patch.
+- **At the map's edge** the engine stops the view at its scroll limit; the camera follows where the view
+  really is, so dragging on past the limit no longer slides the boxes off their spots (found in the
+  perf run, 2026-11-10).
 
 ## Widget kit (`plugin/src/ui/kit.ts`)
 

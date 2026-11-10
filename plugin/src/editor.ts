@@ -162,6 +162,7 @@ export class Editor {
 
     /** Moves the camera by window pixels (right and down are positive), on the plane at its height. */
     private moveCamera(dx: number, dy: number): void {
+        this.followViewport(ui.mainViewport); // the engine clamps the view on its next frame
         const c = this.camera;
         const scale = Math.pow(2, c.zoom);
         const p = toScreen(c.x, c.y, c.z, c.rotation);
@@ -676,6 +677,31 @@ export class Editor {
         this.camera = { x: centre.x, y: centre.y, z: groundZ(centre.x, centre.y), rotation: vp.rotation, zoom: vp.zoom };
     }
 
+    /** The engine keeps the view inside the map's scroll limits (on the frame after moveTo), so the
+     * view can stop short of the camera's point. The camera follows where the view really went (on the plane at its height);
+     * otherwise it runs on past the limit while the picture stays put, and the map's boxes, drawn from
+     * the camera, slide off their spots. */
+    private followViewport(vp: Viewport): void {
+        const l = vp.left, r = vp.right, t = vp.top, b = vp.bottom;
+        if (![l, r, t, b].every(Number.isFinite) || r <= l || b <= t) {
+            return;
+        }
+        const c = this.camera;
+        const scale = Math.pow(2, vp.zoom);
+        if (vp.rotation !== c.rotation || Math.abs((r - l) / scale - ui.width) > 0.25 * ui.width) {
+            return; // not yet turned or zoomed to the camera, or not the window's view
+        }
+        const want = toScreen(c.x, c.y, c.z, c.rotation);
+        const got = { x: (l + r) / 2, y: (t + b) / 2 };
+        const slack = 4 * Math.pow(2, Math.max(0, c.zoom)); // rounding, and the view's whole pixels
+        if (Math.abs(got.x - want.x) <= slack && Math.abs(got.y - want.y) <= slack) {
+            return;
+        }
+        const world = toWorld(got, c.z, c.rotation);
+        c.x = world.x;
+        c.y = world.y;
+    }
+
     private applyCamera(): void {
         const c = this.camera;
         const vp = ui.mainViewport;
@@ -683,6 +709,7 @@ export class Editor {
         vp.zoom = c.zoom;
         c.zoom = vp.zoom; // the engine may clamp it
         vp.moveTo({ x: Math.round(c.x), y: Math.round(c.y), z: Math.round(c.z) });
+        this.followViewport(vp);
         this.refresh();
     }
 

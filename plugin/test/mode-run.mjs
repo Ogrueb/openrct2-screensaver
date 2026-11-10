@@ -373,6 +373,21 @@ assert.ok(scene.get("rcts.bar.titles.icon").src.includes("titles-off"), "on -> o
         // A drag on empty park pans the camera.
         mouse("move", 1800, 150); mouse("down", 1800, 150); mouse("move", 1700, 150); mouse("up", 1700, 150);
         assert.notEqual(JSON.stringify(viewport.centre), cam, "a drag on empty park pans");
+        // At the map's scroll limit the engine holds the view where it is (on its next frame): the
+        // camera follows the view instead of running on, so the boxes stay on their spots.
+        {
+            const c = viewport.centre, r = viewport.rotation, s = 2 ** viewport.zoom;
+            const [a, bb] = [[c.x, c.y], [c.y, -c.x], [-c.x, -c.y], [-c.y, c.x]][r];
+            const sx = bb - a, sy = (a + bb) / 2 - c.z;
+            Object.assign(viewport, { left: sx - 960 * s, right: sx + 960 * s, top: sy - 540 * s, bottom: sy + 540 * s });
+            const drag = () => { mouse("move", 1800, 150); mouse("down", 1800, 150); mouse("move", 1700, 150); mouse("up", 1700, 150); };
+            drag();
+            const once = JSON.stringify(viewport.centre), boxOnce = JSON.stringify(map("box.0"));
+            for (let i = 0; i < 5; i++) drag();
+            assert.equal(JSON.stringify(viewport.centre), once, "drags past the limit do not run the camera on");
+            assert.equal(JSON.stringify(map("box.0")), boxOnce, "and the box stays put");
+            for (const k of ["left", "right", "top", "bottom"]) delete viewport[k];
+        }
         // A right click on empty park adds a view there.
         const count = editsCount();
         mouse("move", 1800, 150); mouse("down", 1800, 150, 1); mouse("up", 1800, 150, 1);
