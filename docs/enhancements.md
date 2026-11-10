@@ -131,9 +131,9 @@ Requirements:
 5. **Events and pans.** A view's cue and fixed flags are shown (an event view's box carries its label
    and is not draggable unless the user unlocks it); the pan line from each view to the next is drawn
    as on the renders (solid for a pan, dashed for a cut).
-6. **The drawing page stays** until the owner has used the live editor on two parks and says it
-   replaces it; then `tools/drawviews.py` is kept for headless work and dropped from the settings page's
-   Edit views link.
+6. **The drawing page stays** alongside the live editor (owner, 2026-11-10: the two work in different
+   contexts, the browser page on the generator's renders and the live editor in the running mode, and
+   can exist in parallel). The two-park trial that was to decide a replacement is dropped.
 
 Done when: the owner sets a park's views from scratch in the mode (add, drag, zoom, reorder, hold, pan,
 delete), installs with `mksequence.py --install`, and the next run plays them as set; the boxes stay on
@@ -160,8 +160,8 @@ element (a small patch in the mode group). Stages, one PR each:
    changes into one dirty rect, so moving boxes redraw the whole window).
 3. Pan lines. **Done 2026-11-10** as dotted lines from overlay rects (no engine change); the `line`
    element waits for the perf run.
-4. Event views (locked boxes with labels, an unlock button): **done 2026-11-10**. Requirement 6 waits for
-   the owner's two-park trial.
+4. Event views (locked boxes with labels, an unlock button): **done 2026-11-10**. Requirement 6 settled:
+   both editors stay (owner, 2026-11-10).
 
 Owner's test round, 2026-11-10: stages 1-4 pass (rotation over a tall building, the map, box drag and
 the corner handle, right-click add with undo, double-click framing, locked event boxes on Constellations
