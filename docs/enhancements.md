@@ -191,7 +191,7 @@ each turn re-anchored on another surface; fixed the same day (the anchor is kept
    Generator"): (a) engine patch 0016, plugin files in `<user dir>/screensaver/live` and the clipboard;
    (b) the plugin writes a live file per playlist on every editor save; (c) builds apply it, the settings
    page shows it and bakes it into the playlist (`tools/bakelive.py`, a plain Python call in the meantime).
-   **Built 2026-11-10** (`docs/screensaver-ui.md` "Live file"); not yet tested in the game. Rejected: the
+   **Built 2026-11-10** (`docs/screensaver-ui.md` "Live file"); passed in the game 2026-11-10, released in v0.3.0. Rejected: the
    game writing the TOML (a second TOML writer), the settings server over a localhost socket (needs it
    running), launching Python from the plugin. Next (approved for the later plan): **the engine starts
    the build**, a patched `screensaver.build(playlist)` running `mksequence.py` with fixed arguments in

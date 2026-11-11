@@ -3,7 +3,7 @@
 What is done, what is being worked on now, and what comes next, in the owner's order
 (2026-10-28, with the configurable generator added before Release on 2026-10-29; its wiring
 to the settings UI started 2026-10-31, ahead of the wrapper). Last rebuilt 2026-10-30, updated
-2026-11-07 (after the v0.2.1 release; nothing is in progress, all open work is under "Potential
+2026-11-11 (after the v0.3.0 release; nothing is in progress, all open work is under "Potential
 enhancements"). Problems in parks or other people's content that the project does not fix are in
 `docs/known-issues.md`; the decisions behind each piece are in `CLAUDE.md`.
 
@@ -20,13 +20,13 @@ enhancements"). Problems in parks or other people's content that the project doe
 | 5 | Configurable generator (final version) | Done (2026-10-31 to 11-02): the settings page, renders and drawing pages in daily use on the PC; Show titles wired 2026-11-03 |
 | 2 | Wallpaper wrapper | Done (2026-10-31 to 11-03; PRs up to #158): screensaver mode, overlay, controls bar, settings panel, view editor, park name captions with frame styles; live-tested by the owner |
 | 3 | Performance testing with logging, and optimizations | Potential enhancement (2026-11-07), grouped with the overnight soaks: framework built 2026-11-02, first runs 2026-11-03, PresentMon next |
-| 6 | Release | Done: v0.1.0 (2026-11-03, github.com/Ogrueb/openrct2-screensaver), v0.2.0 (2026-11-05, fixes and a Linux beta), v0.2.1 (2026-11-06, import fixes); v0.3.0 (the live view editor as a beta) prepared 2026-11-10 |
+| 6 | Release | Done: v0.1.0 (2026-11-03, github.com/Ogrueb/openrct2-screensaver), v0.2.0 (2026-11-05, fixes and a Linux beta), v0.2.1 (2026-11-06, import fixes), v0.3.0 (2026-11-11, the live view editor as a beta) |
 | 7 | Standalone tool builds (settings page, drawing page) | Potential enhancement (2026-11-07), split out of the release step |
 | L | Basic Linux support | Done (2026-11-03 to 11-05), shipped as a beta AppImage in v0.2.0 |
 
 ## Done recently, with the decisions made on the way
 
-### 6. Release (done: v0.1.0 2026-11-03, v0.2.0 11-05, v0.2.1 11-06)
+### 6. Release (done: v0.1.0 2026-11-03, v0.2.0 11-05, v0.2.1 11-06, v0.3.0 11-11)
 
 v0.1.0 was published on 2026-11-03 from the public repository `Ogrueb/openrct2-screensaver`, with
 the release engine build (0001-0015) and the source archive. Since then (notes in `docs/releases/`):
@@ -34,8 +34,11 @@ v0.2.0, fixes found after v0.1.0 (stock windows over the mode, the settings page
 state, unticked parks in bundles) and the Linux AppImage as a beta; v0.2.1, park import fixes
 (a folder of loose RCT1/RCT2 saves imports every save, `.sv4`/`.sc4` convert, a failed convert lists
 every missing object), the settings page's footer link to the repository, and a smaller AppImage;
-v0.3.0, the live view editor as a beta (owner, 2026-11-10: release it once mostly functional), with
-engine patch 0016 (plugin files, the live file) in the release build.
+v0.3.0 (published 2026-11-11), the live view editor as a beta (owner, 2026-11-10: release it once mostly
+functional), with engine patch 0016 (plugin files, the live file) in the release build, after the live-file
+game test passed (2026-11-10: view edits, park order and a Playlist properties Save reach the live file,
+builds apply it, `--ignore-live` leaves it out, bake writes the views file and the TOML; bake's insert
+inside a wrapped comment fixed); its notes say Copy/Paste and Import/Export are not implemented (owner).
 The standalone tool builds became a potential enhancement.
 
 - License: GPLv3 (owner, 2026-11-03; `LICENSE`, the plugin's `package.json`).

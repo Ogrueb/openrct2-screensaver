@@ -198,17 +198,18 @@ Passed on the owner's PC 2026-11-01 (run-19 engine, `playlists/example.toml`), e
       its own `title_theme`.
 
 ### Live file (patch 0016, 2026-11-10)
-Not tested in the game yet. Needs an engine build with patch 0016 and an install from this version
+Passed in the game on 2026-11-10 (example playlist, Windows), except the settings page's panel, checked
+through its function only. Needs an engine build with patch 0016 and an install from this version
 (it records the playlist file in the installed playlist).
-- [ ] An edit in the mode's editor (a view moved, the park order, Playlist properties' Save) writes
+- [x] An edit in the mode's editor (a view moved, the park order, Playlist properties' Save) writes
       `Documents\OpenRCT2\screensaver\live\<playlist name>.json` at once (spaces as `_`).
-- [ ] With the game still open, `python tools/bakelive.py --list` names the playlist and what changed;
+- [x] With the game still open, `python tools/bakelive.py --list` names the playlist and what changed;
       `python tools/bakelive.py` writes it: the views file gains the park, the TOML the order and
       properties (comments kept, `.bak` beside it); a second run says nothing is waiting.
 - [ ] The settings page shows "Edits from the game's view editor" with Bake into playlist while edits
       wait, and the build is marked out of date after an edit in the game.
-- [ ] A build without baking plays the edits too; `--ignore-live` leaves them out.
-- [ ] Copy and Paste stay inactive (the clipboard call is there for later).
+- [x] A build without baking plays the edits too; `--ignore-live` leaves them out.
+- [x] Copy and Paste stay inactive (the clipboard call is there for later).
 
 ## 5. Loose objects across imports (importparks.py)
 `object/rct-screensaver/installed.json` records which import (the downloads given, by path) uses
