@@ -199,11 +199,13 @@ each turn re-anchored on another surface; fixed the same day (the anchor is kept
    live (which also lets an install happen with the game open). **Built 2026-11-11** (engine patch 0017,
    `docs/screensaver-ui.md` "Builds from the game"): the editor's **Build and play** runs the generator that
    `--install` registered (`screensaver/generator.json`) in the background, shows its progress, and swaps the
-   new build in by re-entering the park on screen; the plugin's own code and the parks' scripts still wait for
-   a restart. Its own pane, bottom right (owner's draft 4, 2026-11-11): a square per park in play order
+   new build in by re-entering the park on screen (the plugin's own code and the parks' scripts come with the
+   next install). Its own pane, bottom right (owner's draft 4, 2026-11-11): a square per park in play order
    (checks, amber warnings, red failures), the build's messages (a click on one about a park opens it),
    Ctrl+B, a "Building n/m" chip on the bar, and every build bakes the game's edits into the playlist files;
-   the playlist's Save button gave way to saving as you change. Not yet tested in the game. Copy and Paste views can use `screensaver.clipboard` (left for the
+   the playlist's Save button gave way to saving as you change. A build from the game marks the settings
+   page's renders old; ticking parks on and off stays on the settings page, as does a shared park cache
+   (owner, 2026-11-11). Not yet tested in the game. Copy and Paste views can use `screensaver.clipboard` (left for the
    end, owner). After that: the live editor without the generator.
 
 ## 3. Weather and day/night in the generator (low priority)

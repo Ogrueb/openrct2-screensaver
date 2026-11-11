@@ -3,7 +3,7 @@
 // the new sequence to <user dir>/screensaver/build/live and its result, with the new playlist, to
 // build-<sequence>.json in the live folder. Once it is done the plugin has the engine copy the
 // sequence in (screensaver.applyBuild) and swaps the new playlist in: the build is installed with
-// the game open. Only the plugin's own code and the parks' scripts wait for a restart.
+// the game open.
 
 import { filesApi, lastLiveSave, liveFileName, Playlist, Settings } from "./storage";
 
@@ -55,7 +55,6 @@ export interface BuildResult {
     playlist?: Playlist;
     titleMusic?: Settings["titleMusic"];
     warnings?: string[];
-    restart?: string[]; // what takes a restart of the game: "plugin", "park scripts"
     parkStates?: ParkState[]; // every park in play order (the playlist file's, with the game's edits baked in)
     messages?: BuildMessage[];
 }
@@ -198,14 +197,10 @@ export class Builder {
             return;
         }
         this.builtFrom = current.started;
-        const notes = [
-            current.warnings?.length ? `${current.warnings.length} warning${current.warnings.length > 1 ? "s" : ""}` : "",
-            current.restart?.length ? `restart to load the new ${current.restart.join(" and ")}` : "",
-        ].filter(s => s);
+        const warnings = current.warnings?.length ?? 0;
         const at = timeOfDay(current.finished ?? Date.now());
         this.outcome = {
-            phase: "done", text: `Built at ${at}, now playing${notes.length ? "; " + notes.join("; ") : ""}`,
-            warning: !!current.restart?.length,
+            phase: "done", text: `Built at ${at}, now playing${warnings ? `; ${warnings} warning${warnings > 1 ? "s" : ""}` : ""}`,
         };
         this.notes = [{ level: "ok", text: `Built ${at} in ${clock(took)}, now playing` }];
         for (const w of current.warnings ?? []) {

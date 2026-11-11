@@ -308,15 +308,11 @@
         return;
       }
       this.builtFrom = current.started;
-      const notes = [
-        current.warnings?.length ? `${current.warnings.length} warning${current.warnings.length > 1 ? "s" : ""}` : "",
-        current.restart?.length ? `restart to load the new ${current.restart.join(" and ")}` : ""
-      ].filter((s) => s);
+      const warnings = current.warnings?.length ?? 0;
       const at = timeOfDay(current.finished ?? Date.now());
       this.outcome = {
         phase: "done",
-        text: `Built at ${at}, now playing${notes.length ? "; " + notes.join("; ") : ""}`,
-        warning: !!current.restart?.length
+        text: `Built at ${at}, now playing${warnings ? `; ${warnings} warning${warnings > 1 ? "s" : ""}` : ""}`
       };
       this.notes = [{ level: "ok", text: `Built ${at} in ${clock(took)}, now playing` }];
       for (const w of current.warnings ?? []) {

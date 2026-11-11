@@ -6,7 +6,7 @@ from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, ".."))
-import livefile, mksequence  # noqa: E402
+import livefile, mksequence, userdata  # noqa: E402
 
 
 class LiveBuild(unittest.TestCase):
@@ -122,6 +122,15 @@ class LiveBuild(unittest.TestCase):
                 mksequence.build(self.playlist, os.path.join(self.tmp.name, "out"), skip_missing=True,
                                  progress=lambda i, n, p: states.append(p["state"]), use_live=False)
         self.assertEqual(states, [])
+
+    def test_clearing_a_build_keeps_the_games_live_builds(self):
+        build = os.path.join(self.tmp.name, "build")
+        for rel in ("old/a.park", "old.result.json", "live/My List/b.park", "live/My List.result.json"):
+            os.makedirs(os.path.dirname(os.path.join(build, rel)), exist_ok=True)
+            open(os.path.join(build, rel), "w").close()
+        userdata.clear_build(build)
+        self.assertEqual(os.listdir(build), ["live"])
+        self.assertTrue(os.path.exists(os.path.join(build, "live", "My List", "b.park")))
 
     def test_renamed_playlist_is_not_taken(self):
         mksequence.register_generator(self.user, "My List", self.playlist)

@@ -217,6 +217,8 @@ Needs an engine build with patch 0017 and an install from this version (it write
       play: generated views come back. After a park order change the next park follows the new order.
 - [ ] Cancel build stops it (no python process left in Task Manager); the playlist plays on unchanged.
 - [ ] After a restart of the game, the new build plays (the installed sequence and playlist match).
+- [ ] With the settings page open on the same playlist, a build from the game marks its renders old
+      (strip and contact sheet), and a build on the page leaves `screensaver\build\live` in place.
 - [ ] With `generator.json` removed, the line says why the build cannot start.
 
 ### Live file (patch 0016, 2026-11-10)

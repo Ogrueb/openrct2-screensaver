@@ -362,7 +362,7 @@ the generator writes your edits into the playlist files, rebuilds the parks that
 and the new build plays without closing the game, so you no longer need to close the game to install. A
 square per park shows how far it got (amber for warnings, red for a failure), and its messages open the
 park they are about. It needs one `--install` first, which records where Python and the generator are. A
-new version of the plugin's own code or of the parks' scripts still takes a restart.
+new version of the plugin itself or of the parks' scripts comes with the next install.
 
 ### Drawing views in the browser
 

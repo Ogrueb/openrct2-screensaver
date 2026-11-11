@@ -916,7 +916,7 @@ console.log("ok: park changes dip through black in the mode (patch 0010)");
         sequence.position = 0;
     };
     mode.files.set(fileName, JSON.stringify({ buildVersion: 1, sequence: playlist.sequence, started: now, ok: true, finished: now,
-        playlist: built, titleMusic: "ride", warnings: ["a park: a warning"], restart: [],
+        playlist: built, titleMusic: "ride", warnings: ["a park: a warning"],
         parkStates: [{ key: keys[2], name: "C", state: "cached", warnings: 0 }, { key: keys[1], name: "B", state: "built", warnings: 1 }, { key: keys[0], name: "A", state: "built", warnings: 0 }],
         messages: [{ level: "info", text: "Took in your edits" }, { level: "warn", text: "B: a warning", park: keys[1] }, { level: "ok", text: "Built 3 parks" }] }));
     mode.buildStatus = { ...mode.buildStatus, state: "done", finished: now };

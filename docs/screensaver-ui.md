@@ -302,8 +302,7 @@ closed.
   click opens the park. Over 30 parks, a bar with "n / m parks" replaces them.
 - **Messages:** the plugin's own line about the outcome first (built and playing, not taken in, cancelled,
   could not start), then the generator's (`messages`: what it took in from the game's edits, each park's
-  warnings, missing parks, the count built and unchanged, a restart to load the new plugin or park
-  scripts), each marked info, ok, warning or error. A message about a park opens that park on a click.
+  warnings, missing parks, the count built and unchanged), each marked info, ok, warning or error. A message about a park opens that park on a click.
 - **Build and play** calls `screensaver.build(<sequence>)`. The engine runs the generator that `--install`
   registered in `<user dir>/screensaver/generator.json` (this Python, this `mksequence.py`, and the playlist
   file each installed sequence came from), `mksequence.py --live-build <sequence> --user-dir <user dir>`,
@@ -314,9 +313,8 @@ closed.
   only changed parks are rebuilt), written to `screensaver/build/live/<sequence>`. It never touches the
   installed sequence or `plugin.store.json`, both the game's while it runs. Its progress (park n of m) and
   result go to `screensaver/live/build-<sequence>.json` (no `version` key, so the live-file tools skip it):
-  the new playlist, the title music, warnings, and what only a restart takes in (`restart`: the plugin's
-  own code when the repository's built plugin differs from the installed one, the parks' scripts when the
-  companion plugins differ).
+  the new playlist, the title music, `parkStates` and `messages`. A new plugin version or changed park
+  scripts are not reported: neither can change mid-run, and the next install brings them (owner, 2026-11-11).
 - **Taking it in:** once the build is done the plugin calls `screensaver.applyBuild(<sequence>)`: the
   engine copies the parks (only changed ones; written beside their place and renamed over) and the script
   into the playing sequence's folder, removes parks the new script no longer names, and reloads the
@@ -325,13 +323,19 @@ closed.
   does, and re-enters the park on screen from the new script at its place in the new order (a dip through
   black, as a park change), or the first park when the build dropped it.
 - The line over the squares shows the build: the park and time, then "Built at hh:mm, now playing" with
-  warnings and "restart to load the new plugin" where that applies, or "Build failed: <reason>" (a
+  its warning count, or "Build failed: <reason>" (a
   missing `generator.json` means: install once with `mksequence.py --install`).
 - **Every build bakes:** before it builds, `--live-build` writes the live file into the playlist's own files
   (as `tools/bakelive.py` does: views into `<playlist>.views.json`, properties and park order into the TOML,
   backups beside them) and marks it baked, so the playlist files always hold what plays (owner, 2026-11-11:
   rebuild only changed parks, play at once, always bake; no settings in the pane).
 - A build still running when the game quits finishes on its own and is not taken in.
+- **Parks and the settings page** (owner, 2026-11-11): a park whose file is missing is left out of the build
+  with a red square and a message; ticking parks on and off stays a settings-page matter, with adding parks.
+  The game's park cache (`screensaver/park-cache`) stays apart from the settings page's, so the first build
+  from the game redoes every park. The settings page judges its renders against whichever build is newer,
+  its own or the game's (`build/live/<sequence>.result.json`), so a build from the game marks them old; the
+  page's own builds and bundle imports clear `build/` but keep `build/live`.
 
 ### Live file (2026-11-10, owner's go-ahead in "Explore saving playlists without the Generator")
 

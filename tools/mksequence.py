@@ -3230,14 +3230,6 @@ def live_build_paths(name, user_dir):
     return out, os.path.join(livefile.folder(user_dir), "build-" + livefile.file_name(name))
 
 
-def file_bytes(path):
-    try:
-        with open(path, "rb") as f:
-            return f.read()
-    except OSError:
-        return None
-
-
 def live_build(name, user_dir):
     """Build the playlist installed as title sequence `name` while the game runs (started by the game:
     screensaver.build). The build goes to <user dir>/screensaver/build/live/<name>, never into the
@@ -3303,27 +3295,13 @@ def live_build(name, user_dir):
         if result["layout"] != "plugin" or not result["playlist"]:
             raise ValueError("%s does not use the plugin layout; install it with mksequence.py --install" % source)
         warnings = ["%s: %s" % (p["name"], w) for p in result["parks"] for w in p["warnings"]]
-        # What only a restart of the game takes in: the plugin itself and the parks' scripts.
-        restart = []
-        plugin_dir = os.path.join(user_dir, "plugin")
-        if os.path.exists(PLUGIN_FILE) and file_bytes(PLUGIN_FILE) != file_bytes(os.path.join(plugin_dir, os.path.basename(PLUGIN_FILE))):
-            restart.append("plugin")
-        installed = sorted(f for f in (os.listdir(plugin_dir) if os.path.isdir(plugin_dir) else [])
-                           if f.startswith(companions.FILE_PREFIX) and f.endswith(".js"))
-        if installed != sorted(f for f, _, _ in result["companions"]) or any(
-                file_bytes(os.path.join(result["companionDir"], f)) != file_bytes(os.path.join(plugin_dir, f))
-                for f, _, _ in result["companions"]):
-            restart.append("park scripts")
         rebuilt = sum(1 for st in states if st["state"] == "built")
         cached = sum(1 for st in states if st["state"] == "cached")
         note("ok", "Built %d park%s (%d rebuilt, %d unchanged)" % (rebuilt + cached, "s" if rebuilt + cached != 1 else "", rebuilt, cached))
-        if restart:
-            note("warn", "Restart the game to load the new %s" % " and ".join(restart))
         playlist = dict(result["playlist"], source=result["source"])
         write(ok=True, finished=int(time.time() * 1000), playlist=playlist, titleMusic=result["titleMusic"],
-              warnings=warnings, restart=restart, live=result.get("live"))
-        print("built %s: %d park(s)%s" % (result["dir"], len(result["parks"]),
-                                          "; a restart takes in the " + " and the ".join(restart) if restart else ""))
+              warnings=warnings, live=result.get("live"))
+        print("built %s: %d park(s)" % (result["dir"], len(result["parks"])))
         return 0
     except Exception as e:  # anything: the game shows it
         import traceback
