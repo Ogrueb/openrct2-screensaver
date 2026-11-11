@@ -285,22 +285,25 @@ The next stage of "the live editor on its own" (`docs/enhancements.md` section 2
 the playlist itself and plays the new build without a restart, so installing no longer needs the game
 closed.
 
-- **The build pane** (bottom right, under the top-right box; owner's draft 4, 2026-11-11): a "Build · playlist"
-  header with where things stand at its right ("edits not built" in amber when the game saved edits after the
+- **The build pane** (bottom right, under the top-right box and above the mode's exit button; owner's draft 4,
+  2026-11-11): a "Build · saves live edits to the playlist" header with where things stand at its right ("edits not built" in amber when the game saved edits after the
   build that plays or the install, "building 6/15", "built · playing", "failed"), folding to the header by
   hand and on its own when the window is too short for it under the box; then "Park n of m · name" with the
   time so far, a square per park, the big **Build and play** button (Cancel build while it runs; Ctrl+B,
-  also with the editor closed), the MESSAGES list (3.5 rows, scrolls) and Import playlist / Export playlist
+  also with the editor closed; inactive, and Ctrl+B does nothing, while every edit is built: owner's test,
+  2026-11-11), the MESSAGES list (3.5 rows, scrolls) and Import playlist / Export playlist
   (inactive until there is a way to pick files). The playlist's Save button is gone: Playlist properties
   save as they change, as the views do. With the editor closed, the controls bar carries a "Building 6/15"
   chip while a build runs.
 - **Squares:** one per park in play order, as the generator lists them (`parkStates`, the playlist file's
-  order with the game's edits baked in), so a rebuild of one park keeps its square's place and a change of
-  the park order moves the squares with it. Green with a check: built (or unchanged, from the cache); amber
+  order with the game's edits baked in), so a rebuild of one park keeps its square's place; between builds
+  they follow the playing order, so reordering parks moves the squares at once. The generator lists every
+  park first, and while a build runs a park not reached yet shows its state from the build before, dimmed
+  (it used to go blank, then fill at once when unchanged). Names are the playing playlist's. Green with a check: built (or unchanged, from the cache); amber
   with "!": built with warnings; red with a cross: failed, or its file is missing (the park is left out and
   the rest builds); lit: being built; empty: still to come. The tooltip names the park and its state; a
   click opens the park. Over 30 parks, a bar with "n / m parks" replaces them.
-- **Messages:** the plugin's own line about the outcome first (built and playing, not taken in, cancelled,
+- **Messages:** newest first: the plugin's own line about the outcome (built and playing, not taken in, cancelled,
   could not start), then the generator's (`messages`: what it took in from the game's edits, each park's
   warnings, missing parks, the count built and unchanged), each marked info, ok, warning or error. A message about a park opens that park on a click.
 - **Build and play** calls `screensaver.build(<sequence>)`. The engine runs the generator that `--install`

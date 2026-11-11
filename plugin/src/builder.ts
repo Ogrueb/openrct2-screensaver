@@ -50,6 +50,7 @@ export interface BuildResult {
     park?: number; // while building: the park being resolved (1-based), of `parks`
     parks?: number;
     parkName?: string;
+    parkKey?: string;
     finished?: number;
     error?: string;
     playlist?: Playlist;
@@ -117,6 +118,11 @@ export class Builder {
     private outcome: BuildLine | undefined;
     private builtFrom = 0; // when the build that plays started: edits saved since are not built
 
+    /** A park's name in the playing playlist (the generator knows only the playlist's own names until
+     *  it has read the park), and the playlist's park keys in play order (the squares follow it). */
+    nameOf: ((key: string) => string | undefined) | undefined;
+    orderOf: (() => string[]) | undefined;
+
     /** Takes a finished build in; returns an error message, or undefined once it plays. */
     onReady: ((result: BuildResult) => string | undefined) | undefined;
 
@@ -143,6 +149,8 @@ export class Builder {
             log(`build of "${sequence}" did not start: ${message(e)}`);
             return;
         }
+        // The squares of the build before (also from an earlier run): parks not reached yet show them dimmed
+        this.last = this.last ?? readBuildResult(sequence);
         this.sequence = sequence;
         this.started = Date.now();
         this.progress = undefined;
@@ -216,7 +224,8 @@ export class Builder {
         }
         if (this.running) {
             const p = this.progress;
-            const where = p?.parks ? `Park ${p.park} of ${p.parks}${p.parkName ? " · " + p.parkName : ""}` : "Starting";
+            const name = (p?.parkKey && this.nameOf?.(p.parkKey)) || p?.parkName;
+            const where = p?.parks ? `Park ${p.park} of ${p.parks}${name ? " · " + name : ""}` : "Starting";
             return { phase: "running", text: where };
         }
         return this.outcome ?? { phase: "idle", text: "Builds the playlist with your edits and plays it" };
@@ -233,15 +242,31 @@ export class Builder {
         return this.running && p?.parks ? { park: p.park ?? 0, parks: p.parks } : undefined;
     }
 
-    /** The parks of the running build, else of the last one, in play order. */
-    get parks(): ParkState[] {
-        return (this.running ? this.progress : this.last)?.parkStates ?? [];
+    /** The parks of the running build, else of the last one, in play order: while one runs, a park not
+     *  reached yet carries its state from the build before (`previous`, drawn dimmed); otherwise the
+     *  squares follow the playing order at once, a reorder included. */
+    get parks(): (ParkState & { previous?: boolean })[] {
+        if (this.running) {
+            const before = new Map((this.last?.parkStates ?? []).filter(p => p.key).map(p => [p.key!, p]));
+            return (this.progress?.parkStates ?? []).map(p => {
+                const old = p.state === "pending" && p.key ? before.get(p.key) : undefined;
+                return old && old.state !== "pending" && old.state !== "building" ? { ...old, previous: true } : p;
+            });
+        }
+        const states = this.last?.parkStates ?? [];
+        const order = this.orderOf?.();
+        if (!order?.length) {
+            return states;
+        }
+        const rank = new Map(order.map((k, i) => [k, i]));
+        return states.map((p, i) => ({ p, i })).sort((a, b) =>
+            (rank.get(a.p.key ?? "") ?? order.length + a.i) - (rank.get(b.p.key ?? "") ?? order.length + b.i)).map(x => x.p);
     }
 
-    /** The messages of the running build, else of the last one: the plugin's own first. */
+    /** The messages of the running build, else of the last one, newest first. */
     get messages(): BuildMessage[] {
         const r = this.running ? this.progress : this.last;
-        return [...this.notes, ...(r?.messages ?? [])];
+        return [...this.notes, ...[...(r?.messages ?? [])].reverse()];
     }
 
     /** Edits saved in the game since the playing build started (or since the install). */

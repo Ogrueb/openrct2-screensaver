@@ -530,7 +530,7 @@ export class EditorPanel implements EditorView {
         const e = this.editor;
         if (builder.running) {
             builder.cancel();
-        } else if (e && builder.available) {
+        } else if (e && builder.available && builder.pendingEdits(e.playback.installedAt)) {
             e.playback.savePlaylistProps(); // saved already; the build takes the live file
             this.messages.first = 0;
             builder.start(e.playback.sequenceName);
@@ -1095,7 +1095,7 @@ export class EditorPanel implements EditorView {
         if (this.buildOpen !== undefined) {
             return !this.buildOpen;
         }
-        return ui.height - EDITOR.y - this.buildHeight(false) < this.boxBottom + EDITOR.gap * 2;
+        return ui.height - EDITOR.buildBottom - this.buildHeight(false) < this.boxBottom + EDITOR.gap * 2;
     }
 
     private buildHeight(folded: boolean): number {
@@ -1115,7 +1115,8 @@ export class EditorPanel implements EditorView {
         const width = s.boxWidth;
         const folded = this.buildFolded();
         const height = this.buildHeight(folded);
-        const frame = { x: ui.width - s.x - width, y: ui.height - s.y - height, width, height };
+        // (above the mode's exit button in the bottom right corner)
+        const frame = { x: ui.width - s.x - width, y: ui.height - s.buildBottom - height, width, height };
         const x0 = frame.x + s.pad;
         const inner = width - 2 * s.pad;
         let y = frame.y + s.pad;
@@ -1130,7 +1131,7 @@ export class EditorPanel implements EditorView {
         foldMark(scene, "build.mark", !folded, x0 + 4, y + s.propHeader / 2, overlay);
         label(scene, "build.title", "Build", { x: x0 + 24, y, width: 0, height: s.propHeader }, 16, overlay, true);
         const tw = measure(overlay, "Build", 16, true).width;
-        label(scene, "build.sub", "playlist", { x: x0 + 24 + tw + 8, y: y + 1, width: 0, height: s.propHeader }, 13, overlay);
+        label(scene, "build.sub", "saves live edits to the playlist", { x: x0 + 24 + tw + 8, y: y + 1, width: 0, height: s.propHeader }, 13, overlay);
         scene.set("build.sub", { ...scene.get("build.sub")!, colour: THEME.textDim });
         const count = builder.count;
         const [stateText, stateColour] = line.phase === "unavailable" ? ["needs the patched engine", THEME.textDim]
@@ -1161,11 +1162,13 @@ export class EditorPanel implements EditorView {
         y += s.square + 8;
         // Build and play, or Cancel build while one runs.
         const unavailable = line.phase === "unavailable";
+        const nothing = !running && !unavailable && !builder.pendingEdits(e.playback.installedAt);
         const build = this.place("build", { x: x0, y, width: inner, height: s.buildButton },
             unavailable ? line.text : running ? "Stop the build; the playlist plays on as it was (Ctrl+B)"
-                : "Build the playlist with your edits in the background, then play it (Ctrl+B)", unavailable);
+                : nothing ? "Nothing to build: the playlist files hold every edit"
+                : "Save your live edits to the playlist and build it in the background, then play it (Ctrl+B)", unavailable || nothing);
         const st = this.state("build");
-        button(scene, "build", build, { ...st, face: running || unavailable || st.hover || st.down ? undefined : THEME.buildFace },
+        button(scene, "build", build, { ...st, face: running || unavailable || nothing || st.hover || st.down ? undefined : THEME.buildFace },
             { icon: running ? "close" : "build", iconSize: s.toolIcon, text: running ? "Cancel build" : "Build and play", textSize: 16, hint: "Ctrl+B" }, overlay);
         y += s.buildButton + 10;
         // The messages: what the build took in, built, warned about; one about a park opens it.
@@ -1216,7 +1219,7 @@ export class EditorPanel implements EditorView {
 
     /** A square per park of the build, in play order: built (a check), with warnings (!), failed or
      *  missing (red), the one being built (lit), still to come (empty); a bar past squaresMax parks. */
-    private squares(scene: Scene, parks: ParkState[], x0: number, y: number, inner: number): void {
+    private squares(scene: Scene, parks: (ParkState & { previous?: boolean })[], x0: number, y: number, inner: number): void {
         const s = EDITOR;
         const overlay = this.mode.overlay;
         if (!parks.length) {
@@ -1245,11 +1248,13 @@ export class EditorPanel implements EditorView {
             const r = { x: Math.round(x0 + i * (w + gap)), y, width: Math.max(1, Math.round(w)), height: s.square };
             const what = p.state === "missing" ? "file missing" : p.state === "failed" ? "failed" : p.state === "building" ? "building"
                 : p.state === "pending" ? "waiting" : `${p.state === "cached" ? "unchanged" : "built"}${p.warnings ? `, ${p.warnings} warning${p.warnings > 1 ? "s" : ""}` : ""}`;
-            this.place(`sq.${i}`, r, `${p.name ?? `Park ${i + 1}`}: ${what}`);
-            scene.set(`sq.${i}`, { type: "rect", ...r, fill: colourOf(p), z: Z.face });
+            const name = (p.key && builder.nameOf?.(p.key)) || p.name || `Park ${i + 1}`;
+            this.place(`sq.${i}`, r, `${name}: ${p.previous ? "waiting (as in the last build)" : what}`);
+            // A park not reached yet keeps the last build's colour, dimmed, rather than going blank
+            scene.set(`sq.${i}`, { type: "rect", ...r, fill: colourOf(p), z: Z.face, ...(p.previous ? { opacity: 0.35 } : {}) });
             bevel(scene, `sq.${i}`, r, THEME.bevelDark, THEME.bevelDark, THEME.bevel, Z.bevel);
             const icon = p.state === "failed" || p.state === "missing" ? "close" : p.state === "built" || p.state === "cached" ? (p.warnings ? "alert" : "check") : undefined;
-            if (icon && r.width >= side) {
+            if (icon && r.width >= side && !p.previous) {
                 scene.set(`sqi.${i}`, { type: "image", src: iconPath(icon, px), x: r.x + (r.width - side) / 2, y: r.y + (r.height - side) / 2, z: Z.icon });
             }
         });

@@ -152,6 +152,7 @@ export const EDITOR = {
     holdMax: 10,
     // The build pane, bottom right
     buildButton: 40,
+    buildBottom: 72, // the pane's distance from the window's bottom: over the mode's exit button (64 tall)
     square: 22, // a park's square of the build's progress (fewer than squaresMax parks)
     squaresMax: 30, // above, a bar with the count
 };

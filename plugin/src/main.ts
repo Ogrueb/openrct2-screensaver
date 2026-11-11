@@ -116,6 +116,11 @@ function takeBuild(result: BuildResult): string | undefined {
     return undefined;
 }
 builder.onReady = takeBuild;
+builder.nameOf = key => {
+    const park = player?.isRunning ? loadPlaylist()?.parks.find(p => (p.key ?? p.fileName) === key) : undefined;
+    return park?.name;
+};
+builder.orderOf = () => player?.isRunning ? player.playOrderKeys : [];
 
 function update(): void {
     builder.update();
@@ -183,7 +188,7 @@ function toggleBuild(p: Player): void {
         editorPanel.toggleBuild();
     } else if (builder.running) {
         builder.cancel();
-    } else if (builder.available) {
+    } else if (builder.available && builder.pendingEdits(p.installedAt)) {
         builder.start(p.sequenceName);
     }
 }

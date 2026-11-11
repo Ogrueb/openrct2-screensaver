@@ -498,6 +498,11 @@ export class Player {
         return this.playlist.parks.map(p => p.name);
     }
 
+    /** The parks' keys in play order. */
+    get playOrderKeys(): string[] {
+        return this.parkOrder.map(i => this.playlist.parks[i].key ?? this.playlist.parks[i].fileName);
+    }
+
     /** The playlist index of the park with this key, or -1. */
     parkIndexOf(key: string): number {
         return this.playlist.parks.findIndex(p => (p.key ?? p.fileName) === key);

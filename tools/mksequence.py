@@ -27,7 +27,7 @@ Layouts:
           drives views and park changes. Without the plugin this shows one view per park.
   stock   Every view is written as LOCATION/WAIT steps, for OpenRCT2 without the plugin.
 """
-import argparse, collections, hashlib, json, pickle, math, statistics, os, random, re, shutil, subprocess, sys, tempfile, time, tomllib
+import argparse, collections, glob, hashlib, json, pickle, math, statistics, os, random, re, shutil, subprocess, sys, tempfile, time, tomllib
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import companions, livefile, parkinfo, profiles, userdata  # noqa: E402
@@ -2858,8 +2858,13 @@ def build(playlist_path, out_dir, seed=None, layout=None, use_edits=True, overri
 
     def report(i, e, state, park=None):
         if progress:
-            progress(i, len(entries), {"key": park_key(e), "name": e.get("name") or os.path.basename(e["file"]),
+            # (the park's own name once it is read; till then the playlist's, or its file)
+            progress(i, len(entries), {"key": park_key(e), "name": park["name"] if park else e.get("name") or os.path.basename(e["file"]),
                                        "state": state, "warnings": list(park["warnings"]) if park else []})
+
+    for i, e in enumerate(entries):
+        if e["file"] not in missing:
+            report(i, e, "pending")  # every park's place first, so the squares stand from the start
 
     library, ctx["context"]["companions"] = companion_context(present, base_dir, park_profiles)
     cache = ParkCache(cache_dir) if cache_dir else None
@@ -3217,7 +3222,7 @@ def register_generator(user_dir, name, source):
 
 def write_json_atomic(path, data, **kwargs):
     """Write JSON beside the file and rename it over, so a reader (the game) never sees half a file."""
-    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), suffix=".tmp")
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=os.path.basename(path) + ".", suffix=".tmp")
     with os.fdopen(fd, "w", encoding="utf-8") as f:
         json.dump(data, f, **kwargs)
     os.replace(tmp, path)
@@ -3239,13 +3244,18 @@ def live_build(name, user_dir):
     Returns the process exit code."""
     out_dir, result_path = live_build_paths(name, user_dir)
     os.makedirs(os.path.dirname(result_path), exist_ok=True)
+    # A cancelled build is stopped wherever it is: a half-written result of an earlier one goes
+    for old in glob.glob(glob.escape(result_path) + ".*.tmp"):
+        try:
+            os.remove(old)
+        except OSError:
+            pass
     started = int(time.time() * 1000)
     base = {"buildVersion": 1, "sequence": name, "started": started}
     # Each park's state in play order (the pane's squares), and the messages, each about a park (its
     # key) or the playlist as a whole
     states = []
     messages = []
-    current = {}
 
     def note(level, text, park=None):
         messages.append(dict({"level": level, "text": text}, **({"park": park} if park else {})))
@@ -3261,9 +3271,9 @@ def live_build(name, user_dir):
             note("error", "%s: park file not found, left out" % park["name"], park["key"])
         for w in park["warnings"] if park["state"] in ("cached", "built") else ():
             note("warn", "%s: %s" % (park["name"], w), park["key"])
-        if park["state"] == "building":
-            current.update(i=i, name=park["name"])
-        write(ok=None, park=i + 1, parks=n, parkName=park["name"])
+        if park["state"] == "pending":
+            return  # (written with the first park that starts)
+        write(ok=None, park=i + 1, parks=n, parkName=park["name"], parkKey=park["key"])
 
     try:
         write(ok=None)

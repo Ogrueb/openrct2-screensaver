@@ -937,10 +937,17 @@ console.log("ok: park changes dip through black in the mode (patch 0010)");
     const shownPark = built.parks.find(p => p.load === sequence.lastSeek);
     assert.equal(shownPark.key ?? shownPark.fileName, keys[1], "a click on a park's message opens the park");
     tick(40);
+    // Built: nothing left to build until the next edit.
+    assert.equal(ed("build").fill, "#2a2e2c80", "Build and play is inactive with every edit built");
+    mode.buildStatus = { ...mode.buildStatus, state: "idle" };
+    shortcuts["rctscreensaver.build"]();
+    assert.equal(mode.builds.length, 1, "and Ctrl+B does nothing");
+    edClick("seg.inertia.1");
+    assert.notEqual(ed("build").fill, "#2a2e2c80", "an edit makes it active again");
+    assert.equal(ed("build.state").text, "edits not built");
     shortcuts["rctscreensaver.edit"]();
     tick();
     // Ctrl+B builds with the editor closed too, and the bar shows a chip while it runs.
-    mode.buildStatus = { ...mode.buildStatus, state: "idle" };
     shortcuts["rctscreensaver.build"]();
     mode.files.set(fileName, JSON.stringify({ buildVersion: 1, sequence: playlist.sequence, started: Date.now(), ok: null, park: 1, parks: 3 }));
     mouse("move", 600, 600);

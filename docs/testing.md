@@ -206,7 +206,10 @@ Needs an engine build with patch 0017 and an install from this version (it write
       the squares fill in play order (a check per park; unchanged parks fill at once), no console window
       opens, and the game keeps playing smoothly meanwhile. With the editor closed, the bar shows
       "Building n/m".
-- [ ] After moving a park in the order, the next build's squares follow the new order; a warning park is
+- [ ] Build and play is inactive (Ctrl+B too) while every edit is built; an edit makes it active. The pane
+      clears the exit button in the bottom right corner. Messages list newest first.
+- [ ] After moving a park in the order the squares follow at once; while a build runs, parks not reached
+      yet keep last build's colour, dimmed; square tooltips and "Park n of m" use the parks' own names; a warning park is
       amber with "!", and its message opens the park on a click. A park file renamed away builds as a red
       square with "file not found" while the rest builds.
 - [ ] After a build, the playlist's TOML and views file hold the game's edits (`.bak` beside the TOML), and

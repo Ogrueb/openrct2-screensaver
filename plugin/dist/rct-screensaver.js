@@ -258,6 +258,7 @@
         log(`build of "${sequence}" did not start: ${message(e)}`);
         return;
       }
+      this.last = this.last ?? readBuildResult(sequence);
       this.sequence = sequence;
       this.started = Date.now();
       this.progress = void 0;
@@ -327,7 +328,8 @@
       }
       if (this.running) {
         const p = this.progress;
-        const where = p?.parks ? `Park ${p.park} of ${p.parks}${p.parkName ? " \xB7 " + p.parkName : ""}` : "Starting";
+        const name = p?.parkKey && this.nameOf?.(p.parkKey) || p?.parkName;
+        const where = p?.parks ? `Park ${p.park} of ${p.parks}${name ? " \xB7 " + name : ""}` : "Starting";
         return { phase: "running", text: where };
       }
       return this.outcome ?? { phase: "idle", text: "Builds the playlist with your edits and plays it" };
@@ -341,14 +343,29 @@
       const p = this.progress;
       return this.running && p?.parks ? { park: p.park ?? 0, parks: p.parks } : void 0;
     }
-    /** The parks of the running build, else of the last one, in play order. */
+    /** The parks of the running build, else of the last one, in play order: while one runs, a park not
+     *  reached yet carries its state from the build before (`previous`, drawn dimmed); otherwise the
+     *  squares follow the playing order at once, a reorder included. */
     get parks() {
-      return (this.running ? this.progress : this.last)?.parkStates ?? [];
+      if (this.running) {
+        const before = new Map((this.last?.parkStates ?? []).filter((p) => p.key).map((p) => [p.key, p]));
+        return (this.progress?.parkStates ?? []).map((p) => {
+          const old = p.state === "pending" && p.key ? before.get(p.key) : void 0;
+          return old && old.state !== "pending" && old.state !== "building" ? { ...old, previous: true } : p;
+        });
+      }
+      const states = this.last?.parkStates ?? [];
+      const order = this.orderOf?.();
+      if (!order?.length) {
+        return states;
+      }
+      const rank = new Map(order.map((k, i) => [k, i]));
+      return states.map((p, i) => ({ p, i })).sort((a, b) => (rank.get(a.p.key ?? "") ?? order.length + a.i) - (rank.get(b.p.key ?? "") ?? order.length + b.i)).map((x) => x.p);
     }
-    /** The messages of the running build, else of the last one: the plugin's own first. */
+    /** The messages of the running build, else of the last one, newest first. */
     get messages() {
       const r = this.running ? this.progress : this.last;
-      return [...this.notes, ...r?.messages ?? []];
+      return [...this.notes, ...[...r?.messages ?? []].reverse()];
     }
     /** Edits saved in the game since the playing build started (or since the install). */
     pendingEdits(installed) {
@@ -1856,6 +1873,8 @@
     holdMax: 10,
     // The build pane, bottom right
     buildButton: 40,
+    buildBottom: 72,
+    // the pane's distance from the window's bottom: over the mode's exit button (64 tall)
     square: 22,
     // a park's square of the build's progress (fewer than squaresMax parks)
     squaresMax: 30
@@ -2720,6 +2739,10 @@
     }
     get parkNames() {
       return this.playlist.parks.map((p) => p.name);
+    }
+    /** The parks' keys in play order. */
+    get playOrderKeys() {
+      return this.parkOrder.map((i) => this.playlist.parks[i].key ?? this.playlist.parks[i].fileName);
     }
     /** The playlist index of the park with this key, or -1. */
     parkIndexOf(key) {
@@ -5854,7 +5877,7 @@
       const e = this.editor;
       if (builder.running) {
         builder.cancel();
-      } else if (e && builder.available) {
+      } else if (e && builder.available && builder.pendingEdits(e.playback.installedAt)) {
         e.playback.savePlaylistProps();
         this.messages.first = 0;
         builder.start(e.playback.sequenceName);
@@ -6479,7 +6502,7 @@
       if (this.buildOpen !== void 0) {
         return !this.buildOpen;
       }
-      return ui.height - EDITOR.y - this.buildHeight(false) < this.boxBottom + EDITOR.gap * 2;
+      return ui.height - EDITOR.buildBottom - this.buildHeight(false) < this.boxBottom + EDITOR.gap * 2;
     }
     buildHeight(folded) {
       const s = EDITOR;
@@ -6496,7 +6519,7 @@
       const width = s.boxWidth;
       const folded = this.buildFolded();
       const height = this.buildHeight(folded);
-      const frame = { x: ui.width - s.x - width, y: ui.height - s.y - height, width, height };
+      const frame = { x: ui.width - s.x - width, y: ui.height - s.buildBottom - height, width, height };
       const x0 = frame.x + s.pad;
       const inner = width - 2 * s.pad;
       let y = frame.y + s.pad;
@@ -6510,7 +6533,7 @@
       foldMark(scene, "build.mark", !folded, x0 + 4, y + s.propHeader / 2, overlay);
       label(scene, "build.title", "Build", { x: x0 + 24, y, width: 0, height: s.propHeader }, 16, overlay, true);
       const tw = measure(overlay, "Build", 16, true).width;
-      label(scene, "build.sub", "playlist", { x: x0 + 24 + tw + 8, y: y + 1, width: 0, height: s.propHeader }, 13, overlay);
+      label(scene, "build.sub", "saves live edits to the playlist", { x: x0 + 24 + tw + 8, y: y + 1, width: 0, height: s.propHeader }, 13, overlay);
       scene.set("build.sub", { ...scene.get("build.sub"), colour: THEME.textDim });
       const count = builder.count;
       const [stateText, stateColour] = line.phase === "unavailable" ? ["needs the patched engine", THEME.textDim] : line.phase === "running" ? [count ? `building ${count.park}/${count.parks}` : "building", THEME.textGood] : line.phase === "failed" ? ["failed", THEME.warning] : builder.pendingEdits(e.playback.installedAt) ? ["edits not built", THEME.pending] : ["built \xB7 playing", THEME.textGood];
@@ -6535,18 +6558,19 @@
       this.squares(scene, builder.parks, x0, y, inner);
       y += s.square + 8;
       const unavailable = line.phase === "unavailable";
+      const nothing = !running && !unavailable && !builder.pendingEdits(e.playback.installedAt);
       const build = this.place(
         "build",
         { x: x0, y, width: inner, height: s.buildButton },
-        unavailable ? line.text : running ? "Stop the build; the playlist plays on as it was (Ctrl+B)" : "Build the playlist with your edits in the background, then play it (Ctrl+B)",
-        unavailable
+        unavailable ? line.text : running ? "Stop the build; the playlist plays on as it was (Ctrl+B)" : nothing ? "Nothing to build: the playlist files hold every edit" : "Save your live edits to the playlist and build it in the background, then play it (Ctrl+B)",
+        unavailable || nothing
       );
       const st = this.state("build");
       button(
         scene,
         "build",
         build,
-        { ...st, face: running || unavailable || st.hover || st.down ? void 0 : THEME.buildFace },
+        { ...st, face: running || unavailable || nothing || st.hover || st.down ? void 0 : THEME.buildFace },
         { icon: running ? "close" : "build", iconSize: s.toolIcon, text: running ? "Cancel build" : "Build and play", textSize: 16, hint: "Ctrl+B" },
         overlay
       );
@@ -6625,11 +6649,12 @@
       parks.forEach((p, i) => {
         const r = { x: Math.round(x0 + i * (w + gap)), y, width: Math.max(1, Math.round(w)), height: s.square };
         const what = p.state === "missing" ? "file missing" : p.state === "failed" ? "failed" : p.state === "building" ? "building" : p.state === "pending" ? "waiting" : `${p.state === "cached" ? "unchanged" : "built"}${p.warnings ? `, ${p.warnings} warning${p.warnings > 1 ? "s" : ""}` : ""}`;
-        this.place(`sq.${i}`, r, `${p.name ?? `Park ${i + 1}`}: ${what}`);
-        scene.set(`sq.${i}`, { type: "rect", ...r, fill: colourOf(p), z: Z.face });
+        const name = p.key && builder.nameOf?.(p.key) || p.name || `Park ${i + 1}`;
+        this.place(`sq.${i}`, r, `${name}: ${p.previous ? "waiting (as in the last build)" : what}`);
+        scene.set(`sq.${i}`, { type: "rect", ...r, fill: colourOf(p), z: Z.face, ...p.previous ? { opacity: 0.35 } : {} });
         bevel(scene, `sq.${i}`, r, THEME.bevelDark, THEME.bevelDark, THEME.bevel, Z.bevel);
         const icon = p.state === "failed" || p.state === "missing" ? "close" : p.state === "built" || p.state === "cached" ? p.warnings ? "alert" : "check" : void 0;
-        if (icon && r.width >= side) {
+        if (icon && r.width >= side && !p.previous) {
           scene.set(`sqi.${i}`, { type: "image", src: iconPath(icon, px), x: r.x + (r.width - side) / 2, y: r.y + (r.height - side) / 2, z: Z.icon });
         }
       });
@@ -6845,6 +6870,11 @@
     return void 0;
   }
   builder.onReady = takeBuild;
+  builder.nameOf = (key) => {
+    const park = player?.isRunning ? loadPlaylist()?.parks.find((p) => (p.key ?? p.fileName) === key) : void 0;
+    return park?.name;
+  };
+  builder.orderOf = () => player?.isRunning ? player.playOrderKeys : [];
   function update() {
     builder.update();
     if (context.mode !== "title") {
@@ -6904,7 +6934,7 @@
       editorPanel.toggleBuild();
     } else if (builder.running) {
       builder.cancel();
-    } else if (builder.available) {
+    } else if (builder.available && builder.pendingEdits(p.installedAt)) {
       builder.start(p.sequenceName);
     }
   }
