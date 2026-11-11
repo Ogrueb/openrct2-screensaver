@@ -501,7 +501,10 @@ assert.ok(scene.get("rcts.bar.titles.icon").src.includes("titles-off"), "on -> o
         assert.notEqual(tile(), before, "the view moved");
         assert.equal(JSON.stringify(viewport.centre), cam, "the camera stays on the map");
         assert.equal(ed("cell.0.6").text, "you", "placed by hand");
-        // The corner handle: dragged out to twice the size, the view zooms out a level.
+        // The corner handle: dragged out to twice the size, the view zooms out a level (the build
+        // pane, over the map's bottom right, folded to its header out of the way).
+        edClick("buildHead");
+        assert.equal(ed("build"), undefined, "the build pane folds to its header");
         const h = map("handle");
         const b = map("box.0");
         const hx = h.x + h.width / 2, hy = h.y + h.height / 2;
@@ -509,6 +512,7 @@ assert.ok(scene.get("rcts.bar.titles.icon").src.includes("titles-off"), "on -> o
         mouse("move", b.x + b.width / 2 + b.width, b.y + b.height / 2 + b.height);
         mouse("up", b.x + b.width / 2 + b.width, b.y + b.height / 2 + b.height);
         assert.equal(Number(ed("cell.0.3").text), Math.min(3, zoom0 + 1), "the handle zooms the view out a level");
+        edClick("buildHead");
         // A drag on empty park pans the camera.
         mouse("move", 1300, 150); mouse("down", 1300, 150); mouse("move", 1700, 150); mouse("up", 1700, 150);
         assert.notEqual(JSON.stringify(viewport.centre), cam, "a drag on empty park pans");
@@ -661,9 +665,9 @@ assert.ok(scene.get("rcts.bar.titles.icon").src.includes("titles-off"), "on -> o
         assert.ok(ed("points.thumb"), "the list scrolls past three and a half rows");
         dump("points");
     }
-    // Playlist properties: applied at once, Save keeps them; Off hides the change and arrival holds.
+    // Playlist properties: applied and saved at once; Off hides the change and arrival holds.
     {
-        assert.equal(ed("save").fill, "#2a2e2c80", "nothing to save yet");
+        assert.equal(ed("save"), undefined, "no Save button: the properties save as they change");
         assert.ok(ed("step.changeHold.less"), "the change hold shows");
         edClick("seg.panChanges.0");
         assert.equal(ed("step.changeHold.less"), undefined, "Angle and zoom change Off hides the change hold");
@@ -676,20 +680,17 @@ assert.ok(scene.get("rcts.bar.titles.icon").src.includes("titles-off"), "on -> o
         edClick("seg.titleMusic.1");
         assert.equal(mode.configured.at(-1).titleMusic, 2, "Title music Theme applies at once");
         edClick("seg.titles.3");
-        assert.notEqual(ed("save").fill, "#2a2e2c80", "Save is ready");
-        edClick("save");
         const props = saved["RCTScreensaver.playlistProps"][playlist.sequence];
         assert.equal(props.panChanges, "off");
         assert.equal(props.returnHold, 2.5);
         assert.equal(props.titleMusic, "theme");
         assert.equal(props.titles, null, "Unset titles saved as null");
         assert.equal(props.order.length, 3, "the park order kept");
-        assert.equal(ed("save").fill, "#2a2e2c80", "saved");
         edClick("propsHead");
         assert.equal(ed("seg.inertia.0"), undefined, "the Playlist header folds the properties");
         edClick("propsHead");
         edClick("seg.panChanges.2");
-        edClick("save");
+        assert.equal(saved["RCTScreensaver.playlistProps"][playlist.sequence].panChanges, "end", "saved at once");
     }
     // The pin: off, the panes hide once the mouse rests; a move brings them back.
     {
@@ -877,18 +878,32 @@ console.log("ok: park changes dip through black in the mode (patch 0010)");
     const before = playlist.parks.find(p => p.load === sequence.lastSeek);
     shortcuts["rctscreensaver.edit"]();
     tick();
-    assert.ok(ed("build"), "a Build button in the Playlist section");
+    assert.ok(ed("build"), "a Build button in the build pane");
+    assert.ok(ed("build.frame").y > ed("box").y + ed("box").height, "the pane sits under the top-right box");
+    assert.ok(ed("import") && ed("export"), "Import and Export in the build pane");
     mode.buildFails = "No generator registered";
     edClick("build"); tick(6);
     assert.ok(ed("build.line").text.startsWith("Build failed: No generator"), "a build that cannot start says why");
+    assert.equal(ed("build.state").text, "failed");
+    assert.match(ed("msgt.0").text, /did not start: No generator/, "and its message");
     mode.buildFails = undefined;
     edClick("build"); tick();
     assert.deepEqual(mode.builds, [playlist.sequence], "the build is of the playing playlist");
     const fileName = "build-" + playlist.sequence.replace(/[^A-Za-z0-9._-]/g, "_") + ".json";
-    mode.files.set(fileName, JSON.stringify({ buildVersion: 1, sequence: playlist.sequence, started: now, ok: null, park: 2, parks: 3 }));
+    const keys = playlist.parks.map(p => p.key ?? p.fileName);
+    mode.files.set(fileName, JSON.stringify({ buildVersion: 1, sequence: playlist.sequence, started: now, ok: null, park: 2, parks: 3,
+        parkName: playlist.parks[1].name,
+        parkStates: [{ key: keys[2], name: "C", state: "cached", warnings: 0 }, { key: keys[1], name: "B", state: "building" }, { state: "pending" }],
+        messages: [{ level: "info", text: "Took in your edits" }] }));
     tick(6);
-    assert.match(ed("build.line").text, /^Building: park 2 of 3/, "progress from the result file");
-    assert.equal(ed("build").text ?? scene.get("rcts.ed.build.text")?.text ?? "Cancel build", "Cancel build");
+    assert.match(ed("build.line").text, /^Park 2 of 3 · /, "progress from the result file");
+    assert.equal(ed("build.state").text, "building 2/3");
+    assert.equal(scene.get("rcts.ed.build.text")?.text, "Cancel build");
+    assert.equal(ed("sq.0").fill, "#3d9a5c", "a square per park in the build's order: done");
+    assert.equal(ed("sq.1").fill, "#6fcf8a", "the one being built");
+    assert.equal(ed("sq.2").fill, ed("build.list").fill, "and the one still to come");
+    assert.ok(ed("sqi.0") && !ed("sqi.1"), "a check on the parks built");
+    dump("build-running");
     // The new build: the parks in the opposite order, so every LOAD moves.
     const built = JSON.parse(JSON.stringify(playlist));
     built.parks.reverse();
@@ -901,7 +916,9 @@ console.log("ok: park changes dip through black in the mode (patch 0010)");
         sequence.position = 0;
     };
     mode.files.set(fileName, JSON.stringify({ buildVersion: 1, sequence: playlist.sequence, started: now, ok: true, finished: now,
-        playlist: built, titleMusic: "ride", warnings: ["a park: a warning"], restart: [] }));
+        playlist: built, titleMusic: "ride", warnings: ["a park: a warning"], restart: [],
+        parkStates: [{ key: keys[2], name: "C", state: "cached", warnings: 0 }, { key: keys[1], name: "B", state: "built", warnings: 1 }, { key: keys[0], name: "A", state: "built", warnings: 0 }],
+        messages: [{ level: "info", text: "Took in your edits" }, { level: "warn", text: "B: a warning", park: keys[1] }, { level: "ok", text: "Built 3 parks" }] }));
     mode.buildStatus = { ...mode.buildStatus, state: "done", finished: now };
     tick(6);
     assert.deepEqual(mode.applied, [playlist.sequence], "the engine puts the build in place");
@@ -910,9 +927,30 @@ console.log("ok: park changes dip through black in the mode (patch 0010)");
     const now_ = built.parks.find(p => p.load === sequence.lastSeek);
     assert.equal(now_?.key ?? now_?.fileName, before.key ?? before.fileName, "the same park plays on, from its new LOAD");
     assert.match(ed("build.line").text, /^Built at .*now playing; 1 warning/, "the line says it plays");
+    assert.equal(ed("build.state").text, "built · playing");
+    assert.equal(ed("sq.1").fill, "#c8962a", "a park with warnings is amber");
+    assert.match(ed("msgt.0").text, /^Built .* now playing/, "the plugin's line first");
+    assert.equal(ed("msgt.2").text, "B: a warning");
+    dump("build-done");
+    // A message about a park opens it in the editor.
+    edClick("msgr.2"); tick(10);
+    const shownPark = built.parks.find(p => p.load === sequence.lastSeek);
+    assert.equal(shownPark.key ?? shownPark.fileName, keys[1], "a click on a park's message opens the park");
     tick(40);
     shortcuts["rctscreensaver.edit"]();
     tick();
+    // Ctrl+B builds with the editor closed too, and the bar shows a chip while it runs.
+    mode.buildStatus = { ...mode.buildStatus, state: "idle" };
+    shortcuts["rctscreensaver.build"]();
+    mode.files.set(fileName, JSON.stringify({ buildVersion: 1, sequence: playlist.sequence, started: Date.now(), ok: null, park: 1, parks: 3 }));
+    mouse("move", 600, 600);
+    tick(6);
+    assert.equal(mode.builds.length, 2, "Ctrl+B starts a build");
+    assert.equal(scene.get("rcts.bar.build.chipt")?.text, "Building 1/3", "the bar's chip");
+    mode.cancelBuild = function () { this.buildStatus = { ...this.buildStatus, state: "cancelled" }; return true; };
+    shortcuts["rctscreensaver.build"]();
+    tick(6);
+    assert.equal(scene.get("rcts.bar.build.chipt"), undefined, "Ctrl+B again cancels it");
     // The rest of the run plays the new layout.
     playlist.parks = built.parks;
 }

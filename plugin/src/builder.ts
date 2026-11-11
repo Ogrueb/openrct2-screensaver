@@ -5,7 +5,7 @@
 // sequence in (screensaver.applyBuild) and swaps the new playlist in: the build is installed with
 // the game open. Only the plugin's own code and the parks' scripts wait for a restart.
 
-import { filesApi, liveFileName, Playlist, Settings } from "./storage";
+import { filesApi, lastLiveSave, liveFileName, Playlist, Settings } from "./storage";
 
 export type BuildState = "idle" | "running" | "done" | "failed" | "cancelled";
 
@@ -26,6 +26,21 @@ export interface BuildApi {
     applyBuild(sequence: string): void; // throws with the reason
 }
 
+/** A park of the build, in play order (the build pane's squares). */
+export interface ParkState {
+    key?: string;
+    name?: string;
+    state: "pending" | "building" | "cached" | "built" | "failed" | "missing";
+    warnings?: number;
+}
+
+/** A line of the build pane's messages; `park` (a park key) when it is about one park. */
+export interface BuildMessage {
+    level: "info" | "ok" | "warn" | "error";
+    text: string;
+    park?: string;
+}
+
 /** What mksequence.py --live-build writes for the plugin (build-<sequence>.json in the live folder). */
 export interface BuildResult {
     buildVersion: 1;
@@ -41,6 +56,8 @@ export interface BuildResult {
     titleMusic?: Settings["titleMusic"];
     warnings?: string[];
     restart?: string[]; // what takes a restart of the game: "plugin", "park scripts"
+    parkStates?: ParkState[]; // every park in play order (the playlist file's, with the game's edits baked in)
+    messages?: BuildMessage[];
 }
 
 declare const screensaver: Partial<BuildApi> | undefined;
@@ -81,7 +98,7 @@ function log(message: string): void {
     console.log(`[RCT Screensaver] ${message}`);
 }
 
-function clock(ms: number): string {
+export function clock(ms: number): string {
     const s = Math.max(0, Math.round(ms / 1000));
     return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 }
@@ -95,8 +112,11 @@ export class Builder {
     private sequence: string | undefined; // the build this plugin started
     private started = 0;
     private lastPoll = 0;
-    private progress: BuildResult | undefined;
+    private progress: BuildResult | undefined; // the running build's last progress
+    private last: BuildResult | undefined; // the last build's result (its squares and messages stay shown)
+    private notes: BuildMessage[] = []; // the plugin's own lines about the last build, after the generator's
     private outcome: BuildLine | undefined;
+    private builtFrom = 0; // when the build that plays started: edits saved since are not built
 
     /** Takes a finished build in; returns an error message, or undefined once it plays. */
     onReady: ((result: BuildResult) => string | undefined) | undefined;
@@ -119,6 +139,8 @@ export class Builder {
             this.api.build(sequence);
         } catch (e) {
             this.outcome = { phase: "failed", text: `Build failed: ${message(e)}`, warning: true };
+            this.last = undefined;
+            this.notes = [{ level: "error", text: `The build did not start: ${message(e)}` }];
             log(`build of "${sequence}" did not start: ${message(e)}`);
             return;
         }
@@ -126,6 +148,7 @@ export class Builder {
         this.started = Date.now();
         this.progress = undefined;
         this.outcome = undefined;
+        this.notes = [];
         log(`building "${sequence}"`);
     }
 
@@ -146,55 +169,92 @@ export class Builder {
         const result = readBuildResult(sequence);
         const current = result && result.started >= this.started - STALE_MS ? result : undefined;
         if (status.state === "running") {
-            this.progress = current;
+            this.progress = current ?? this.progress;
             return;
         }
         this.sequence = undefined;
         this.progress = undefined;
+        this.last = current;
+        const took = Date.now() - this.started;
         if (status.state === "cancelled") {
             this.outcome = { phase: "idle", text: "Build cancelled" };
+            this.notes = [{ level: "info", text: "Build cancelled; the playlist plays on as it was" }];
             return;
         }
         if (status.state !== "done" || !current?.ok || !current.playlist) {
             const why = current?.ok === false && current.error ? current.error : status.error || "the generator failed";
             this.outcome = { phase: "failed", text: `Build failed: ${why}`, warning: true };
+            // The generator names the failure among its messages; else the engine's reason
+            this.notes = current?.messages?.some(m => m.level === "error") ? []
+                : [{ level: "error", text: `Build failed: ${why} (log: screensaver/build.log in the user folder)` }];
             log(`build of "${sequence}" failed: ${why} (log: screensaver/build.log in the user folder)`);
             return;
         }
         const error = this.onReady ? this.onReady(current) : "nothing to play it";
         if (error) {
             this.outcome = { phase: "failed", text: `Built, but not taken in: ${error}`, warning: true };
+            this.notes = [{ level: "error", text: `Built, but not taken in: ${error}` }];
             log(`build of "${sequence}" not taken in: ${error}`);
             return;
         }
+        this.builtFrom = current.started;
         const notes = [
             current.warnings?.length ? `${current.warnings.length} warning${current.warnings.length > 1 ? "s" : ""}` : "",
             current.restart?.length ? `restart to load the new ${current.restart.join(" and ")}` : "",
         ].filter(s => s);
+        const at = timeOfDay(current.finished ?? Date.now());
         this.outcome = {
-            phase: "done", text: `Built at ${timeOfDay(current.finished ?? Date.now())}, now playing${notes.length ? "; " + notes.join("; ") : ""}`,
+            phase: "done", text: `Built at ${at}, now playing${notes.length ? "; " + notes.join("; ") : ""}`,
             warning: !!current.restart?.length,
         };
+        this.notes = [{ level: "ok", text: `Built ${at} in ${clock(took)}, now playing` }];
         for (const w of current.warnings ?? []) {
             log(`build warning: ${w}`);
         }
         log(`build of "${sequence}" now playing`);
     }
 
-    /** The line the editor shows. */
+    /** The line the editor shows (the controls bar's chip and the pane's header take theirs from it). */
     get line(): BuildLine {
         if (!this.available) {
             return { phase: "unavailable", text: "Building from the game needs the patched engine" };
         }
         if (this.running) {
             const p = this.progress;
-            const where = p?.parks ? `park ${p.park} of ${p.parks}` : "starting";
-            return { phase: "running", text: `Building: ${where} (${clock(Date.now() - this.started)})` };
+            const where = p?.parks ? `Park ${p.park} of ${p.parks}${p.parkName ? " · " + p.parkName : ""}` : "Starting";
+            return { phase: "running", text: where };
         }
         return this.outcome ?? { phase: "idle", text: "Builds the playlist with your edits and plays it" };
     }
-}
 
+    /** The running build's time so far, ms. */
+    get elapsed(): number {
+        return this.running ? Date.now() - this.started : 0;
+    }
+
+    /** The running build's park and count, for the controls bar's chip. */
+    get count(): { park: number; parks: number } | undefined {
+        const p = this.progress;
+        return this.running && p?.parks ? { park: p.park ?? 0, parks: p.parks } : undefined;
+    }
+
+    /** The parks of the running build, else of the last one, in play order. */
+    get parks(): ParkState[] {
+        return (this.running ? this.progress : this.last)?.parkStates ?? [];
+    }
+
+    /** The messages of the running build, else of the last one: the plugin's own first. */
+    get messages(): BuildMessage[] {
+        const r = this.running ? this.progress : this.last;
+        return [...this.notes, ...(r?.messages ?? [])];
+    }
+
+    /** Edits saved in the game since the playing build started (or since the install). */
+    pendingEdits(installed: number | undefined): boolean {
+        const saved = lastLiveSave();
+        return saved !== undefined && saved > Math.max(this.builtFrom, installed ?? 0);
+    }
+}
 /** An error's message (also one thrown from the engine's own realm). */
 export function message(e: unknown): string {
     const m = (e as { message?: unknown } | null)?.message;

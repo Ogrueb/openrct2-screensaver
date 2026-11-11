@@ -61,10 +61,15 @@ class LiveBuild(unittest.TestCase):
 
         def fake_build(path, out, **kwargs):
             calls.append((path, out, kwargs))
-            kwargs["progress"](0, 1, "A")
+            self.assertTrue(kwargs["skip_missing"])
+            kwargs["progress"](1, 2, {"key": "b.park", "name": "B", "state": "building", "warnings": []})
             progress = self.result()
             self.assertIsNone(progress["ok"])
-            self.assertEqual((progress["park"], progress["parks"]), (1, 1))
+            self.assertEqual((progress["park"], progress["parks"]), (2, 2))
+            # Squares in play order: the second park's state sits second, before the first reports
+            self.assertEqual([s["state"] for s in progress["parkStates"]], ["pending", "building"])
+            kwargs["progress"](0, 2, {"key": "a.park", "name": "A", "state": "missing", "warnings": []})
+            kwargs["progress"](1, 2, {"key": "b.park", "name": "B", "state": "built", "warnings": ["a warning"]})
             companion_dir = os.path.join(out, "My List.companions")
             os.makedirs(companion_dir)
             return {"name": "My List", "layout": "plugin", "dir": os.path.join(out, "My List"),
@@ -82,8 +87,41 @@ class LiveBuild(unittest.TestCase):
         self.assertEqual(result["playlist"]["source"], os.path.abspath(self.playlist))
         self.assertEqual(result["warnings"], ["A: a warning"])
         self.assertEqual(result["titleMusic"], "ride")
+        self.assertEqual([(s["key"], s["state"], s["warnings"]) for s in result["parkStates"]],
+                         [("a.park", "missing", 0), ("b.park", "built", 1)])
+        tagged = [(m["level"], m.get("park")) for m in result["messages"]]
+        self.assertIn(("error", "a.park"), tagged)
+        self.assertIn(("warn", "b.park"), tagged)
+        self.assertIn(("ok", None), tagged)
         self.assertFalse(os.path.exists(os.path.join(self.user, "plugin.store.json")), "the game's storage is left alone")
         self.assertFalse(os.path.exists(os.path.join(self.user, "sequence")), "and so is the installed sequence")
+
+    def test_live_edits_are_baked_before_the_build(self):
+        mksequence.register_generator(self.user, "My List", self.playlist)
+        os.makedirs(livefile.folder(self.user))
+        with open(livefile.path("My List", self.user), "w") as f:
+            json.dump({"version": 1, "sequence": "My List", "saved": 1000, "source": os.path.abspath(self.playlist),
+                       "edits": {}, "props": {"titles": "on"}}, f)
+        seen = []
+
+        def fake_build(path, out, **kwargs):
+            with open(path) as f:
+                seen.append(f.read())
+            self.assertIsNone(livefile.for_playlist(path, "My List", self.user), "baked, so not applied twice")
+            return {"name": "Renamed", "layout": "plugin", "playlist": {}, "parks": []}
+
+        self.run_live(fake_build)
+        self.assertIn("titles", seen[0])
+        self.assertEqual(self.result()["messages"][0]["level"], "info")
+
+    def test_missing_park_is_left_out(self):
+        mksequence.register_generator(self.user, "My List", self.playlist)
+        states = []
+        with contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(ValueError):  # the only park is missing
+                mksequence.build(self.playlist, os.path.join(self.tmp.name, "out"), skip_missing=True,
+                                 progress=lambda i, n, p: states.append(p["state"]), use_live=False)
+        self.assertEqual(states, [])
 
     def test_renamed_playlist_is_not_taken(self):
         mksequence.register_generator(self.user, "My List", self.playlist)

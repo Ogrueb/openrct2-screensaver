@@ -2834,7 +2834,11 @@ def changed_parks(playlist_path, cache_dir, use_edits=True, use_profiles=True, d
 
 
 def build(playlist_path, out_dir, seed=None, layout=None, use_edits=True, overrides=None,
-          use_profiles=True, cache_dir=None, use_live=True, user_dir=None, progress=None):
+          use_profiles=True, cache_dir=None, use_live=True, user_dir=None, progress=None, skip_missing=False):
+    """Build the title sequence. `progress(i, n, park)`, when given, hears of each of the n parks in play
+    order, as it starts and once it is done: park = {key, name, state ("building", "cached", "built",
+    "failed", "missing"), warnings}. With `skip_missing`, a park whose file is missing is left out (and
+    reported) instead of failing the build."""
     ctx = prepare(playlist_path, use_edits, overrides, use_profiles, layout, use_live, user_dir)
     playlist, base_dir, name, layout, defaults = ctx["playlist"], ctx["base_dir"], ctx["name"], ctx["layout"], ctx["defaults"]
     entries, edits, park_profiles, park_plugins = ctx["entries"], ctx["edits"], ctx["park_profiles"], ctx["park_plugins"]
@@ -2844,33 +2848,53 @@ def build(playlist_path, out_dir, seed=None, layout=None, use_edits=True, overri
     elif order != "playlist":
         raise ValueError("order must be 'playlist' or 'shuffle'")
     missing = [e["file"] for e in entries if not os.path.exists(os.path.join(base_dir, e["file"]))]
-    if missing:
+    if missing and not skip_missing:
         raise ValueError("park file%s not found: %s (relative to %s). Park files are not part of the repository; "
                          "the example playlists' parks are downloads from New Element Designs, listed in "
                          "ExampleParks/README.md" % ("s" if len(missing) > 1 else "", ", ".join(missing), base_dir))
-    library, ctx["context"]["companions"] = companion_context(entries, base_dir, park_profiles)
+    present = [e for e in entries if e["file"] not in missing]
+    if not present:
+        raise ValueError("none of the playlist's park files were found (relative to %s)" % base_dir)
+
+    def report(i, e, state, park=None):
+        if progress:
+            progress(i, len(entries), {"key": park_key(e), "name": e.get("name") or os.path.basename(e["file"]),
+                                       "state": state, "warnings": list(park["warnings"]) if park else []})
+
+    library, ctx["context"]["companions"] = companion_context(present, base_dir, park_profiles)
     cache = ParkCache(cache_dir) if cache_dir else None
     parks = []
     reused = 0
     for i, e in enumerate(entries):
-        if progress:
-            progress(i, len(entries), e.get("name") or os.path.basename(e["file"]))
+        label = e.get("name") or os.path.basename(e["file"])
+        if e["file"] in missing:
+            print("[%d/%d] %s: file not found (%s), left out" % (i + 1, len(entries), label, e["file"]), file=sys.stderr, flush=True)
+            report(i, e, "missing")
+            continue
+        report(i, e, "building")
+        n = len(parks)  # its place among the parks built
         sig = cache.signature(e, base_dir, ctx["context"], park_profiles) if cache else None
         park = cache.get(sig) if sig else None
         if park:
             # Unchanged since an earlier build: only its place in the order is new
-            park["fileName"] = "%02d-%s.park" % (i + 1, slug(park["name"]))
+            park["fileName"] = "%02d-%s.park" % (n + 1, slug(park["name"]))
             reused += 1
-            print("[%d/%d] %s (unchanged)" % (i + 1, len(entries), e.get("name") or os.path.basename(e["file"])), file=sys.stderr, flush=True)
+            print("[%d/%d] %s (unchanged)" % (i + 1, len(entries), label), file=sys.stderr, flush=True)
+            report(i, e, "cached", park)
         else:
             # Progress on stderr: the report below comes once every park is resolved
-            print("[%d/%d] %s" % (i + 1, len(entries), e.get("name") or os.path.basename(e["file"])), file=sys.stderr, flush=True)
-            park = resolve_park(e, i, base_dir, defaults, layout, edits, library, park_profiles, park_plugins)
+            print("[%d/%d] %s" % (i + 1, len(entries), label), file=sys.stderr, flush=True)
+            try:
+                park = resolve_park(e, n, base_dir, defaults, layout, edits, library, park_profiles, park_plugins)
+            except Exception:
+                report(i, e, "failed")
+                raise
             if cache:
                 cache.put(e, base_dir, ctx["context"], park_profiles, park)
+            report(i, e, "built", park)
         parks.append(park)
     if cache:
-        print("rebuilt %d of %d park(s); %d unchanged" % (len(entries) - reused, len(entries), reused), file=sys.stderr, flush=True)
+        print("rebuilt %d of %d park(s); %d unchanged" % (len(parks) - reused, len(parks), reused), file=sys.stderr, flush=True)
     script = write_script(parks, os.path.basename(playlist_path), layout)
 
     seq_dir = os.path.join(out_dir, name)
@@ -3225,12 +3249,32 @@ def live_build(name, user_dir):
     os.makedirs(os.path.dirname(result_path), exist_ok=True)
     started = int(time.time() * 1000)
     base = {"buildVersion": 1, "sequence": name, "started": started}
+    # Each park's state in play order (the pane's squares), and the messages, each about a park (its
+    # key) or the playlist as a whole
+    states = []
+    messages = []
+    current = {}
+
+    def note(level, text, park=None):
+        messages.append(dict({"level": level, "text": text}, **({"park": park} if park else {})))
+
+    def write(**fields):
+        write_json_atomic(result_path, dict(base, parkStates=states, messages=messages, **fields))
 
     def progress(i, n, park):
-        write_json_atomic(result_path, dict(base, ok=None, park=i + 1, parks=n, parkName=park))
+        while len(states) < n:
+            states.append({"state": "pending"})
+        states[i] = {"key": park["key"], "name": park["name"], "state": park["state"], "warnings": len(park["warnings"])}
+        if park["state"] == "missing":
+            note("error", "%s: park file not found, left out" % park["name"], park["key"])
+        for w in park["warnings"] if park["state"] in ("cached", "built") else ():
+            note("warn", "%s: %s" % (park["name"], w), park["key"])
+        if park["state"] == "building":
+            current.update(i=i, name=park["name"])
+        write(ok=None, park=i + 1, parks=n, parkName=park["name"])
 
     try:
-        progress(-1, 0, "")
+        write(ok=None)
         try:
             with open(os.path.join(user_dir, "screensaver", GENERATOR_FILE), encoding="utf-8") as f:
                 source = (json.load(f).get("playlists") or {}).get(name)
@@ -3239,8 +3283,21 @@ def live_build(name, user_dir):
         if not isinstance(source, str) or not os.path.isfile(source):
             raise ValueError("no playlist file is known for \"%s\"%s; install it once with mksequence.py --install"
                              % (name, " (%s is missing)" % source if isinstance(source, str) else ""))
+        # The game's edits go into the playlist's own files first (as bakelive.py does), so the
+        # playlist files always hold what plays
+        live = livefile.for_playlist(source, name, user_dir)
+        if live is not None:
+            s = livefile.summary(live)
+            parts = (["views of %d park%s" % (len(s["views"]), "s" if len(s["views"]) != 1 else "")] if s["views"] else []) + \
+                (["reset %d park%s" % (len(s["resets"]), "s" if len(s["resets"]) != 1 else "")] if s["resets"] else []) + \
+                (["properties"] if s["props"] else []) + (["park order"] if s["order"] else [])
+            merge_edits(source, live["edits"])
+            write_props(source, live["props"])
+            livefile.mark_baked(live, user_dir)
+            note("info", "Took in your edits: %s; saved to %s" % (", ".join(parts) or "nothing new", os.path.basename(source)))
+            write(ok=None)
         result = build(source, out_dir, cache_dir=os.path.join(user_dir, "screensaver", "park-cache"),
-                       user_dir=user_dir, progress=progress)
+                       user_dir=user_dir, progress=progress, skip_missing=True)
         if result["name"] != name:
             raise ValueError("%s is now named \"%s\"; install it with mksequence.py --install" % (source, result["name"]))
         if result["layout"] != "plugin" or not result["playlist"]:
@@ -3257,18 +3314,24 @@ def live_build(name, user_dir):
                 file_bytes(os.path.join(result["companionDir"], f)) != file_bytes(os.path.join(plugin_dir, f))
                 for f, _, _ in result["companions"]):
             restart.append("park scripts")
+        rebuilt = sum(1 for st in states if st["state"] == "built")
+        cached = sum(1 for st in states if st["state"] == "cached")
+        note("ok", "Built %d park%s (%d rebuilt, %d unchanged)" % (rebuilt + cached, "s" if rebuilt + cached != 1 else "", rebuilt, cached))
+        if restart:
+            note("warn", "Restart the game to load the new %s" % " and ".join(restart))
         playlist = dict(result["playlist"], source=result["source"])
-        write_json_atomic(result_path, dict(base, ok=True, finished=int(time.time() * 1000), playlist=playlist,
-                                            titleMusic=result["titleMusic"], warnings=warnings, restart=restart,
-                                            live=result.get("live")))
+        write(ok=True, finished=int(time.time() * 1000), playlist=playlist, titleMusic=result["titleMusic"],
+              warnings=warnings, restart=restart, live=result.get("live"))
         print("built %s: %d park(s)%s" % (result["dir"], len(result["parks"]),
                                           "; a restart takes in the " + " and the ".join(restart) if restart else ""))
         return 0
     except Exception as e:  # anything: the game shows it
         import traceback
         traceback.print_exc()
-        write_json_atomic(result_path, dict(base, ok=False, finished=int(time.time() * 1000),
-                                            error=str(e) or e.__class__.__name__))
+        error = str(e) or e.__class__.__name__
+        failed = next((st for st in states if st.get("state") == "failed"), None)
+        note("error", "%s: %s" % (failed["name"], error) if failed else error, failed and failed["key"])
+        write(ok=False, finished=int(time.time() * 1000), error=error)
         return 1
 
 

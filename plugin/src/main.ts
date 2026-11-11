@@ -177,6 +177,17 @@ function toggleEditor(): void {
     }
 }
 
+/** Build and play, or cancel the build: the editor's pane does it while open (and redraws). */
+function toggleBuild(p: Player): void {
+    if (editor?.isOpen && editorPanel?.isOpen) {
+        editorPanel.toggleBuild();
+    } else if (builder.running) {
+        builder.cancel();
+    } else if (builder.available) {
+        builder.start(p.sequenceName);
+    }
+}
+
 function registerShortcuts(): void {
     const shortcuts: [string, string, string[], (p: Player) => void][] = [
         ["next", "Next view", ["RIGHT"], either(p => p.next(), e => e.pan(1, 0))],
@@ -210,6 +221,8 @@ function registerShortcuts(): void {
         ["holdmore", "Longer hold (view editor)", ["]"], either(() => {}, e => e.changeHold(1))],
         ["panless", "Less of the hold panning (view editor)", ["SHIFT+["], either(() => {}, e => e.changePan(-0.1))],
         ["panmore", "More of the hold panning (view editor)", ["SHIFT+]"], either(() => {}, e => e.changePan(0.1))],
+        // The build pane's button (patched engine), also with the editor closed (owner, 2026-11-11).
+        ["build", "Build and play / cancel the build", ["CTRL+B"], p => toggleBuild(p)],
     ];
     for (const [id, text, bindings, action] of shortcuts) {
         ui.registerShortcut({

@@ -200,8 +200,17 @@ Passed on the owner's PC 2026-11-01 (run-19 engine, `playlists/example.toml`), e
 ### Builds from the game (patch 0017, 2026-11-11)
 Needs an engine build with patch 0017 and an install from this version (it writes
 `Documents\OpenRCT2\screensaver\generator.json`).
-- [ ] In the mode's editor, **Build and play** shows "Building: park n of m" with a running time, no
-      console window opens, and the game keeps playing smoothly meanwhile.
+- [ ] The build pane sits bottom right under the top-right box (folds to its header on a short window);
+      the playlist's Save button is gone and a property change is kept after closing and reopening the editor.
+- [ ] In the mode's editor, **Build and play** (or Ctrl+B) shows "Park n of m · name" with a running time,
+      the squares fill in play order (a check per park; unchanged parks fill at once), no console window
+      opens, and the game keeps playing smoothly meanwhile. With the editor closed, the bar shows
+      "Building n/m".
+- [ ] After moving a park in the order, the next build's squares follow the new order; a warning park is
+      amber with "!", and its message opens the park on a click. A park file renamed away builds as a red
+      square with "file not found" while the rest builds.
+- [ ] After a build, the playlist's TOML and views file hold the game's edits (`.bak` beside the TOML), and
+      `python tools/bakelive.py --list` says nothing is waiting.
 - [ ] When it is done the park on screen dips through black and plays on from the new build; the line says
       "Built at hh:mm, now playing". An edit made before the build (a reordered park, a changed hold) plays.
 - [ ] A change only the generator makes shows up: e.g. Use playlist views on a hand-set park, then Build and

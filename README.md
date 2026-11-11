@@ -357,10 +357,12 @@ folder. Every build applies it, so a rebuild never loses edits made in the game,
 and park order into the TOML, comments kept) without closing the game. The settings page offers the
 same as "Bake into playlist". `--ignore-live` builds without it.
 
-The editor's **Build and play** (Playlist section) builds the playlist from the game: the generator runs
-in the background and the new build plays without closing the game, so you no longer need to close the
-game to install. It needs one `--install` first, which records where Python and the generator are. A new version of the
-plugin's own code or of the parks' scripts still takes a restart.
+The editor's **Build and play** (the Build pane, bottom right; Ctrl+B) builds the playlist from the game:
+the generator writes your edits into the playlist files, rebuilds the parks that changed in the background,
+and the new build plays without closing the game, so you no longer need to close the game to install. A
+square per park shows how far it got (amber for warnings, red for a failure), and its messages open the
+park they are about. It needs one `--install` first, which records where Python and the generator are. A
+new version of the plugin's own code or of the parks' scripts still takes a restart.
 
 ### Drawing views in the browser
 

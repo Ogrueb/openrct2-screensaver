@@ -47,6 +47,14 @@ export const THEME = {
     iconOff: 0.35,
     textDim: "#ffffffa0", // key hints, section labels, times
     textGood: "#8fd6a0", // the editor's "edited · saved in the game"
+    // The build pane (owner, 2026-11-11): its parks' squares, message marks and header states
+    buildFace: "#3d7a50d0", // Build and play
+    buildDone: "#3d9a5c", // a park built
+    buildCurrent: "#6fcf8a", // the park being built
+    buildWarn: "#c8962a", // built with warnings
+    buildFail: "#b8403a", // failed, or its file is missing
+    buildInfo: "#4a6a8a",
+    pending: "#ffb000", // edits not built yet
     dragLine: "#ff6a1a", // where a dragged row goes (the mockups' orange)
     rowDimmed: "#00000099", // over a row being dragged
     dragGhost: "#3f7a51f5", // the dragged row itself, lifted (nearly opaque, over the rows it passes)
@@ -142,6 +150,10 @@ export const EDITOR = {
     stepValueBox: 56,
     holdStep: 0.5, // seconds per - or + of the Playlist timing holds
     holdMax: 10,
+    // The build pane, bottom right
+    buildButton: 40,
+    square: 22, // a park's square of the build's progress (fewer than squaresMax parks)
+    squaresMax: 30, // above, a bar with the count
 };
 
 /** Controls bar timings, ms. */
