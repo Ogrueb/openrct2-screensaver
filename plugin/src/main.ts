@@ -1,9 +1,10 @@
 // RCT Screensaver: plays an installed playlist on OpenRCT2's title screen.
 
+import { builder, buildApi, BuildResult, message } from "./builder";
 import { Editor } from "./editor";
 import { modeSettings, perfLogging, perfMark, screensaverApi } from "./mode";
 import { Player } from "./player";
-import { loadPlaylist, loadSettings, resolveSequence, saveSettings, TITLES } from "./storage";
+import { loadPlaylist, loadSettings, Playlist, resolveSequence, savePlaylist, saveSettings, TITLES } from "./storage";
 import { Captions } from "./ui/captions";
 import { ControlsBar } from "./ui/controls";
 import { EditorPanel } from "./ui/editor-panel";
@@ -82,7 +83,42 @@ function stopPlayer(release = false): void {
     player = undefined;
 }
 
+/** Takes a build the game started in (builder.ts): the engine copies the new sequence into place and
+ *  reloads its script, the new playlist is installed in the storage and the player swaps to it. */
+function takeBuild(result: BuildResult): string | undefined {
+    const api = buildApi();
+    if (!api || !player?.isRunning || !result.playlist) {
+        return "the screensaver is not playing";
+    }
+    if (result.playlist.sequence !== player.sequenceName) {
+        return `another playlist is playing ("${player.sequenceName}")`;
+    }
+    try {
+        api.applyBuild(result.sequence);
+    } catch (e) {
+        return message(e);
+    }
+    const old = loadPlaylist();
+    const playlist: Playlist = { ...result.playlist, installed: Date.now(), source: result.playlist.source ?? old?.source };
+    const check = resolveSequence(playlist);
+    if (typeof check === "string") {
+        return check;
+    }
+    savePlaylist(playlist);
+    // The playlist's title music, as an install sets it (applied by the mode on its next entry).
+    if (result.titleMusic) {
+        const settings = player.liveSettings;
+        settings.titleMusic = result.titleMusic;
+        saveSettings(settings);
+        player.noteInstalledMusic(result.titleMusic);
+    }
+    player.swapPlaylist(playlist);
+    return undefined;
+}
+builder.onReady = takeBuild;
+
 function update(): void {
+    builder.update();
     if (context.mode !== "title") {
         if (onTitleScreen) {
             onTitleScreen = false;

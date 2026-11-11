@@ -197,6 +197,19 @@ Passed on the owner's PC 2026-11-01 (run-19 engine, `playlists/example.toml`), e
 - [ ] With `title_music = "ride"` installed, ride music plays in the mode only; `config.ini` keeps
       its own `title_theme`.
 
+### Builds from the game (patch 0017, 2026-11-11)
+Needs an engine build with patch 0017 and an install from this version (it writes
+`Documents\OpenRCT2\screensaver\generator.json`).
+- [ ] In the mode's editor, **Build and play** shows "Building: park n of m" with a running time, no
+      console window opens, and the game keeps playing smoothly meanwhile.
+- [ ] When it is done the park on screen dips through black and plays on from the new build; the line says
+      "Built at hh:mm, now playing". An edit made before the build (a reordered park, a changed hold) plays.
+- [ ] A change only the generator makes shows up: e.g. Use playlist views on a hand-set park, then Build and
+      play: generated views come back. After a park order change the next park follows the new order.
+- [ ] Cancel build stops it (no python process left in Task Manager); the playlist plays on unchanged.
+- [ ] After a restart of the game, the new build plays (the installed sequence and playlist match).
+- [ ] With `generator.json` removed, the line says why the build cannot start.
+
 ### Live file (patch 0016, 2026-11-10)
 Passed in the game on 2026-11-10 (example playlist, Windows), except the settings page's panel, checked
 through its function only. Needs an engine build with patch 0016 and an install from this version

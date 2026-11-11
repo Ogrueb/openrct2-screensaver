@@ -279,6 +279,40 @@ The panel became three panes (round 8 of the mockups accepted, built the same da
   is a later stage (`docs/enhancements.md` section 2, item 6).
 - In map mode the panes take the mouse: a press on them never reaches the boxes underneath.
 
+### Builds from the game (engine patch 0017, 2026-11-11)
+
+The next stage of "the live editor on its own" (`docs/enhancements.md` section 2, item 6): the game builds
+the playlist itself and plays the new build without a restart, so installing no longer needs the game
+closed.
+
+- **Build and play** (the box's Playlist section, under Save; Cancel build while it runs) saves the Playlist
+  properties and calls `screensaver.build(<sequence>)`. The engine runs the generator that `--install`
+  registered in `<user dir>/screensaver/generator.json` (this Python, this `mksequence.py`, and the playlist
+  file each installed sequence came from), `mksequence.py --live-build <sequence> --user-dir <user dir>`,
+  in the background with no console window (below normal priority, output in `screensaver/build.log`).
+  A plugin passes only the name: it cannot choose what runs, and its files API cannot write
+  `generator.json` (it reaches only `screensaver/live`). One build at a time.
+- The build is an ordinary build with the live file applied (`--cache` in `screensaver/park-cache`, so
+  only changed parks are rebuilt), written to `screensaver/build/live/<sequence>`. It never touches the
+  installed sequence or `plugin.store.json`, both the game's while it runs. Its progress (park n of m) and
+  result go to `screensaver/live/build-<sequence>.json` (no `version` key, so the live-file tools skip it):
+  the new playlist, the title music, warnings, and what only a restart takes in (`restart`: the plugin's
+  own code when the repository's built plugin differs from the installed one, the parks' scripts when the
+  companion plugins differ).
+- **Taking it in:** once the build is done the plugin calls `screensaver.applyBuild(<sequence>)`: the
+  engine copies the parks (only changed ones; written beside their place and renamed over) and the script
+  into the playing sequence's folder, removes parks the new script no longer names, and reloads the
+  script (`ITitleSequencePlayer::Reload`; the park on screen keeps playing). The plugin then stores the new
+  playlist (`installed` now, so it is the editor's "Last install"), sets the title music as an install
+  does, and re-enters the park on screen from the new script at its place in the new order (a dip through
+  black, as a park change), or the first park when the build dropped it.
+- The line under the button shows the build: progress and time, then "Built at hh:mm, now playing" with
+  warnings and "restart to load the new plugin" where that applies, or "Build failed: <reason>" (a
+  missing `generator.json` means: install once with `mksequence.py --install`).
+- Edits stay in the game's storage and the live file (they play as before); baking them into the playlist
+  files is still `tools/bakelive.py` or an install.
+- A build still running when the game quits finishes on its own and is not taken in.
+
 ### Live file (2026-11-10, owner's go-ahead in "Explore saving playlists without the Generator")
 
 On the patched engine (patch 0016's files API), every save of the editor (view edits, a reset, the park

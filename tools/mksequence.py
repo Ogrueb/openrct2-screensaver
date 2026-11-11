@@ -2834,7 +2834,7 @@ def changed_parks(playlist_path, cache_dir, use_edits=True, use_profiles=True, d
 
 
 def build(playlist_path, out_dir, seed=None, layout=None, use_edits=True, overrides=None,
-          use_profiles=True, cache_dir=None, use_live=True, user_dir=None):
+          use_profiles=True, cache_dir=None, use_live=True, user_dir=None, progress=None):
     ctx = prepare(playlist_path, use_edits, overrides, use_profiles, layout, use_live, user_dir)
     playlist, base_dir, name, layout, defaults = ctx["playlist"], ctx["base_dir"], ctx["name"], ctx["layout"], ctx["defaults"]
     entries, edits, park_profiles, park_plugins = ctx["entries"], ctx["edits"], ctx["park_profiles"], ctx["park_plugins"]
@@ -2853,6 +2853,8 @@ def build(playlist_path, out_dir, seed=None, layout=None, use_edits=True, overri
     parks = []
     reused = 0
     for i, e in enumerate(entries):
+        if progress:
+            progress(i, len(entries), e.get("name") or os.path.basename(e["file"]))
         sig = cache.signature(e, base_dir, ctx["context"], park_profiles) if cache else None
         park = cache.get(sig) if sig else None
         if park:
@@ -3162,6 +3164,114 @@ def check_installable(user_dir, force=False):
                          "or pass --force")
 
 
+GENERATOR_FILE = "generator.json"  # in <user dir>/screensaver: what the game runs for screensaver.build()
+
+
+def register_generator(user_dir, name, source):
+    """Name this Python and this script in <user dir>/screensaver/generator.json, with the playlist file
+    the sequence `name` is built from, so the game can rebuild it (screensaver.build, engine patch
+    "build a title sequence in the background"). The game runs only what this file names, and the
+    plugin can't write it: its files API reaches only screensaver/live."""
+    folder = os.path.join(user_dir, "screensaver")
+    path = os.path.join(folder, GENERATOR_FILE)
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            data = {}
+    except (OSError, ValueError):
+        data = {}
+    playlists = data.get("playlists") if isinstance(data.get("playlists"), dict) else {}
+    if source:
+        playlists[name] = os.path.abspath(source)
+    data = {"version": 1, "python": os.path.abspath(sys.executable), "script": os.path.abspath(__file__),
+            "playlists": playlists}
+    os.makedirs(folder, exist_ok=True)
+    write_json_atomic(path, data, indent=1)
+    return path
+
+
+def write_json_atomic(path, data, **kwargs):
+    """Write JSON beside the file and rename it over, so a reader (the game) never sees half a file."""
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), suffix=".tmp")
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump(data, f, **kwargs)
+    os.replace(tmp, path)
+
+
+def live_build_paths(name, user_dir):
+    """Where a build the game started goes: (output folder, result file for the plugin). The result sits
+    in the live folder, where the plugin's files API reads it (screensaver.readFile)."""
+    out = os.path.join(user_dir, "screensaver", "build", "live")
+    return out, os.path.join(livefile.folder(user_dir), "build-" + livefile.file_name(name))
+
+
+def file_bytes(path):
+    try:
+        with open(path, "rb") as f:
+            return f.read()
+    except OSError:
+        return None
+
+
+def live_build(name, user_dir):
+    """Build the playlist installed as title sequence `name` while the game runs (started by the game:
+    screensaver.build). The build goes to <user dir>/screensaver/build/live/<name>, never into the
+    installed sequence or plugin.store.json (both the game's while it runs): the plugin takes the
+    result from build-<name>.json in the live folder and has the game copy the sequence in
+    (screensaver.applyBuild). Edits from the game apply as they do to any build (the live file).
+    Returns the process exit code."""
+    out_dir, result_path = live_build_paths(name, user_dir)
+    os.makedirs(os.path.dirname(result_path), exist_ok=True)
+    started = int(time.time() * 1000)
+    base = {"buildVersion": 1, "sequence": name, "started": started}
+
+    def progress(i, n, park):
+        write_json_atomic(result_path, dict(base, ok=None, park=i + 1, parks=n, parkName=park))
+
+    try:
+        progress(-1, 0, "")
+        try:
+            with open(os.path.join(user_dir, "screensaver", GENERATOR_FILE), encoding="utf-8") as f:
+                source = (json.load(f).get("playlists") or {}).get(name)
+        except (OSError, ValueError, AttributeError):
+            source = None
+        if not isinstance(source, str) or not os.path.isfile(source):
+            raise ValueError("no playlist file is known for \"%s\"%s; install it once with mksequence.py --install"
+                             % (name, " (%s is missing)" % source if isinstance(source, str) else ""))
+        result = build(source, out_dir, cache_dir=os.path.join(user_dir, "screensaver", "park-cache"),
+                       user_dir=user_dir, progress=progress)
+        if result["name"] != name:
+            raise ValueError("%s is now named \"%s\"; install it with mksequence.py --install" % (source, result["name"]))
+        if result["layout"] != "plugin" or not result["playlist"]:
+            raise ValueError("%s does not use the plugin layout; install it with mksequence.py --install" % source)
+        warnings = ["%s: %s" % (p["name"], w) for p in result["parks"] for w in p["warnings"]]
+        # What only a restart of the game takes in: the plugin itself and the parks' scripts.
+        restart = []
+        plugin_dir = os.path.join(user_dir, "plugin")
+        if os.path.exists(PLUGIN_FILE) and file_bytes(PLUGIN_FILE) != file_bytes(os.path.join(plugin_dir, os.path.basename(PLUGIN_FILE))):
+            restart.append("plugin")
+        installed = sorted(f for f in (os.listdir(plugin_dir) if os.path.isdir(plugin_dir) else [])
+                           if f.startswith(companions.FILE_PREFIX) and f.endswith(".js"))
+        if installed != sorted(f for f, _, _ in result["companions"]) or any(
+                file_bytes(os.path.join(result["companionDir"], f)) != file_bytes(os.path.join(plugin_dir, f))
+                for f, _, _ in result["companions"]):
+            restart.append("park scripts")
+        playlist = dict(result["playlist"], source=result["source"])
+        write_json_atomic(result_path, dict(base, ok=True, finished=int(time.time() * 1000), playlist=playlist,
+                                            titleMusic=result["titleMusic"], warnings=warnings, restart=restart,
+                                            live=result.get("live")))
+        print("built %s: %d park(s)%s" % (result["dir"], len(result["parks"]),
+                                          "; a restart takes in the " + " and the ".join(restart) if restart else ""))
+        return 0
+    except Exception as e:  # anything: the game shows it
+        import traceback
+        traceback.print_exc()
+        write_json_atomic(result_path, dict(base, ok=False, finished=int(time.time() * 1000),
+                                            error=str(e) or e.__class__.__name__))
+        return 1
+
+
 def install(result, user_dir, pulled=(), camera_log=False, props_pulled=False):
     steps = []
     target = os.path.join(user_dir, "sequence", result["name"])
@@ -3172,6 +3282,8 @@ def install(result, user_dir, pulled=(), camera_log=False, props_pulled=False):
     store_path = os.path.join(user_dir, "plugin.store.json")
     update_plugin_store(store_path, result, pulled, camera_log, props_pulled)
     steps.append(("playlist -> " if result["playlist"] else "cleared playlist in ") + store_path)
+    if result["playlist"] and result.get("source"):
+        steps.append("generator -> " + register_generator(user_dir, result["name"], result["source"]))
     if os.path.exists(PLUGIN_FILE):
         os.makedirs(os.path.join(user_dir, "plugin"), exist_ok=True)
         dest = os.path.join(user_dir, "plugin", os.path.basename(PLUGIN_FILE))
@@ -3222,6 +3334,9 @@ def main():
     ap.add_argument("--install-built", metavar="RESULT_JSON",
                     help="install a build made earlier (<out>/<name>.result.json) without building again; "
                          "editor views in the store stay there and keep playing")
+    ap.add_argument("--live-build", metavar="SEQUENCE",
+                    help="build the installed playlist of that title sequence name for the running game (the game "
+                         "starts this: screensaver.build); the result goes to <user dir>/screensaver/build/live")
     ap.add_argument("-o", "--out", default="build/sequence", help="output directory (default: build/sequence)")
     ap.add_argument("--seed", type=int, help="seed for order = 'shuffle'")
     ap.add_argument("--layout", choices=LAYOUTS, help="overrides the playlist's layout (default: plugin)")
@@ -3255,6 +3370,8 @@ def main():
         for item in args.set:
             overrides.update(tomllib.loads(item))
         user_dir = args.user_dir or default_user_dir()
+        if args.live_build:
+            sys.exit(live_build(args.live_build, user_dir))
         if args.install_built:
             check_installable(user_dir, args.force)
             result = load_built(args.install_built)

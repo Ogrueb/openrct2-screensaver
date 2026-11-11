@@ -30,6 +30,7 @@ const sequence = {
     isPlaying: false, position: null, stops: 0,
     play() { this.isPlaying = true; this.position = 1; },
     seek(i) {
+        this.lastSeek = i;
         if (!this.backgroundLoading) { this.position = i + 1; return; }
         // Patch 0014: the park is read in the background, ready a second later, and switched to
         // only once the plugin lets go of the switch.
@@ -67,6 +68,12 @@ const mode = {
     writeFile(name, text) { if (!/^[A-Za-z0-9_-][A-Za-z0-9._-]*\.json$/.test(name)) return false; this.files.set(name, text); return true; },
     listFiles() { return [...this.files.keys()].sort(); },
     clipboard: "",
+    // Builds (engine patch "build a title sequence in the background"): set by the test below.
+    builds: [], applied: [], buildFails: undefined,
+    buildStatus: { state: "idle", sequence: "", exitCode: 0, started: 0, finished: 0, error: "" },
+    build(name) { if (this.buildFails) throw new Error(this.buildFails); this.builds.push(name); this.buildStatus = { ...this.buildStatus, state: "running", sequence: name, started: now }; },
+    cancelBuild() { return false; },
+    applyBuild(name) { this.applied.push(name); this.onApply?.(); },
 };
 const shortcuts = {};
 const toolbox = [];
@@ -861,7 +868,57 @@ tick(10);
 assert.equal(scene.has("rcts.cover"), false, "and is removed");
 console.log("ok: park changes dip through black in the mode (patch 0010)");
 
-// Performance runs (engine patch 0017, tools/perfrun.py): the plugin's events go into the engine's
+// Builds from the game: the editor's Build and play starts the generator, follows it, and once it is
+// done has the engine put the new sequence in place and plays the new playlist from the same park.
+{
+    const ed = id => scene.get("rcts.ed." + id);
+    const edClick = id => { const e = ed(id); const x = e.x + e.width / 2, y = e.y + e.height / 2; mouse("move", x, y); mouse("down", x, y); mouse("up", x, y); };
+    tick(40);
+    const before = playlist.parks.find(p => p.load === sequence.lastSeek);
+    shortcuts["rctscreensaver.edit"]();
+    tick();
+    assert.ok(ed("build"), "a Build button in the Playlist section");
+    mode.buildFails = "No generator registered";
+    edClick("build"); tick(6);
+    assert.ok(ed("build.line").text.startsWith("Build failed: No generator"), "a build that cannot start says why");
+    mode.buildFails = undefined;
+    edClick("build"); tick();
+    assert.deepEqual(mode.builds, [playlist.sequence], "the build is of the playing playlist");
+    const fileName = "build-" + playlist.sequence.replace(/[^A-Za-z0-9._-]/g, "_") + ".json";
+    mode.files.set(fileName, JSON.stringify({ buildVersion: 1, sequence: playlist.sequence, started: now, ok: null, park: 2, parks: 3 }));
+    tick(6);
+    assert.match(ed("build.line").text, /^Building: park 2 of 3/, "progress from the result file");
+    assert.equal(ed("build").text ?? scene.get("rcts.ed.build.text")?.text ?? "Cancel build", "Cancel build");
+    // The new build: the parks in the opposite order, so every LOAD moves.
+    const built = JSON.parse(JSON.stringify(playlist));
+    built.parks.reverse();
+    built.parks.forEach((p, i) => { p.load = 2 * i; });
+    built.built = now;
+    mode.onApply = () => {
+        commands.length = 0;
+        built.parks.forEach((p, i) => { commands[p.load] = { type: "load", index: i }; commands[p.load + 1] = { type: "wait" }; });
+        sequence.parks = built.parks.map(p => ({ fileName: p.fileName }));
+        sequence.position = 0;
+    };
+    mode.files.set(fileName, JSON.stringify({ buildVersion: 1, sequence: playlist.sequence, started: now, ok: true, finished: now,
+        playlist: built, titleMusic: "ride", warnings: ["a park: a warning"], restart: [] }));
+    mode.buildStatus = { ...mode.buildStatus, state: "done", finished: now };
+    tick(6);
+    assert.deepEqual(mode.applied, [playlist.sequence], "the engine puts the build in place");
+    const installed = saved["RCTScreensaver.playlist"];
+    assert.ok(installed && installed.built === built.built && installed.installed > 0, "and the new playlist is installed in the storage");
+    const now_ = built.parks.find(p => p.load === sequence.lastSeek);
+    assert.equal(now_?.key ?? now_?.fileName, before.key ?? before.fileName, "the same park plays on, from its new LOAD");
+    assert.match(ed("build.line").text, /^Built at .*now playing; 1 warning/, "the line says it plays");
+    tick(40);
+    shortcuts["rctscreensaver.edit"]();
+    tick();
+    // The rest of the run plays the new layout.
+    playlist.parks = built.parks;
+}
+console.log("ok: builds from the game (Build and play, progress, the live swap)");
+
+// Performance runs (engine patch 0018, tools/perfrun.py): the plugin's events go into the engine's
 // perf log as marks; bench mode keeps the mouse from showing the bar (marked instead) and starts
 // OpenRCT2's function profiler, exported on an interval.
 const marks = [];
@@ -883,6 +940,6 @@ assert.ok(marks.includes("input move"), "and the input is marked for the report 
 assert.ok(legacy.includes("profiler_start"), "the function profiler starts");
 assert.ok(intervals.some(v => v.ms === 60000), "and is exported every minute");
 assert.ok(legacy.includes('profiler_export "C:/perf run/profiler.csv"'), "to the quoted path");
-console.log("ok: perf marks, bench mode and the profiler (patch 0017)");
+console.log("ok: perf marks, bench mode and the profiler (patch 0018)");
 
 console.log("ok: screensaver mode (start, stop, keys, settings, no toolbox items)");

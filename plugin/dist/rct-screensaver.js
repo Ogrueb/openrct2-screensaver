@@ -1,141 +1,5 @@
 "use strict";
 (() => {
-  // src/fit.ts
-  var TILE = 32;
-  var MIN_SEPARATION = 0.25;
-  var MIN_ZOOM = -2;
-  var MAX_ZOOM = 3;
-  var OVERVIEW_FILL = 0.95;
-  function toScreen(x, y, z, rotation) {
-    const [a, b] = [[x, y], [y, -x], [-x, -y], [-y, x]][rotation & 3];
-    return { x: b - a, y: (a + b) / 2 - z };
-  }
-  function toWorld(p, z, rotation) {
-    const a = p.y + z - p.x / 2;
-    const b = p.y + z + p.x / 2;
-    const [x, y] = [[a, b], [-b, a], [-a, -b], [b, -a]][rotation & 3];
-    return { x, y };
-  }
-  function frameAxis(centre, size, lo, hi) {
-    return hi - lo <= size ? Math.min(lo + size / 2, Math.max(hi - size / 2, centre)) : Math.min(hi - size / 2, Math.max(lo + size / 2, centre));
-  }
-  function clampAxis(centre, size, lo, hi) {
-    if (hi - lo <= size) {
-      return (lo + hi) / 2;
-    }
-    return Math.min(hi - size / 2, Math.max(lo + size / 2, centre));
-  }
-  function extentOf(bounds, rotation, z) {
-    const corners = [];
-    for (const h of [bounds.z0 ?? z, bounds.z1 ?? z]) {
-      for (const [x, y] of [
-        [bounds.x0, bounds.y0],
-        [bounds.x1 + 1, bounds.y0],
-        [bounds.x0, bounds.y1 + 1],
-        [bounds.x1 + 1, bounds.y1 + 1]
-      ]) {
-        corners.push(toScreen(x * TILE, y * TILE, h, rotation));
-      }
-    }
-    const xs = corners.map((c) => c.x);
-    const ys = corners.map((c) => c.y);
-    return { xlo: Math.min(...xs), xhi: Math.max(...xs), ylo: Math.min(...ys), yhi: Math.max(...ys) };
-  }
-  function viewAt(view, p) {
-    const world = toWorld(p, view.z, view.rotation);
-    return { ...view, x: (world.x - TILE / 2) / TILE, y: (world.y - TILE / 2) / TILE };
-  }
-  function contentExtent(bounds, rotation, z, measure2) {
-    const measured2 = measure2?.(rotation);
-    if (measured2) {
-      return measured2;
-    }
-    const zm = bounds.zm ?? ((bounds.z0 ?? z) + (bounds.z1 ?? z)) / 2;
-    const centre = bounds.cx !== void 0 && bounds.cy !== void 0 ? toScreen(bounds.cx * TILE, bounds.cy * TILE, zm, rotation) : void 0;
-    return { ...extentOf(bounds, rotation, z), z: zm, cx: centre?.x, cy: centre?.y };
-  }
-  function lookAt(base, x, y, z, rotation) {
-    const world = toWorld({ x, y }, z, rotation);
-    return { ...base, rotation, x: (world.x - TILE / 2) / TILE, y: (world.y - TILE / 2) / TILE, z };
-  }
-  function fitZoom(e, screen) {
-    let zoom = MIN_ZOOM;
-    while (zoom < MAX_ZOOM && (e.xhi - e.xlo > screen.width * Math.pow(2, zoom) * OVERVIEW_FILL || e.yhi - e.ylo > screen.height * Math.pow(2, zoom) * OVERVIEW_FILL)) {
-      zoom++;
-    }
-    return zoom;
-  }
-  function fitOverview(view, bounds, screen, measure2, wide = 0) {
-    const e = contentExtent(bounds, view.rotation, view.z, measure2);
-    const flat = extentOf({ ...bounds, z1: bounds.z0 }, view.rotation, view.z);
-    const zoom = fitZoom(flat, screen) <= wide ? Math.min(fitZoom(e, screen), wide) : fitZoom(e, screen);
-    const scale = Math.pow(2, zoom);
-    const x = frameAxis(e.cx ?? (e.xlo + e.xhi) / 2, screen.width * scale * OVERVIEW_FILL, e.xlo, e.xhi);
-    const y = frameAxis(e.cy ?? (e.ylo + e.yhi) / 2, screen.height * scale * OVERVIEW_FILL, e.ylo, e.yhi);
-    return { ...lookAt(view, x, y, Math.round(e.z ?? view.z), view.rotation), zoom };
-  }
-  function fitViews(views, bounds, screen, budget = views.length, measure2, zoomOffset = 0) {
-    const overview = views.find((v) => v.overview);
-    const others = views.filter((v) => !v.overview);
-    const head = overview ? [fitOverview(overview, bounds, screen, measure2, zoomOffset)] : [];
-    const fitted = [...head, ...clampViews(others, bounds, screen, head[0]?.rotation)];
-    if (fitted.length >= budget || views.length === 0) {
-      return fitted;
-    }
-    const first = others.find((v) => v.animation === void 0 && !v.fixed) ?? others[0] ?? head[0];
-    const count = budget - head.length;
-    const result = [];
-    for (let k = 0; k < count; k++) {
-      const rotation = ((overview ?? first).rotation + k + head.length) % 4;
-      const e = contentExtent(bounds, rotation, first.z, measure2);
-      let zoom = first.zoom;
-      while (zoom < MAX_ZOOM && e.xhi - e.xlo > screen.width * Math.pow(2, zoom)) {
-        zoom++;
-      }
-      if (e.xhi - e.xlo > screen.width * Math.pow(2, zoom) || zoom > Math.max(zoomOffset, first.zoom)) {
-        return fitted;
-      }
-      const base = { ...first, zoom };
-      const width = screen.width * Math.pow(2, zoom);
-      const height = screen.height * Math.pow(2, zoom);
-      const rows = Math.min(count, Math.max(1, Math.ceil((e.yhi - e.ylo) / height)));
-      const row = k % rows;
-      const y = rows === 1 ? (e.ylo + e.yhi) / 2 : e.yhi - height / 2 - row * (e.yhi - e.ylo - height) / (rows - 1);
-      result.push(lookAt(base, (e.xlo + e.xhi) / 2, y, Math.round(e.z ?? base.z), rotation));
-    }
-    return [...head, ...result, ...fitted.filter((v) => v.animation !== void 0)];
-  }
-  function clampViews(views, bounds, screen, overviewRotation) {
-    const result = [];
-    const centres = [];
-    for (const view of views) {
-      const scale = Math.pow(2, view.zoom);
-      const width = screen.width * scale;
-      const height = screen.height * scale;
-      const e = extentOf(bounds, view.rotation, view.z);
-      const centre = toScreen(view.x * TILE + TILE / 2, view.y * TILE + TILE / 2, view.z, view.rotation);
-      if (view.fixed) {
-        centres.push({ ...centre, width, height });
-        result.push(view);
-        continue;
-      }
-      const fitted = {
-        x: clampAxis(centre.x, width, e.xlo, e.xhi),
-        y: clampAxis(centre.y, height, e.ylo, e.yhi)
-      };
-      if (view.rotation === overviewRotation && e.xhi - e.xlo <= width && e.yhi - e.ylo <= height) {
-        continue;
-      }
-      const duplicate = result.some((other, i) => other.rotation === view.rotation && Math.abs(centres[i].x - fitted.x) < Math.min(width, centres[i].width) * MIN_SEPARATION && Math.abs(centres[i].y - fitted.y) < Math.min(height, centres[i].height) * MIN_SEPARATION);
-      if (duplicate) {
-        continue;
-      }
-      centres.push({ ...fitted, width, height });
-      result.push(viewAt(view, fitted));
-    }
-    return result;
-  }
-
   // src/storage.ts
   var NAMESPACE = "RCTScreensaver";
   function isPinned(view) {
@@ -291,6 +155,9 @@
   function loadPlaylist() {
     return context.sharedStorage.get(NAMESPACE + ".playlist");
   }
+  function savePlaylist(playlist) {
+    context.sharedStorage.set(NAMESPACE + ".playlist", playlist);
+  }
   function resolveSequence(playlist) {
     if (playlist.version !== 1) {
       return `unsupported playlist version ${playlist.version}`;
@@ -308,6 +175,274 @@
       }
     }
     return sequence;
+  }
+
+  // src/builder.ts
+  function buildApi() {
+    return typeof screensaver !== "undefined" && screensaver !== null && typeof screensaver.build === "function" && typeof screensaver.applyBuild === "function" ? screensaver : void 0;
+  }
+  function buildFileName(sequence) {
+    return "build-" + liveFileName(sequence);
+  }
+  function readBuildResult(sequence) {
+    const text = filesApi()?.readFile(buildFileName(sequence));
+    if (!text) {
+      return void 0;
+    }
+    try {
+      const result = JSON.parse(text);
+      return result && result.buildVersion === 1 && result.sequence === sequence ? result : void 0;
+    } catch {
+      return void 0;
+    }
+  }
+  var POLL_MS = 500;
+  var STALE_MS = 5e3;
+  function log(message2) {
+    console.log(`[RCT Screensaver] ${message2}`);
+  }
+  function clock(ms) {
+    const s = Math.max(0, Math.round(ms / 1e3));
+    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+  }
+  function timeOfDay(ms) {
+    const d = new Date(ms);
+    return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  }
+  var Builder = class {
+    constructor(api = buildApi()) {
+      this.api = api;
+      // the build this plugin started
+      this.started = 0;
+      this.lastPoll = 0;
+    }
+    get available() {
+      return this.api !== void 0 && filesApi() !== void 0;
+    }
+    get running() {
+      return this.sequence !== void 0;
+    }
+    start(sequence) {
+      if (!this.api || this.running) {
+        return;
+      }
+      try {
+        this.api.build(sequence);
+      } catch (e) {
+        this.outcome = { phase: "failed", text: `Build failed: ${message(e)}`, warning: true };
+        log(`build of "${sequence}" did not start: ${message(e)}`);
+        return;
+      }
+      this.sequence = sequence;
+      this.started = Date.now();
+      this.progress = void 0;
+      this.outcome = void 0;
+      log(`building "${sequence}"`);
+    }
+    cancel() {
+      if (this.api && this.running && this.api.cancelBuild()) {
+        log("build cancelled");
+      }
+    }
+    /** Called on the plugin's update: follows a running build and takes it in when it is done. */
+    update() {
+      if (!this.api || !this.sequence || Date.now() - this.lastPoll < POLL_MS) {
+        return;
+      }
+      this.lastPoll = Date.now();
+      const sequence = this.sequence;
+      const status = this.api.buildStatus;
+      const result = readBuildResult(sequence);
+      const current = result && result.started >= this.started - STALE_MS ? result : void 0;
+      if (status.state === "running") {
+        this.progress = current;
+        return;
+      }
+      this.sequence = void 0;
+      this.progress = void 0;
+      if (status.state === "cancelled") {
+        this.outcome = { phase: "idle", text: "Build cancelled" };
+        return;
+      }
+      if (status.state !== "done" || !current?.ok || !current.playlist) {
+        const why = current?.ok === false && current.error ? current.error : status.error || "the generator failed";
+        this.outcome = { phase: "failed", text: `Build failed: ${why}`, warning: true };
+        log(`build of "${sequence}" failed: ${why} (log: screensaver/build.log in the user folder)`);
+        return;
+      }
+      const error = this.onReady ? this.onReady(current) : "nothing to play it";
+      if (error) {
+        this.outcome = { phase: "failed", text: `Built, but not taken in: ${error}`, warning: true };
+        log(`build of "${sequence}" not taken in: ${error}`);
+        return;
+      }
+      const notes = [
+        current.warnings?.length ? `${current.warnings.length} warning${current.warnings.length > 1 ? "s" : ""}` : "",
+        current.restart?.length ? `restart to load the new ${current.restart.join(" and ")}` : ""
+      ].filter((s) => s);
+      this.outcome = {
+        phase: "done",
+        text: `Built at ${timeOfDay(current.finished ?? Date.now())}, now playing${notes.length ? "; " + notes.join("; ") : ""}`,
+        warning: !!current.restart?.length
+      };
+      for (const w of current.warnings ?? []) {
+        log(`build warning: ${w}`);
+      }
+      log(`build of "${sequence}" now playing`);
+    }
+    /** The line the editor shows. */
+    get line() {
+      if (!this.available) {
+        return { phase: "unavailable", text: "Building from the game needs the patched engine" };
+      }
+      if (this.running) {
+        const p = this.progress;
+        const where = p?.parks ? `park ${p.park} of ${p.parks}` : "starting";
+        return { phase: "running", text: `Building: ${where} (${clock(Date.now() - this.started)})` };
+      }
+      return this.outcome ?? { phase: "idle", text: "Builds the playlist with your edits and plays it" };
+    }
+  };
+  function message(e) {
+    const m = e?.message;
+    return typeof m === "string" ? m : String(e);
+  }
+  var builder = new Builder();
+
+  // src/fit.ts
+  var TILE = 32;
+  var MIN_SEPARATION = 0.25;
+  var MIN_ZOOM = -2;
+  var MAX_ZOOM = 3;
+  var OVERVIEW_FILL = 0.95;
+  function toScreen(x, y, z, rotation) {
+    const [a, b] = [[x, y], [y, -x], [-x, -y], [-y, x]][rotation & 3];
+    return { x: b - a, y: (a + b) / 2 - z };
+  }
+  function toWorld(p, z, rotation) {
+    const a = p.y + z - p.x / 2;
+    const b = p.y + z + p.x / 2;
+    const [x, y] = [[a, b], [-b, a], [-a, -b], [b, -a]][rotation & 3];
+    return { x, y };
+  }
+  function frameAxis(centre, size, lo, hi) {
+    return hi - lo <= size ? Math.min(lo + size / 2, Math.max(hi - size / 2, centre)) : Math.min(hi - size / 2, Math.max(lo + size / 2, centre));
+  }
+  function clampAxis(centre, size, lo, hi) {
+    if (hi - lo <= size) {
+      return (lo + hi) / 2;
+    }
+    return Math.min(hi - size / 2, Math.max(lo + size / 2, centre));
+  }
+  function extentOf(bounds, rotation, z) {
+    const corners = [];
+    for (const h of [bounds.z0 ?? z, bounds.z1 ?? z]) {
+      for (const [x, y] of [
+        [bounds.x0, bounds.y0],
+        [bounds.x1 + 1, bounds.y0],
+        [bounds.x0, bounds.y1 + 1],
+        [bounds.x1 + 1, bounds.y1 + 1]
+      ]) {
+        corners.push(toScreen(x * TILE, y * TILE, h, rotation));
+      }
+    }
+    const xs = corners.map((c) => c.x);
+    const ys = corners.map((c) => c.y);
+    return { xlo: Math.min(...xs), xhi: Math.max(...xs), ylo: Math.min(...ys), yhi: Math.max(...ys) };
+  }
+  function viewAt(view, p) {
+    const world = toWorld(p, view.z, view.rotation);
+    return { ...view, x: (world.x - TILE / 2) / TILE, y: (world.y - TILE / 2) / TILE };
+  }
+  function contentExtent(bounds, rotation, z, measure2) {
+    const measured2 = measure2?.(rotation);
+    if (measured2) {
+      return measured2;
+    }
+    const zm = bounds.zm ?? ((bounds.z0 ?? z) + (bounds.z1 ?? z)) / 2;
+    const centre = bounds.cx !== void 0 && bounds.cy !== void 0 ? toScreen(bounds.cx * TILE, bounds.cy * TILE, zm, rotation) : void 0;
+    return { ...extentOf(bounds, rotation, z), z: zm, cx: centre?.x, cy: centre?.y };
+  }
+  function lookAt(base, x, y, z, rotation) {
+    const world = toWorld({ x, y }, z, rotation);
+    return { ...base, rotation, x: (world.x - TILE / 2) / TILE, y: (world.y - TILE / 2) / TILE, z };
+  }
+  function fitZoom(e, screen) {
+    let zoom = MIN_ZOOM;
+    while (zoom < MAX_ZOOM && (e.xhi - e.xlo > screen.width * Math.pow(2, zoom) * OVERVIEW_FILL || e.yhi - e.ylo > screen.height * Math.pow(2, zoom) * OVERVIEW_FILL)) {
+      zoom++;
+    }
+    return zoom;
+  }
+  function fitOverview(view, bounds, screen, measure2, wide = 0) {
+    const e = contentExtent(bounds, view.rotation, view.z, measure2);
+    const flat = extentOf({ ...bounds, z1: bounds.z0 }, view.rotation, view.z);
+    const zoom = fitZoom(flat, screen) <= wide ? Math.min(fitZoom(e, screen), wide) : fitZoom(e, screen);
+    const scale = Math.pow(2, zoom);
+    const x = frameAxis(e.cx ?? (e.xlo + e.xhi) / 2, screen.width * scale * OVERVIEW_FILL, e.xlo, e.xhi);
+    const y = frameAxis(e.cy ?? (e.ylo + e.yhi) / 2, screen.height * scale * OVERVIEW_FILL, e.ylo, e.yhi);
+    return { ...lookAt(view, x, y, Math.round(e.z ?? view.z), view.rotation), zoom };
+  }
+  function fitViews(views, bounds, screen, budget = views.length, measure2, zoomOffset = 0) {
+    const overview = views.find((v) => v.overview);
+    const others = views.filter((v) => !v.overview);
+    const head = overview ? [fitOverview(overview, bounds, screen, measure2, zoomOffset)] : [];
+    const fitted = [...head, ...clampViews(others, bounds, screen, head[0]?.rotation)];
+    if (fitted.length >= budget || views.length === 0) {
+      return fitted;
+    }
+    const first = others.find((v) => v.animation === void 0 && !v.fixed) ?? others[0] ?? head[0];
+    const count = budget - head.length;
+    const result = [];
+    for (let k = 0; k < count; k++) {
+      const rotation = ((overview ?? first).rotation + k + head.length) % 4;
+      const e = contentExtent(bounds, rotation, first.z, measure2);
+      let zoom = first.zoom;
+      while (zoom < MAX_ZOOM && e.xhi - e.xlo > screen.width * Math.pow(2, zoom)) {
+        zoom++;
+      }
+      if (e.xhi - e.xlo > screen.width * Math.pow(2, zoom) || zoom > Math.max(zoomOffset, first.zoom)) {
+        return fitted;
+      }
+      const base = { ...first, zoom };
+      const width = screen.width * Math.pow(2, zoom);
+      const height = screen.height * Math.pow(2, zoom);
+      const rows = Math.min(count, Math.max(1, Math.ceil((e.yhi - e.ylo) / height)));
+      const row = k % rows;
+      const y = rows === 1 ? (e.ylo + e.yhi) / 2 : e.yhi - height / 2 - row * (e.yhi - e.ylo - height) / (rows - 1);
+      result.push(lookAt(base, (e.xlo + e.xhi) / 2, y, Math.round(e.z ?? base.z), rotation));
+    }
+    return [...head, ...result, ...fitted.filter((v) => v.animation !== void 0)];
+  }
+  function clampViews(views, bounds, screen, overviewRotation) {
+    const result = [];
+    const centres = [];
+    for (const view of views) {
+      const scale = Math.pow(2, view.zoom);
+      const width = screen.width * scale;
+      const height = screen.height * scale;
+      const e = extentOf(bounds, view.rotation, view.z);
+      const centre = toScreen(view.x * TILE + TILE / 2, view.y * TILE + TILE / 2, view.z, view.rotation);
+      if (view.fixed) {
+        centres.push({ ...centre, width, height });
+        result.push(view);
+        continue;
+      }
+      const fitted = {
+        x: clampAxis(centre.x, width, e.xlo, e.xhi),
+        y: clampAxis(centre.y, height, e.ylo, e.yhi)
+      };
+      if (view.rotation === overviewRotation && e.xhi - e.xlo <= width && e.yhi - e.ylo <= height) {
+        continue;
+      }
+      const duplicate = result.some((other, i) => other.rotation === view.rotation && Math.abs(centres[i].x - fitted.x) < Math.min(width, centres[i].width) * MIN_SEPARATION && Math.abs(centres[i].y - fitted.y) < Math.min(height, centres[i].height) * MIN_SEPARATION);
+      if (duplicate) {
+        continue;
+      }
+      centres.push({ ...fitted, width, height });
+      result.push(viewAt(view, fitted));
+    }
+    return result;
   }
 
   // src/editor.ts
@@ -330,7 +465,7 @@
   var EDITOR_COLUMNS = ["#", "Tile", "Angle", "Zoom", "Hold", "Pan", "Set by"];
   var EVENT_COLUMNS = ["#", "Kind", "Name", "Trigger", "Hold", "Plays"];
   var TICKS_PER_SECOND = 40;
-  function clock(ticks) {
+  function clock2(ticks) {
     const s = Math.max(0, Math.round(ticks / TICKS_PER_SECOND));
     return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
   }
@@ -1187,14 +1322,14 @@
         let plays = after;
         if (cue && cue.tick !== void 0) {
           kind = "clock";
-          trigger = `at ${clock(cue.tick)}` + (cue.every ? `, every ${clock(cue.every)}` : "");
+          trigger = `at ${clock2(cue.tick)}` + (cue.every ? `, every ${clock2(cue.every)}` : "");
           if (cue.cut) {
             const start = cue.tick - (cue.lead ?? 0) * TICKS_PER_SECOND;
             let next = start;
             if (cue.every && next < now) {
               next += Math.ceil((now - next) / cue.every) * cue.every;
             }
-            plays = this.player.cutPlayed(i) && !cue.every ? "played" : next <= now ? "now" : `in ${clock(next - now)}`;
+            plays = this.player.cutPlayed(i) && !cue.every ? "played" : next <= now ? "now" : `in ${clock2(next - now)}`;
           }
         } else if (cue) {
           kind = "train";
@@ -2087,8 +2222,8 @@
   var CUT_STAY_S = 4;
   var LATE_MIN_TICKS = 160;
   var CHAIN_S = 4;
-  function log(message) {
-    console.log(`[RCT Screensaver] ${message}`);
+  function log2(message2) {
+    console.log(`[RCT Screensaver] ${message2}`);
   }
   function range2(n) {
     return Array.from({ length: n }, (_, i) => i);
@@ -2204,7 +2339,7 @@
     }
     start() {
       if (this.playlist.parks.length === 0) {
-        log("playlist has no parks");
+        log2("playlist has no parks");
         return;
       }
       this.running = true;
@@ -2216,7 +2351,7 @@
       if (!this.sequence.isPlaying) {
         this.sequence.play();
       }
-      log(`playing "${this.playlist.sequence}" (${this.playlist.parks.length} parks)`);
+      log2(`playing "${this.playlist.sequence}" (${this.playlist.parks.length} parks)`);
       this.enterPark(this.settings.shuffle ? context.getRandom(0, this.parkOrder.length) : 0, false);
     }
     stop() {
@@ -2226,6 +2361,28 @@
       this.cover.close();
       this.releaseSwitch();
       this.clearPan();
+    }
+    /** Plays a new build of the playlist (the engine has put its sequence in place and reloaded the
+     *  script): the park on screen is entered again from the new sequence (it dips through black as a
+     *  park change does), at its place in the new order, or the first park when the build dropped it. */
+    swapPlaylist(playlist) {
+      const keyOf = (p) => p.key ?? p.fileName;
+      const current = this.running && this.parkOrder.length ? keyOf(this.currentPark()) : void 0;
+      this.playlist = playlist;
+      if (!this.running) {
+        return;
+      }
+      this.parkOrder = this.orderFromProps();
+      this.unplayed.clear();
+      this.history = [];
+      this.upNext = void 0;
+      this.loadingPark = false;
+      this.dipping = false;
+      const at = this.parkOrder.findIndex((i) => keyOf(playlist.parks[i]) === current);
+      log2(`playing the new build of "${playlist.sequence}" (${playlist.parks.length} parks)`);
+      if (this.parkOrder.length) {
+        this.enterPark(Math.max(0, at), false);
+      }
     }
     /** Stops, and hands the title screen back to the user's own title sequence. */
     release() {
@@ -2292,7 +2449,7 @@
       }
       this.cover.update();
       if (!this.sequence.isPlaying) {
-        log("title sequence stopped playing; restarting");
+        log2("title sequence stopped playing; restarting");
         this.sequence.play();
         this.enterPark(this.parkPos, false);
         return;
@@ -2300,7 +2457,7 @@
       if (this.loadingPark) {
         const timeout = backgroundLoading(this.sequence) ? BACKGROUND_LOAD_TIMEOUT_MS : LOAD_TIMEOUT_MS;
         if (!this.parkIsLoaded() && (Date.now() - this.seeked > timeout || this.loadSkipped())) {
-          log(`"${this.currentPark().name}" did not load; skipping it`);
+          log2(`"${this.currentPark().name}" did not load; skipping it`);
           this.skipFailedPark();
           return;
         }
@@ -2418,7 +2575,7 @@
       } else {
         this.viewStarted = Date.now();
       }
-      log(this.holding ? "holding view" : "released view");
+      log2(this.holding ? "holding view" : "released view");
     }
     toggleShuffle() {
       this.settings.shuffle = !this.settings.shuffle;
@@ -2426,7 +2583,7 @@
       this.unplayed.clear();
       this.history = [];
       this.pickNext();
-      log(`shuffle ${this.settings.shuffle ? "on" : "off"}`);
+      log2(`shuffle ${this.settings.shuffle ? "on" : "off"}`);
     }
     changeSpeed(delta) {
       const speed = Math.min(MAX_SPEED, Math.max(MIN_SPEED, this.settings.speed + delta));
@@ -2435,7 +2592,7 @@
         saveSettings(this.settings);
       }
       this.applySpeed();
-      log(`speed ${speed}`);
+      log2(`speed ${speed}`);
     }
     setEditing(on) {
       this.editing = on;
@@ -2785,7 +2942,7 @@
      * values, read by tools/cameralog.py. */
     camLog(event, values) {
       if (this.settings.cameraLog) {
-        log(`camera ${Date.now() - this.camEpoch} ${event} ${values}`);
+        log2(`camera ${Date.now() - this.camEpoch} ${event} ${values}`);
       }
       perfMark(`${event} ${values}`);
     }
@@ -3181,7 +3338,7 @@
       }
       context.executeAction("gamesetspeed", { speed }, (result) => {
         if (result.error) {
-          log(`could not set speed ${speed}: ${result.errorMessage ?? result.error}`);
+          log2(`could not set speed ${speed}: ${result.errorMessage ?? result.error}`);
         }
       });
     }
@@ -3217,7 +3374,7 @@
       if (view?.show?.name !== name) {
         return;
       }
-      log(`show "${name}" finished`);
+      log2(`show "${name}" finished`);
       if (view.path && this.pathStarted && this.pathTicks < pathArrival(view)) {
         this.showOver = true;
         return;
@@ -3311,7 +3468,7 @@
         this.showView(false, "reenter");
         return;
       }
-      log(`park ${pos + 1}/${this.parkOrder.length}: ${park.name}`);
+      log2(`park ${pos + 1}/${this.parkOrder.length}: ${park.name}`);
       perfMark(`park ${pos + 1}/${this.parkOrder.length} ${park.name}`);
       this.loadingPark = true;
       if (!this.soundsFaded) {
@@ -3330,7 +3487,7 @@
       try {
         this.sequence.seek(park.load);
       } catch (e) {
-        log(`failed to load "${park.name}": ${e}`);
+        log2(`failed to load "${park.name}": ${e}`);
         this.skipFailedPark();
       }
     }
@@ -3403,7 +3560,7 @@
         const name = view.show.name;
         context.executeAction(view.show.action, { show: name }, (result) => {
           if (result.error) {
-            log(`show "${name}" not started: ${result.errorMessage ?? result.error}`);
+            log2(`show "${name}" not started: ${result.errorMessage ?? result.error}`);
           }
         });
       }
@@ -5174,6 +5331,8 @@
       this.followed = -1;
       // the restore point highlighted
       this.propsOpen = true;
+      // the Playlist properties unfolded
+      this.buildShown = "";
       // the top-right box unfolded by hand (undefined: by the window's width)
       this.lastMove = 0;
       // the pin off: the panes hide this long after the mouse last moved
@@ -5213,7 +5372,8 @@
       const e = this.editor;
       e?.syncMap();
       const second = e && this.eventsRect && !this.hidden ? Math.floor(e.playback.parkClock / 40) : -1;
-      if (second >= 0 && second !== this.clockShown && !this.busy || e && e.playback.isLoading !== this.loadingShown) {
+      const build = e && !this.hidden && !this.boxFolded() ? builder.line.text : this.buildShown;
+      if (second >= 0 && second !== this.clockShown && !this.busy || e && e.playback.isLoading !== this.loadingShown || build !== this.buildShown && !this.busy) {
         this.render();
       }
       if (!e || e.pinned || this.hidden || this.busy || this.over(this.mouse.x, this.mouse.y)) {
@@ -5574,6 +5734,14 @@
           break;
         case "save":
           e.playback.savePlaylistProps();
+          break;
+        case "build":
+          if (builder.running) {
+            builder.cancel();
+          } else {
+            e.playback.savePlaylistProps();
+            builder.start(e.playback.sequenceName);
+          }
           break;
       }
     }
@@ -6174,7 +6342,24 @@
       btn("save", "save", "Save", x0, third, unsaved ? "Save (written to the playlist at install)" : "Nothing to save", !unsaved);
       btn("import", "import", "Import", x0 + third + 4, third, "Import playlist (coming later)", true);
       btn("export", "export", "Export", x0 + inner - third, third, "Export playlist (coming later)", true);
-      y += s.boxButton;
+      y += s.boxButton + 4;
+      const line = builder.line;
+      this.buildShown = line.text;
+      const building = line.phase === "running";
+      btn(
+        "build",
+        building ? "close" : "build",
+        building ? "Cancel build" : "Build and play",
+        x0,
+        inner,
+        line.phase === "unavailable" ? line.text : building ? "Stop the build; the playlist plays on as it was" : "Build the playlist with your edits in the background, then play the new build",
+        line.phase === "unavailable"
+      );
+      y += s.boxButton + 2;
+      const shown = fit(overlay, line.text, 12, inner);
+      label(scene, "build.line", shown, { x: x0, y, width: 0, height: 18 }, 12, overlay);
+      scene.set("build.line", { ...scene.get("build.line"), colour: line.warning ? THEME.warning : line.phase === "done" ? THEME.textGood : THEME.textDim });
+      y += 18;
       const frame = { x: x0 - s.pad, y: top, width, height: y - top + s.pad };
       this.frames.push(frame);
       backing(scene, "box", frame, THEME.editorBacking);
@@ -6311,14 +6496,14 @@
   var lastInputMark = 0;
   var profilerTimer;
   var PROFILER_EXPORT_MS = 6e4;
-  function log2(message) {
-    console.log(`[RCT Screensaver] ${message}`);
+  function log3(message2) {
+    console.log(`[RCT Screensaver] ${message2}`);
   }
   function startPlayer() {
     const settings = loadSettings();
     const playlist = loadPlaylist();
     if (!playlist) {
-      log2("no playlist installed; run tools/mksequence.py --install");
+      log3("no playlist installed; run tools/mksequence.py --install");
       return;
     }
     if (playlist.titles && TITLES.includes(playlist.titles)) {
@@ -6326,7 +6511,7 @@
     }
     const sequence = resolveSequence(playlist);
     if (typeof sequence === "string") {
-      log2(sequence);
+      log3(sequence);
       return;
     }
     player = new Player(playlist, sequence, settings, mode?.active ? mode.overlay : void 0);
@@ -6360,7 +6545,38 @@
     }
     player = void 0;
   }
+  function takeBuild(result) {
+    const api = buildApi();
+    if (!api || !player?.isRunning || !result.playlist) {
+      return "the screensaver is not playing";
+    }
+    if (result.playlist.sequence !== player.sequenceName) {
+      return `another playlist is playing ("${player.sequenceName}")`;
+    }
+    try {
+      api.applyBuild(result.sequence);
+    } catch (e) {
+      return message(e);
+    }
+    const old = loadPlaylist();
+    const playlist = { ...result.playlist, installed: Date.now(), source: result.playlist.source ?? old?.source };
+    const check = resolveSequence(playlist);
+    if (typeof check === "string") {
+      return check;
+    }
+    savePlaylist(playlist);
+    if (result.titleMusic) {
+      const settings = player.liveSettings;
+      settings.titleMusic = result.titleMusic;
+      saveSettings(settings);
+      player.noteInstalledMusic(result.titleMusic);
+    }
+    player.swapPlaylist(playlist);
+    return void 0;
+  }
+  builder.onReady = takeBuild;
   function update() {
+    builder.update();
     if (context.mode !== "title") {
       if (onTitleScreen) {
         onTitleScreen = false;
@@ -6387,7 +6603,7 @@
     editorPanel?.update();
     if (player.debug && Date.now() - lastDebug >= DEBUG_INTERVAL_MS) {
       lastDebug = Date.now();
-      log2(player.describe());
+      log3(player.describe());
     }
   }
   function onTitle(action) {
@@ -6495,7 +6711,7 @@
       settings.debug = !settings.debug;
       saveSettings(settings);
       player?.setDebug(settings.debug);
-      log2(`debug log ${settings.debug ? "on" : "off"}`);
+      log3(`debug log ${settings.debug ? "on" : "off"}`);
     });
   }
   function startProfiler(path) {
@@ -6503,7 +6719,7 @@
       return;
     }
     console.executeLegacy("profiler_start");
-    log2(`profiler on, exporting to ${path}`);
+    log3(`profiler on, exporting to ${path}`);
     profilerTimer = context.setInterval(() => console.executeLegacy(`profiler_export "${path}"`), PROFILER_EXPORT_MS);
   }
   function main() {
@@ -6514,11 +6730,11 @@
     if (mode) {
       mode.configure(modeSettings(loadSettings()));
       if (perfLogging()) {
-        log2("the engine writes a perf log");
+        log3("the engine writes a perf log");
         perfMark("plugin started");
       }
       mode.onChange((active) => {
-        log2(`screensaver mode ${active ? "on" : "off"}`);
+        log3(`screensaver mode ${active ? "on" : "off"}`);
         if (!active) {
           modeStarted = false;
           stopPlayer(true);

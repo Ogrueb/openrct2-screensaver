@@ -340,6 +340,8 @@ ICONS = {
     "copy": copy_icon(),
     "paste": paste_icon(),
     "save": floppy(),
+    # Build the playlist from the game (a hammer)
+    "build": [("line", [(14.5, 9), (4.5, 19)], 3.0), ("poly", [(11.9, 3.2), (20.3, 11.6), (17.1, 14.8), (8.7, 6.4)])],
     "import": tray(False),
     # Fold marks (the game's font has no triangles): a list or section open, or folded.
     "fold-open": [("poly", [(6.5, 9), (17.5, 9), (12, 15.5)])],

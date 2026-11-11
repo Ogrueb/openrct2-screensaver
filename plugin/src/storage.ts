@@ -362,6 +362,11 @@ export function loadPlaylist(): Playlist | undefined {
     return context.sharedStorage.get<Playlist>(NAMESPACE + ".playlist");
 }
 
+/** Installs a playlist built while the game runs (mksequence.py --install does it otherwise). */
+export function savePlaylist(playlist: Playlist): void {
+    context.sharedStorage.set(NAMESPACE + ".playlist", playlist);
+}
+
 /**
  * Find the playlist's title sequence and check that each park's LOAD command still points
  * at the expected park file. Returns an error message instead if they no longer match

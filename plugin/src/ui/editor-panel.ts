@@ -10,6 +10,7 @@
 //   presentation), folded to its header when the window is too narrow for it beside the views pane.
 // Live editing (docs/screensaver-ui.md): a drag on the park moves the selected view, the wheel zooms it.
 
+import { builder } from "../builder";
 import type { Editor, EditorView, RestorePoint } from "../editor";
 import { EDITOR_COLUMNS, EVENT_COLUMNS } from "../editor";
 import { modeSettings } from "../mode";
@@ -122,6 +123,7 @@ export class EditorPanel implements EditorView {
     private dropdown: { persistent: boolean; downAt: number } | undefined; // the park list
     private picked: string | undefined; // the restore point highlighted
     private propsOpen = true; // the Playlist properties unfolded
+    private buildShown = ""; // the build line as last drawn
     private boxOpen: boolean | undefined; // the top-right box unfolded by hand (undefined: by the window's width)
     private lastMove = 0; // the pin off: the panes hide this long after the mouse last moved
     private hidden = false;
@@ -168,7 +170,10 @@ export class EditorPanel implements EditorView {
         e?.syncMap();
         // The event list's "in m:ss" counts down with the park's clock.
         const second = e && this.eventsRect && !this.hidden ? Math.floor(e.playback.parkClock / 40) : -1;
-        if ((second >= 0 && second !== this.clockShown && !this.busy) || (e && e.playback.isLoading !== this.loadingShown)) {
+        // A build's progress and outcome (the line under the Build button).
+        const build = e && !this.hidden && !this.boxFolded() ? builder.line.text : this.buildShown;
+        if ((second >= 0 && second !== this.clockShown && !this.busy) || (e && e.playback.isLoading !== this.loadingShown)
+            || (build !== this.buildShown && !this.busy)) {
             this.render();
         }
         if (!e || e.pinned || this.hidden || this.busy || this.over(this.mouse.x, this.mouse.y)) {
@@ -496,6 +501,14 @@ export class EditorPanel implements EditorView {
             case "boxHead": this.boxOpen = this.boxFolded(); break;
             case "propsHead": this.propsOpen = !this.propsOpen; break;
             case "save": e.playback.savePlaylistProps(); break;
+            case "build":
+                if (builder.running) {
+                    builder.cancel();
+                } else {
+                    e.playback.savePlaylistProps(); // the build takes the saved properties (live file)
+                    builder.start(e.playback.sequenceName);
+                }
+                break;
         }
     }
 
@@ -1039,7 +1052,22 @@ export class EditorPanel implements EditorView {
         btn("save", "save", "Save", x0, third, unsaved ? "Save (written to the playlist at install)" : "Nothing to save", !unsaved);
         btn("import", "import", "Import", x0 + third + 4, third, "Import playlist (coming later)", true);
         btn("export", "export", "Export", x0 + inner - third, third, "Export playlist (coming later)", true);
-        y += s.boxButton;
+        y += s.boxButton + 4;
+        // Build: the generator runs in the background and the new build plays when it is done
+        // (builder.ts; patched engine).
+        const line = builder.line;
+        this.buildShown = line.text;
+        const building = line.phase === "running";
+        btn("build", building ? "close" : "build", building ? "Cancel build" : "Build and play", x0, inner,
+            line.phase === "unavailable" ? line.text
+                : building ? "Stop the build; the playlist plays on as it was"
+                : "Build the playlist with your edits in the background, then play the new build",
+            line.phase === "unavailable");
+        y += s.boxButton + 2;
+        const shown = fit(overlay, line.text, 12, inner);
+        label(scene, "build.line", shown, { x: x0, y, width: 0, height: 18 }, 12, overlay);
+        scene.set("build.line", { ...scene.get("build.line")!, colour: line.warning ? THEME.warning : line.phase === "done" ? THEME.textGood : THEME.textDim });
+        y += 18;
         const frame = { x: x0 - s.pad, y: top, width, height: y - top + s.pad };
         this.frames.push(frame);
         backing(scene, "box", frame, THEME.editorBacking);

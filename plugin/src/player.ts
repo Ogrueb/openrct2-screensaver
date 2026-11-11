@@ -97,7 +97,7 @@ export class Player {
     onViewShown: ((view: View | undefined, byPlayback: boolean) => void) | undefined;
 
     constructor(
-        private readonly playlist: Playlist,
+        private playlist: Playlist,
         private readonly sequence: TitleSequence,
         private readonly settings: Settings,
         overlay?: Overlay,
@@ -173,6 +173,29 @@ export class Player {
         this.cover.close();
         this.releaseSwitch();
         this.clearPan();
+    }
+
+    /** Plays a new build of the playlist (the engine has put its sequence in place and reloaded the
+     *  script): the park on screen is entered again from the new sequence (it dips through black as a
+     *  park change does), at its place in the new order, or the first park when the build dropped it. */
+    swapPlaylist(playlist: Playlist): void {
+        const keyOf = (p: ParkEntry) => p.key ?? p.fileName;
+        const current = this.running && this.parkOrder.length ? keyOf(this.currentPark()) : undefined;
+        this.playlist = playlist;
+        if (!this.running) {
+            return;
+        }
+        this.parkOrder = this.orderFromProps();
+        this.unplayed.clear();
+        this.history = [];
+        this.upNext = undefined;
+        this.loadingPark = false;
+        this.dipping = false;
+        const at = this.parkOrder.findIndex(i => keyOf(playlist.parks[i]) === current);
+        log(`playing the new build of "${playlist.sequence}" (${playlist.parks.length} parks)`);
+        if (this.parkOrder.length) {
+            this.enterPark(Math.max(0, at), false);
+        }
     }
 
     /** Stops, and hands the title screen back to the user's own title sequence. */
