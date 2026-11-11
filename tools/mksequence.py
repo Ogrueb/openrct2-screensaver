@@ -3170,6 +3170,9 @@ def update_plugin_store(store_path, result, pulled=(), camera_log=False, props_p
     if isinstance(ours.get("edits"), dict):
         for key, _ in pulled:
             ours["edits"].pop(key, None)
+    # The edits the game's last build took in (its build pane dims the parks edited since): an install
+    # takes in every edit it leaves in the storage too
+    ours["builtEdits"] = dict(ours["edits"]) if isinstance(ours.get("edits"), dict) else {}
     if props_pulled and isinstance(ours.get("playlistProps"), dict):
         ours["playlistProps"].pop(result["name"], None)
     settings = ours.setdefault("settings", {})
@@ -3245,7 +3248,10 @@ def live_build(name, user_dir):
     out_dir, result_path = live_build_paths(name, user_dir)
     os.makedirs(os.path.dirname(result_path), exist_ok=True)
     # A cancelled build is stopped wherever it is: a half-written result of an earlier one goes
-    for old in glob.glob(glob.escape(result_path) + ".*.tmp"):
+    # (and those of builds before this one named them: tmp*.tmp, a minute old)
+    folder = os.path.dirname(result_path)
+    for old in glob.glob(glob.escape(result_path) + ".*.tmp") + [
+            p for p in glob.glob(os.path.join(glob.escape(folder), "tmp*.tmp")) if time.time() - os.path.getmtime(p) > 60]:
         try:
             os.remove(old)
         except OSError:

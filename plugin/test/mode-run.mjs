@@ -81,12 +81,14 @@ const intervals = [];
 const logs = [];
 let plugin;
 const saved = {}; // what the plugin wrote to shared storage, by key
+// (keys read back as written; the rest stay the fixture's, as the tests above expect)
+const READ_BACK = new Set(["RCTScreensaver.edits", "RCTScreensaver.builtEdits"]);
 const viewport = { rotation: 0, zoom: 0, centre: { x: 0, y: 0 },
     moveTo(c) { this.centre = c; }, getCentrePosition() { return this.centre; } };
 const gameConfig = { "general.drawing_engine": 1, "sound.master_volume": 80, "sound.sound_volume": 100, "sound.ride_music_volume": 60, "general.multithreading": true };
 const context = {
     mode: "title", gameSpeed: 1, configuration: { get: k => gameConfig[k] },
-    sharedStorage: { get: (k, d) => lookup(k) ?? d, set(k, v) { saved[k] = v; } },
+    sharedStorage: { get: (k, d) => (READ_BACK.has(k) && k in saved ? saved[k] : lookup(k)) ?? d, set(k, v) { saved[k] = v; } },
     getRandom: (min, max) => min,
     executeAction(name, args, cb) { this.gameSpeed = args.speed; cb?.({}); },
     registerAction() {},
@@ -926,7 +928,7 @@ console.log("ok: park changes dip through black in the mode (patch 0010)");
     assert.ok(installed && installed.built === built.built && installed.installed > 0, "and the new playlist is installed in the storage");
     const now_ = built.parks.find(p => p.load === sequence.lastSeek);
     assert.equal(now_?.key ?? now_?.fileName, before.key ?? before.fileName, "the same park plays on, from its new LOAD");
-    assert.match(ed("build.line").text, /^Built at .*now playing; 1 warning/, "the line says it plays");
+    assert.equal(ed("build.line").text, "", "no line once built: the header and the messages say it");
     assert.equal(ed("build.state").text, "built · playing");
     assert.equal(ed("sq.1").fill, "#c8962a", "a park with warnings is amber");
     assert.match(ed("msgt.0").text, /^Built .* now playing/, "the plugin's line first");
@@ -945,6 +947,10 @@ console.log("ok: park changes dip through black in the mode (patch 0010)");
     edClick("seg.inertia.1");
     assert.notEqual(ed("build").fill, "#2a2e2c80", "an edit makes it active again");
     assert.equal(ed("build.state").text, "edits not built");
+    const dimmed = () => [...scene.keys()].filter(k => /^rcts\.ed\.sq\.\d+$/.test(k) && scene.get(k).opacity === 0.35);
+    assert.equal(dimmed().length, 0, "a playlist property needs no park built again");
+    edClick("add"); tick(10);
+    assert.equal(dimmed().length, 1, "a view edit dims its park's square: it needs a build");
     shortcuts["rctscreensaver.edit"]();
     tick();
     // Ctrl+B builds with the editor closed too, and the bar shows a chip while it runs.

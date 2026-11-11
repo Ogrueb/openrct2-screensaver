@@ -1086,7 +1086,7 @@ export class EditorPanel implements EditorView {
     private buildSignature(e: Editor): string {
         const line = builder.line;
         return [line.phase, line.text, builder.running ? Math.floor(builder.elapsed / 1000) : "",
-            builder.parks.map(p => p.state + (p.warnings ?? 0)).join(","), builder.messages.length,
+            builder.parks.map(p => p.state + (p.warnings ?? 0) + (p.stale ? "*" : "")).join(","), builder.messages.length,
             builder.pendingEdits(e.playback.installedAt)].join("|");
     }
 
@@ -1151,7 +1151,9 @@ export class EditorPanel implements EditorView {
         const running = line.phase === "running";
         const time = running ? clock(builder.elapsed) : "";
         const timeW = time ? measure(overlay, time, 13).width : 0;
-        label(scene, "build.line", fit(overlay, line.text, 13, inner - timeW - 12), { x: x0, y, width: 0, height: 18 }, 13, overlay);
+        // Only while it runs or when it failed: the header and the messages say the rest (owner, 2026-11-11)
+        const shownLine = running || line.phase === "failed" || line.phase === "unavailable" ? line.text : "";
+        label(scene, "build.line", fit(overlay, shownLine, 13, inner - timeW - 12), { x: x0, y, width: 0, height: 18 }, 13, overlay);
         scene.set("build.line", { ...scene.get("build.line")!, colour: line.warning ? THEME.warning : line.phase === "done" ? THEME.textGood : THEME.text });
         if (time) {
             label(scene, "build.time", time, { x: x0 + inner - timeW, y, width: 0, height: 18 }, 13, overlay);
@@ -1175,7 +1177,7 @@ export class EditorPanel implements EditorView {
         this.sectionLabel(scene, "build.msgs", "MESSAGES", x0, y);
         y += s.labelHeight + 3;
         const shown = builder.messages;
-        const messages = shown.length ? shown : [{ level: "info" as const, text: line.text, park: undefined }];
+        const messages = shown.length ? shown : [{ level: "info" as const, text: line.text || "No build from the game yet", park: undefined }];
         const listH = Math.round(s.boxRow * s.boxRows);
         const bar = messages.length > s.boxRows ? s.scrollBar + 2 : 0;
         this.messagesRect = { x: x0, y, width: inner, height: listH };
@@ -1219,7 +1221,7 @@ export class EditorPanel implements EditorView {
 
     /** A square per park of the build, in play order: built (a check), with warnings (!), failed or
      *  missing (red), the one being built (lit), still to come (empty); a bar past squaresMax parks. */
-    private squares(scene: Scene, parks: (ParkState & { previous?: boolean })[], x0: number, y: number, inner: number): void {
+    private squares(scene: Scene, parks: (ParkState & { stale?: boolean })[], x0: number, y: number, inner: number): void {
         const s = EDITOR;
         const overlay = this.mode.overlay;
         if (!parks.length) {
@@ -1249,12 +1251,12 @@ export class EditorPanel implements EditorView {
             const what = p.state === "missing" ? "file missing" : p.state === "failed" ? "failed" : p.state === "building" ? "building"
                 : p.state === "pending" ? "waiting" : `${p.state === "cached" ? "unchanged" : "built"}${p.warnings ? `, ${p.warnings} warning${p.warnings > 1 ? "s" : ""}` : ""}`;
             const name = (p.key && builder.nameOf?.(p.key)) || p.name || `Park ${i + 1}`;
-            this.place(`sq.${i}`, r, `${name}: ${p.previous ? "waiting (as in the last build)" : what}`);
-            // A park not reached yet keeps the last build's colour, dimmed, rather than going blank
-            scene.set(`sq.${i}`, { type: "rect", ...r, fill: colourOf(p), z: Z.face, ...(p.previous ? { opacity: 0.35 } : {}) });
+            this.place(`sq.${i}`, r, `${name}: ${p.stale ? "edited, needs a build" : what}`);
+            // A park with edits since the last build: its colour dimmed until the build reaches it
+            scene.set(`sq.${i}`, { type: "rect", ...r, fill: colourOf(p), z: Z.face, ...(p.stale ? { opacity: 0.35 } : {}) });
             bevel(scene, `sq.${i}`, r, THEME.bevelDark, THEME.bevelDark, THEME.bevel, Z.bevel);
             const icon = p.state === "failed" || p.state === "missing" ? "close" : p.state === "built" || p.state === "cached" ? (p.warnings ? "alert" : "check") : undefined;
-            if (icon && r.width >= side && !p.previous) {
+            if (icon && r.width >= side && !p.stale) {
                 scene.set(`sqi.${i}`, { type: "image", src: iconPath(icon, px), x: r.x + (r.width - side) / 2, y: r.y + (r.height - side) / 2, z: Z.icon });
             }
         });

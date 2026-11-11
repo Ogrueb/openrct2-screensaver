@@ -99,6 +99,15 @@
     const { titlesOverride: _, ...saved } = settings;
     context.sharedStorage.set(NAMESPACE + ".settings", saved);
   }
+  function loadBuiltEdits() {
+    return context.sharedStorage.get(NAMESPACE + ".builtEdits", {});
+  }
+  function saveBuiltEdits(edits) {
+    context.sharedStorage.set(NAMESPACE + ".builtEdits", edits);
+  }
+  function editsChanged(a, b) {
+    return new Set([...Object.keys(a), ...Object.keys(b)].filter((k) => JSON.stringify(a[k]) !== JSON.stringify(b[k])));
+  }
   function loadEdits() {
     return context.sharedStorage.get(NAMESPACE + ".edits", {});
   }
@@ -116,6 +125,10 @@
   }
   var liveEdits;
   var liveSaved;
+  var liveSaves = 0;
+  function liveSaveCount() {
+    return liveSaves;
+  }
   function lastLiveSave() {
     if (liveSaved === void 0) {
       const api = filesApi();
@@ -160,6 +173,7 @@
     const ok = api.writeFile(liveFileName(playlist.sequence), JSON.stringify(file, null, 1));
     if (ok) {
       liveSaved = file.saved;
+      liveSaves++;
     }
     if (!ok) {
       console.log(`[rct-screensaver] could not write ${liveFileName(playlist.sequence)} in ${api.filesFolder}`);
@@ -238,6 +252,10 @@
       // the last build's result (its squares and messages stay shown)
       this.notes = [];
       this.builtFrom = 0;
+      // when the build that plays started: edits saved since are not built
+      this.startEdits = {};
+      this.dirtyStamp = "";
+      this.dirtySet = /* @__PURE__ */ new Set();
     }
     get available() {
       return this.api !== void 0 && filesApi() !== void 0;
@@ -261,6 +279,7 @@
       this.last = this.last ?? readBuildResult(sequence);
       this.sequence = sequence;
       this.started = Date.now();
+      this.startEdits = JSON.parse(JSON.stringify(loadEdits()));
       this.progress = void 0;
       this.outcome = void 0;
       this.notes = [];
@@ -309,6 +328,7 @@
         return;
       }
       this.builtFrom = current.started;
+      saveBuiltEdits(this.startEdits);
       const warnings = current.warnings?.length ?? 0;
       const at = timeOfDay(current.finished ?? Date.now());
       this.outcome = {
@@ -332,7 +352,7 @@
         const where = p?.parks ? `Park ${p.park} of ${p.parks}${name ? " \xB7 " + name : ""}` : "Starting";
         return { phase: "running", text: where };
       }
-      return this.outcome ?? { phase: "idle", text: "Builds the playlist with your edits and plays it" };
+      return this.outcome ?? { phase: "idle", text: "" };
     }
     /** The running build's time so far, ms. */
     get elapsed() {
@@ -343,24 +363,37 @@
       const p = this.progress;
       return this.running && p?.parks ? { park: p.park ?? 0, parks: p.parks } : void 0;
     }
-    /** The parks of the running build, else of the last one, in play order: while one runs, a park not
-     *  reached yet carries its state from the build before (`previous`, drawn dimmed); otherwise the
-     *  squares follow the playing order at once, a reorder included. */
+    /** The parks whose edits changed since the game's last build took them in (or since the install). */
+    dirty() {
+      const stamp = `${liveSaveCount()}|${this.builtFrom}`;
+      if (stamp !== this.dirtyStamp) {
+        this.dirtySet = editsChanged(loadEdits(), loadBuiltEdits());
+        this.dirtyStamp = stamp;
+      }
+      return this.dirtySet;
+    }
+    /** A square per park in play order. Between builds: the last build's states (each park "built" when
+     *  there is none yet), in the playing order (a reorder moves them at once), a park with edits since
+     *  marked `stale` (drawn dimmed: it needs a build). While a build runs: the generator's states, a park
+     *  not reached yet keeping its state from before, dimmed only when it needs a build (owner,
+     *  2026-11-11). */
     get parks() {
+      const dirty = this.dirty();
+      const before = new Map((this.last?.parkStates ?? []).filter((p) => p.key).map((p) => [p.key, p]));
+      const carried = (key, p) => {
+        const old = before.get(key);
+        const base = old && old.state !== "pending" && old.state !== "building" ? old : { key, name: p?.name, state: "built" };
+        return { ...base, stale: dirty.has(key) };
+      };
       if (this.running) {
-        const before = new Map((this.last?.parkStates ?? []).filter((p) => p.key).map((p) => [p.key, p]));
-        return (this.progress?.parkStates ?? []).map((p) => {
-          const old = p.state === "pending" && p.key ? before.get(p.key) : void 0;
-          return old && old.state !== "pending" && old.state !== "building" ? { ...old, previous: true } : p;
-        });
+        return (this.progress?.parkStates ?? []).map((p) => p.state === "pending" && p.key ? carried(p.key, p) : p);
       }
-      const states = this.last?.parkStates ?? [];
-      const order = this.orderOf?.();
-      if (!order?.length) {
-        return states;
+      const order = this.orderOf?.() ?? [];
+      if (!order.length) {
+        return this.last?.parkStates ?? [];
       }
-      const rank = new Map(order.map((k, i) => [k, i]));
-      return states.map((p, i) => ({ p, i })).sort((a, b) => (rank.get(a.p.key ?? "") ?? order.length + a.i) - (rank.get(b.p.key ?? "") ?? order.length + b.i)).map((x) => x.p);
+      const shown = new Set(order);
+      return [...order.map((key) => carried(key)), ...(this.last?.parkStates ?? []).filter((p) => p.key && !shown.has(p.key))];
     }
     /** The messages of the running build, else of the last one, newest first. */
     get messages() {
@@ -6492,7 +6525,7 @@
         line.phase,
         line.text,
         builder.running ? Math.floor(builder.elapsed / 1e3) : "",
-        builder.parks.map((p) => p.state + (p.warnings ?? 0)).join(","),
+        builder.parks.map((p) => p.state + (p.warnings ?? 0) + (p.stale ? "*" : "")).join(","),
         builder.messages.length,
         builder.pendingEdits(e.playback.installedAt)
       ].join("|");
@@ -6548,7 +6581,8 @@
       const running = line.phase === "running";
       const time = running ? clock(builder.elapsed) : "";
       const timeW = time ? measure(overlay, time, 13).width : 0;
-      label(scene, "build.line", fit(overlay, line.text, 13, inner - timeW - 12), { x: x0, y, width: 0, height: 18 }, 13, overlay);
+      const shownLine = running || line.phase === "failed" || line.phase === "unavailable" ? line.text : "";
+      label(scene, "build.line", fit(overlay, shownLine, 13, inner - timeW - 12), { x: x0, y, width: 0, height: 18 }, 13, overlay);
       scene.set("build.line", { ...scene.get("build.line"), colour: line.warning ? THEME.warning : line.phase === "done" ? THEME.textGood : THEME.text });
       if (time) {
         label(scene, "build.time", time, { x: x0 + inner - timeW, y, width: 0, height: 18 }, 13, overlay);
@@ -6578,7 +6612,7 @@
       this.sectionLabel(scene, "build.msgs", "MESSAGES", x0, y);
       y += s.labelHeight + 3;
       const shown = builder.messages;
-      const messages = shown.length ? shown : [{ level: "info", text: line.text, park: void 0 }];
+      const messages = shown.length ? shown : [{ level: "info", text: line.text || "No build from the game yet", park: void 0 }];
       const listH = Math.round(s.boxRow * s.boxRows);
       const bar2 = messages.length > s.boxRows ? s.scrollBar + 2 : 0;
       this.messagesRect = { x: x0, y, width: inner, height: listH };
@@ -6650,11 +6684,11 @@
         const r = { x: Math.round(x0 + i * (w + gap)), y, width: Math.max(1, Math.round(w)), height: s.square };
         const what = p.state === "missing" ? "file missing" : p.state === "failed" ? "failed" : p.state === "building" ? "building" : p.state === "pending" ? "waiting" : `${p.state === "cached" ? "unchanged" : "built"}${p.warnings ? `, ${p.warnings} warning${p.warnings > 1 ? "s" : ""}` : ""}`;
         const name = p.key && builder.nameOf?.(p.key) || p.name || `Park ${i + 1}`;
-        this.place(`sq.${i}`, r, `${name}: ${p.previous ? "waiting (as in the last build)" : what}`);
-        scene.set(`sq.${i}`, { type: "rect", ...r, fill: colourOf(p), z: Z.face, ...p.previous ? { opacity: 0.35 } : {} });
+        this.place(`sq.${i}`, r, `${name}: ${p.stale ? "edited, needs a build" : what}`);
+        scene.set(`sq.${i}`, { type: "rect", ...r, fill: colourOf(p), z: Z.face, ...p.stale ? { opacity: 0.35 } : {} });
         bevel(scene, `sq.${i}`, r, THEME.bevelDark, THEME.bevelDark, THEME.bevel, Z.bevel);
         const icon = p.state === "failed" || p.state === "missing" ? "close" : p.state === "built" || p.state === "cached" ? p.warnings ? "alert" : "check" : void 0;
-        if (icon && r.width >= side && !p.previous) {
+        if (icon && r.width >= side && !p.stale) {
           scene.set(`sqi.${i}`, { type: "image", src: iconPath(icon, px), x: r.x + (r.width - side) / 2, y: r.y + (r.height - side) / 2, z: Z.icon });
         }
       });

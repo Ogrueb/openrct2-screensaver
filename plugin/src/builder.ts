@@ -5,7 +5,7 @@
 // sequence in (screensaver.applyBuild) and swaps the new playlist in: the build is installed with
 // the game open.
 
-import { filesApi, lastLiveSave, liveFileName, Playlist, Settings } from "./storage";
+import { Edits, editsChanged, filesApi, lastLiveSave, liveSaveCount, liveFileName, loadBuiltEdits, loadEdits, Playlist, saveBuiltEdits, Settings } from "./storage";
 
 export type BuildState = "idle" | "running" | "done" | "failed" | "cancelled";
 
@@ -117,6 +117,7 @@ export class Builder {
     private notes: BuildMessage[] = []; // the plugin's own lines about the last build, after the generator's
     private outcome: BuildLine | undefined;
     private builtFrom = 0; // when the build that plays started: edits saved since are not built
+    private startEdits: Edits = {}; // the edits as the running build started
 
     /** A park's name in the playing playlist (the generator knows only the playlist's own names until
      *  it has read the park), and the playlist's park keys in play order (the squares follow it). */
@@ -153,6 +154,7 @@ export class Builder {
         this.last = this.last ?? readBuildResult(sequence);
         this.sequence = sequence;
         this.started = Date.now();
+        this.startEdits = JSON.parse(JSON.stringify(loadEdits())) as Edits; // (a copy: the editor changes its edits in place)
         this.progress = undefined;
         this.outcome = undefined;
         this.notes = [];
@@ -205,6 +207,7 @@ export class Builder {
             return;
         }
         this.builtFrom = current.started;
+        saveBuiltEdits(this.startEdits); // edits made while it ran still need a build
         const warnings = current.warnings?.length ?? 0;
         const at = timeOfDay(current.finished ?? Date.now());
         this.outcome = {
@@ -228,7 +231,7 @@ export class Builder {
             const where = p?.parks ? `Park ${p.park} of ${p.parks}${name ? " · " + name : ""}` : "Starting";
             return { phase: "running", text: where };
         }
-        return this.outcome ?? { phase: "idle", text: "Builds the playlist with your edits and plays it" };
+        return this.outcome ?? { phase: "idle", text: "" };
     }
 
     /** The running build's time so far, ms. */
@@ -242,25 +245,43 @@ export class Builder {
         return this.running && p?.parks ? { park: p.park ?? 0, parks: p.parks } : undefined;
     }
 
-    /** The parks of the running build, else of the last one, in play order: while one runs, a park not
-     *  reached yet carries its state from the build before (`previous`, drawn dimmed); otherwise the
-     *  squares follow the playing order at once, a reorder included. */
-    get parks(): (ParkState & { previous?: boolean })[] {
+    /** The parks whose edits changed since the game's last build took them in (or since the install). */
+    dirty(): Set<string> {
+        // (worked out again only after an edit is saved, or a build is taken in)
+        const stamp = `${liveSaveCount()}|${this.builtFrom}`;
+        if (stamp !== this.dirtyStamp) {
+            this.dirtySet = editsChanged(loadEdits(), loadBuiltEdits());
+            this.dirtyStamp = stamp;
+        }
+        return this.dirtySet;
+    }
+
+    private dirtyStamp = "";
+    private dirtySet = new Set<string>();
+
+    /** A square per park in play order. Between builds: the last build's states (each park "built" when
+     *  there is none yet), in the playing order (a reorder moves them at once), a park with edits since
+     *  marked `stale` (drawn dimmed: it needs a build). While a build runs: the generator's states, a park
+     *  not reached yet keeping its state from before, dimmed only when it needs a build (owner,
+     *  2026-11-11). */
+    get parks(): (ParkState & { stale?: boolean })[] {
+        const dirty = this.dirty();
+        const before = new Map((this.last?.parkStates ?? []).filter(p => p.key).map(p => [p.key!, p]));
+        const carried = (key: string, p?: ParkState): ParkState & { stale?: boolean } => {
+            const old = before.get(key);
+            const base = old && old.state !== "pending" && old.state !== "building" ? old : { key, name: p?.name, state: "built" as const };
+            return { ...base, stale: dirty.has(key) };
+        };
         if (this.running) {
-            const before = new Map((this.last?.parkStates ?? []).filter(p => p.key).map(p => [p.key!, p]));
-            return (this.progress?.parkStates ?? []).map(p => {
-                const old = p.state === "pending" && p.key ? before.get(p.key) : undefined;
-                return old && old.state !== "pending" && old.state !== "building" ? { ...old, previous: true } : p;
-            });
+            return (this.progress?.parkStates ?? []).map(p => p.state === "pending" && p.key ? carried(p.key, p) : p);
         }
-        const states = this.last?.parkStates ?? [];
-        const order = this.orderOf?.();
-        if (!order?.length) {
-            return states;
+        const order = this.orderOf?.() ?? [];
+        if (!order.length) {
+            return this.last?.parkStates ?? [];
         }
-        const rank = new Map(order.map((k, i) => [k, i]));
-        return states.map((p, i) => ({ p, i })).sort((a, b) =>
-            (rank.get(a.p.key ?? "") ?? order.length + a.i) - (rank.get(b.p.key ?? "") ?? order.length + b.i)).map(x => x.p);
+        // (a park the last build left out, as its file was missing, stays at the end)
+        const shown = new Set(order);
+        return [...order.map(key => carried(key)), ...(this.last?.parkStates ?? []).filter(p => p.key && !shown.has(p.key))];
     }
 
     /** The messages of the running build, else of the last one, newest first. */

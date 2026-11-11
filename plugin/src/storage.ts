@@ -267,6 +267,21 @@ export function saveSettings(settings: Settings): void {
 export type Edits = Record<string, { views: View[]; arranged?: true; screen?: [number, number]; reset?: undefined } |
     { reset: true; views?: undefined; arranged?: undefined }>;
 
+/** Each park's edits as the game's last build (or the install) took them in, by park key; the build pane
+ *  marks the parks whose edits differ since as needing a build. */
+export function loadBuiltEdits(): Edits {
+    return context.sharedStorage.get<Edits>(NAMESPACE + ".builtEdits", {});
+}
+
+export function saveBuiltEdits(edits: Edits): void {
+    context.sharedStorage.set(NAMESPACE + ".builtEdits", edits);
+}
+
+/** The parks whose edits differ between two sets of edits. */
+export function editsChanged(a: Edits, b: Edits): Set<string> {
+    return new Set([...Object.keys(a), ...Object.keys(b)].filter(k => JSON.stringify(a[k]) !== JSON.stringify(b[k])));
+}
+
 export function loadEdits(): Edits {
     return context.sharedStorage.get<Edits>(NAMESPACE + ".edits", {});
 }
@@ -319,6 +334,12 @@ export interface LiveFile {
 
 let liveEdits: Edits | undefined;
 let liveSaved: number | undefined; // when the live file was last written (read from it once)
+let liveSaves = 0; // live file writes this run
+
+/** How many times this run wrote the live file (something to tell an edit by, as two can share a ms). */
+export function liveSaveCount(): number {
+    return liveSaves;
+}
 
 /** When the game last saved edits to the playing playlist's live file (ms since 1970), if ever. */
 export function lastLiveSave(): number | undefined {
@@ -361,6 +382,7 @@ export function writeLive(): boolean {
     const ok = api.writeFile(liveFileName(playlist.sequence), JSON.stringify(file, null, 1));
     if (ok) {
         liveSaved = file.saved;
+        liveSaves++;
     }
     if (!ok) {
         console.log(`[rct-screensaver] could not write ${liveFileName(playlist.sequence)} in ${api.filesFolder}`);

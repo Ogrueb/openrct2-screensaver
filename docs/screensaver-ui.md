@@ -298,8 +298,11 @@ closed.
 - **Squares:** one per park in play order, as the generator lists them (`parkStates`, the playlist file's
   order with the game's edits baked in), so a rebuild of one park keeps its square's place; between builds
   they follow the playing order, so reordering parks moves the squares at once. The generator lists every
-  park first, and while a build runs a park not reached yet shows its state from the build before, dimmed
-  (it used to go blank, then fill at once when unchanged). Names are the playing playlist's. Green with a check: built (or unchanged, from the cache); amber
+  park first, and while a build runs a park not reached yet shows its state from the build before. Only a
+  park edited since the last build (or the install) is dimmed, with "edited, needs a build" in its tooltip,
+  and it dims as soon as the edit is saved; Playlist properties dim none, as no park needs building for
+  them (owner's test, 2026-11-11). The plugin keeps the edits each build took in (`RCTScreensaver.builtEdits`;
+  an install sets it to the edits it leaves in the storage). Names are the playing playlist's. Green with a check: built (or unchanged, from the cache); amber
   with "!": built with warnings; red with a cross: failed, or its file is missing (the park is left out and
   the rest builds); lit: being built; empty: still to come. The tooltip names the park and its state; a
   click opens the park. Over 30 parks, a bar with "n / m parks" replaces them.
@@ -325,9 +328,10 @@ closed.
   playlist (`installed` now, so it is the editor's "Last install"), sets the title music as an install
   does, and re-enters the park on screen from the new script at its place in the new order (a dip through
   black, as a park change), or the first park when the build dropped it.
-- The line over the squares shows the build: the park and time, then "Built at hh:mm, now playing" with
-  its warning count, or "Build failed: <reason>" (a
-  missing `generator.json` means: install once with `mksequence.py --install`).
+- The line over the squares shows only while a build runs (the park and time), after a failure ("Build
+  failed: <reason>"; a missing `generator.json` means: install once with `mksequence.py --install`) or when
+  builds are unavailable; otherwise the header's state and the messages say it all (owner's test,
+  2026-11-11: the line repeated the header).
 - **Every build bakes:** before it builds, `--live-build` writes the live file into the playlist's own files
   (as `tools/bakelive.py` does: views into `<playlist>.views.json`, properties and park order into the TOML,
   backups beside them) and marks it baked, so the playlist files always hold what plays (owner, 2026-11-11:

@@ -207,9 +207,12 @@ Needs an engine build with patch 0017 and an install from this version (it write
       opens, and the game keeps playing smoothly meanwhile. With the editor closed, the bar shows
       "Building n/m".
 - [ ] Build and play is inactive (Ctrl+B too) while every edit is built; an edit makes it active. The pane
-      clears the exit button in the bottom right corner. Messages list newest first.
-- [ ] After moving a park in the order the squares follow at once; while a build runs, parks not reached
-      yet keep last build's colour, dimmed; square tooltips and "Park n of m" use the parks' own names; a warning park is
+      clears the exit button in the bottom right corner. Messages list newest first. Between builds the
+      pane shows no line over the squares (the header says "built · playing").
+- [ ] After moving a park in the order the squares follow at once, none dimmed (a Playlist property
+      change dims none either); a view edit dims only its park's square at once ("edited, needs a build"),
+      and after the build it is lit again; while a build runs, parks not reached yet keep last build's
+      colour, dimmed only when edited; square tooltips and "Park n of m" use the parks' own names; a warning park is
       amber with "!", and its message opens the park on a click. A park file renamed away builds as a red
       square with "file not found" while the rest builds.
 - [ ] After a build, the playlist's TOML and views file hold the game's edits (`.bak` beside the TOML), and
