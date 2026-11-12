@@ -158,6 +158,7 @@ export class Builder {
     private progress: BuildResult | undefined; // the running build's last progress
     private last: BuildResult | undefined; // the last build's result (its squares and messages stay shown)
     private notes: BuildMessage[] = []; // the plugin's own lines about the last task, before the generator's
+    private earlier: BuildMessage[] = []; // an import's own lines (unpacking), older than its build's: after them
     private outcome: BuildLine | undefined;
     private builtFrom = 0; // when the build that plays started: edits saved since are not built
     private startEdits: Edits = {}; // the edits as the running build started
@@ -206,6 +207,7 @@ export class Builder {
             this.outcome = { phase: "failed", text: `Build failed: ${message(e)}`, warning: true };
             this.last = undefined;
             this.notes = [{ level: "error", text: `The build did not start: ${message(e)}` }];
+            this.earlier = [];
             log(`build of "${sequence}" did not start: ${message(e)}`);
             return;
         }
@@ -238,6 +240,7 @@ export class Builder {
         } catch (e) {
             this.outcome = { phase: "failed", text: `${name} failed: ${message(e)}`, warning: true };
             this.notes = [{ level: "error", text: `${name} did not start: ${message(e)}` }];
+            this.earlier = [];
             log(`${task} did not start: ${message(e)}`);
             return;
         }
@@ -256,6 +259,7 @@ export class Builder {
         this.progress = undefined;
         this.outcome = undefined;
         this.notes = [];
+        this.earlier = [];
     }
 
     cancel(): void {
@@ -307,12 +311,13 @@ export class Builder {
             log(`import ${status.state === "cancelled" ? "cancelled" : "failed: " + why}`);
             return;
         }
-        const extra = task === "import" ? from(imported) : []; // (the import's own lines, under the plugin's)
+        // (the import's own lines come before its build's, so they are listed under them: newest first)
+        this.earlier = task === "import" ? from(imported) : [];
         this.last = current;
         if (status.state === "cancelled") {
             this.outcome = { phase: "idle", text: "Build cancelled" };
             this.notes = [{ level: "info", text: task === "import" ? "Build cancelled; the imported playlist is in your playlists folder, the old one plays on"
-                : "Build cancelled; the playlist plays on as it was" }, ...extra];
+                : "Build cancelled; the playlist plays on as it was" }];
             return;
         }
         if (status.state !== "done" || !current?.ok || !current.playlist) {
@@ -320,14 +325,14 @@ export class Builder {
             this.outcome = { phase: "failed", text: `Build failed: ${why}`, warning: true };
             // The generator names the failure among its messages; else the engine's reason
             this.notes = [...(current?.messages?.some(m => m.level === "error") ? []
-                : [{ level: "error" as const, text: `Build failed: ${why} (log: screensaver/build.log in the user folder)` }]), ...extra];
+                : [{ level: "error" as const, text: `Build failed: ${why} (log: screensaver/build.log in the user folder)` }])];
             log(`build of "${sequence}" failed: ${why} (log: screensaver/build.log in the user folder)`);
             return;
         }
         const error = this.onReady ? this.onReady(current, task === "import") : "nothing to play it";
         if (error) {
             this.outcome = { phase: "failed", text: `Built, but not taken in: ${error}`, warning: true };
-            this.notes = [{ level: "error", text: `Built, but not taken in: ${error}` }, ...extra];
+            this.notes = [{ level: "error", text: `Built, but not taken in: ${error}` }];
             log(`build of "${sequence}" not taken in: ${error}`);
             return;
         }
@@ -341,7 +346,7 @@ export class Builder {
             phase: "done", text: `${task === "import" ? "Imported" : "Built"} at ${at}, now playing${warnings ? `; ${warnings} warning${warnings > 1 ? "s" : ""}` : ""}`,
         };
         this.notes = [{ level: "ok", text: task === "import" ? `Imported "${sequence}" ${at} in ${clock(took)}, now playing`
-            : `Built ${at} in ${clock(took)}, now playing` }, ...extra];
+            : `Built ${at} in ${clock(took)}, now playing` }];
         for (const w of current.warnings ?? []) {
             log(`build warning: ${w}`);
         }
@@ -448,10 +453,10 @@ export class Builder {
     }
 
     /** The messages of the running build, else of the last one, newest first (the plugin's own lines
-     *  about the last task on top). */
+     *  about the last task on top, an import's unpacking lines last). */
     get messages(): BuildMessage[] {
         const r = this.building ? this.progress : this.last;
-        return [...this.notes, ...[...(r?.messages ?? [])].reverse()];
+        return [...this.notes, ...[...(r?.messages ?? [])].reverse(), ...this.earlier];
     }
 
     /** Edits saved in the game since the playing build started (or since the install). */

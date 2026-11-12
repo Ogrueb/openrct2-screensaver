@@ -1104,7 +1104,8 @@ console.log("ok: builds from the game (Build and play, progress, the live swap)"
     tick(2);
     assert.ok(ed("build"), "the editor is open again");
     assert.match(ed("msgt.0").text, /^Imported "Imported" .* now playing/, "the plugin's line first");
-    assert.equal(ed("msgt.1").text, "Imported \"Imported\" (2 parks)", "then the import's");
+    assert.equal(ed("msgt.1").text, "Built 2 parks", "then the build's, newest first");
+    assert.equal(ed("msgt.2").text, "Imported \"Imported\" (2 parks)", "then the import's own, older");
     assert.equal(ed("sq.1").fill, "#3d9a5c", "squares of the imported playlist");
     // Reorder it in the editor, then import it again under the same name: the bundle's order plays at
     // once (owner, 2026-11-12: it took effect only after a restart).

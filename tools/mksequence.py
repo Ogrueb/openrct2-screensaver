@@ -2860,7 +2860,10 @@ def build(playlist_path, out_dir, seed=None, layout=None, use_edits=True, overri
         if progress:
             # (the park's own name once it is read; till then the playlist's, or its file)
             progress(i, len(entries), {"key": park_key(e), "name": park["name"] if park else e.get("name") or os.path.basename(e["file"]),
-                                       "state": state, "warnings": list(park["warnings"]) if park else []})
+                                       "state": state, "warnings": list(park["warnings"]) if park else [],
+                                       # (its companion plugins by name: an import flags the ones it installs)
+                                       "companions": sorted({companions.metadata(code, label)["name"]
+                                                             for label, code in (park or {}).get("companions") or ()})})
 
     for i, e in enumerate(entries):
         if e["file"] not in missing:
@@ -3273,6 +3276,13 @@ def live_build(name, user_dir, imported=False):
         while len(states) < n:
             states.append({"state": "pending"})
         states[i] = {"key": park["key"], "name": park["name"], "state": park["state"], "warnings": len(park["warnings"])}
+        if imported and park["state"] in ("cached", "built"):
+            # A park script not installed yet waits for a restart: its square shows that as it is built (the
+            # messages, and scripts installed with other code, follow once the build is done)
+            waits = [c for c in park.get("companions", ()) if not os.path.exists(
+                os.path.join(user_dir, "plugin", companions.FILE_PREFIX + companions.slug(c) + ".js"))]
+            states[i]["restart"] = len(waits)
+            states[i]["warnings"] += len(waits)
         if park["state"] == "missing":
             note("error", "%s: park file not found, left out" % park["name"], park["key"])
         for w in park["warnings"] if park["state"] in ("cached", "built") else ():
@@ -3301,20 +3311,30 @@ def live_build(name, user_dir, imported=False):
             # An imported playlist's park scripts (companion plugins) go in now, but the game loads plugins only
             # as it starts (owner, 2026-11-12: say so in the build pane)
             _, changed = install_companions(result, user_dir)
-            # (one per park, flagging its square like the park's own warnings: owner, 2026-11-12)
+            # (one per park, flagging its square like the park's own warnings: owner, 2026-11-12; noted after
+            # "Built", so the newest-first list shows them right under the plugin's "Imported" line)
+            keys = {}
+            for p in result["parks"]:
+                keys.setdefault(p["savedName"], []).append(p["key"])
+            restart = []
+            for st in states:
+                st["warnings"] = st.get("warnings", 0) - st.pop("restart", 0)
             for file_name, meta, park_names in result["companions"]:
                 if file_name not in changed:
                     continue
                 for park_name in park_names:
-                    w = "%s: park script %s starts after a restart of the game" % (park_name, meta["name"])
-                    st = next((st for st in states if st.get("name") == park_name), None)
-                    if st is not None:
-                        st["warnings"] = st.get("warnings", 0) + 1
-                    note("warn", w, st.get("key") if st else None)
-                    warnings.append(w)
+                    for key in keys.get(park_name) or [None]:
+                        st = next((st for st in states if key and st.get("key") == key), None)
+                        if st is not None:
+                            st["warnings"] += 1
+                        restart.append(("%s: park script %s starts after a restart of the game"
+                                        % (st["name"] if st else park_name, meta["name"]), key))
         rebuilt = sum(1 for st in states if st["state"] == "built")
         cached = sum(1 for st in states if st["state"] == "cached")
         note("ok", "Built %d park%s (%d rebuilt, %d unchanged)" % (rebuilt + cached, "s" if rebuilt + cached != 1 else "", rebuilt, cached))
+        for w, key in reversed(restart) if imported else ():
+            note("warn", w, key)
+            warnings.append(w)
         playlist = dict(result["playlist"], source=result["source"])
         write(ok=True, finished=int(time.time() * 1000), playlist=playlist, titleMusic=result["titleMusic"],
               warnings=warnings, live=result.get("live"))

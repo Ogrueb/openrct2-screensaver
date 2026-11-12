@@ -387,7 +387,9 @@ zip the settings page's Import and Export use (`tools/bundle.py`), without leavi
   The imported playlist plays on after a restart. Its parks' companion scripts are put in the user plugin
   folder with the build (replacing the old playlist's), but the game loads plugins only as it starts: for each
   script that is new or changed on disk, the build pane lists a warning per park that uses it, "<park>: park
-  script <name> starts after a restart of the game", and flags that park's square amber (owner, 2026-11-12); a script already installed with the same code gives none.
+  script <name> starts after a restart of the game", right under the "Imported" line, and flags that park's square
+  amber, already while the build runs for a script not installed yet (owner, 2026-11-12). The messages read newest
+  first: the plugin's line, the build's, then the import's own unpacking lines; a script already installed with the same code gives none.
 
 ### Live file (2026-11-10, owner's go-ahead in "Explore saving playlists without the Generator")
 

@@ -135,9 +135,9 @@ class LiveBundle(unittest.TestCase):
             f.write("// host")
 
         def fake_build(path, out, **kwargs):
-            kwargs["progress"](0, 1, {"key": "a.park", "name": "Park A", "state": "built", "warnings": []})
+            kwargs["progress"](0, 1, {"key": "a.park", "name": "Park A", "state": "built", "warnings": [], "companions": ["Animator"]})
             return {"name": "My List", "layout": "plugin", "dir": os.path.join(out, "My List"),
-                    "parks": [], "playlist": {"version": 1, "sequence": "My List", "parks": []}, "titleMusic": "keep",
+                    "parks": [{"key": "a.park", "name": "Park A", "savedName": "Park A", "warnings": []}], "playlist": {"version": 1, "sequence": "My List", "parks": []}, "titleMusic": "keep",
                     "companionDir": companion_dir, "companions": [("rct-screensaver-companion-animator.js", {"name": "Animator"}, ["Park A"])],
                     "source": os.path.abspath(path), "live": None}
 
