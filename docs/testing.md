@@ -229,24 +229,24 @@ Needs an engine build with patch 0017 and an install from this version (it write
 - [ ] With `generator.json` removed, the line says why the build cannot start.
 
 ### Import and Export playlist (patch 0018, 2026-11-12)
-Needs an engine build with patch 0018 and an install from this version (`generator.json` with the
-playlist's file).
-- [ ] In the mode's editor, Export playlist opens Windows' Save dialog over the game (not behind it), named
+Passed in the game on 2026-11-12 (example playlist and a three-park bundle, Windows). Needs an engine build
+with patch 0018 and an install from this version (`generator.json` with the playlist's file).
+- [x] In the mode's editor, Export playlist opens Windows' Save dialog over the game (not behind it), named
       after the playlist, in Documents the first time and the last folder after. Closing it starts nothing.
-- [ ] Saving: the header says "exporting", then the messages list "Exported n parks ... to <file>" (and "Took
+- [x] Saving: the header says "exporting", then the messages list "Exported n parks ... to <file>" (and "Took
       in your edits" when there were unbuilt edits). The zip opens in the settings page's Import and holds
       the parks, the views file and any changed profiles of those parks.
-- [ ] Import playlist opens the Open dialog; picking a bundle shows "importing", then the squares of the
+- [x] Import playlist opens the Open dialog; picking a bundle shows "importing", then the squares of the
       imported playlist build ("Building the import · Park n of m"). When it is done the screen dips to the
       imported playlist's first park, the editor stays open on it, and the messages say "Imported "<name>" ...
       now playing". The playlist is in `Documents\OpenRCT2\screensaver\playlists`, its parks under `bundles`.
-- [ ] After a restart of the game, the imported playlist plays. Build and play then builds it (not the old one).
-- [ ] Importing a playlist whose parks have scripts that are not installed yet (or differ) lists an amber "<park>:
+- [x] After a restart of the game, the imported playlist plays. Build and play then builds it (not the old one).
+- [x] Importing a playlist whose parks have scripts that are not installed yet (or differ) lists an amber "<park>:
       park script ... starts after a restart of the game" per park using such a script, its square amber too; after a restart the scripts run on their
       parks. Scripts already installed with the same code give no warning.
-- [ ] Importing a bundle of the playlist that is playing replaces it, in the bundle's park order at once (reorder
+- [x] Importing a bundle of the playlist that is playing replaces it, in the bundle's park order at once (reorder
       the parks in the editor before the import to see it).
-- [ ] A broken zip says why once, in the messages (no line above them); Cancel import stops it and the playlist
+- [x] A broken zip says why once, in the messages (no line above them); Cancel import stops it and the playlist
       plays on.
 
 ### Live file (patch 0016, 2026-11-10)
