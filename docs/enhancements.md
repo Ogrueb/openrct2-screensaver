@@ -27,7 +27,7 @@ Requirements, each shippable alone:
    files, Python 3.11+ and Node 20+. Owner's step; blocks 4-6.
 2. **Linux engine build** (`.github/workflows/engine.yml`): a job `Linux x64` beside `Windows x64`, copied
    from OpenRCT2's own Ubuntu CI job (its container image or `apt` list, CMake with the release's
-   options), the same "Apply patches" step (the release input leaving out 0019), producing one artifact:
+   options), the same "Apply patches" step (the release input leaving out 0020), producing one artifact:
    a tarball of the install tree (`cmake --install` into a prefix; the binary, `libopenrct2.so` if built
    shared, and the `data/` folder), named `openrct2-<tag>-openrct2-screensaver-linux-x64[-release]`.
    An AppImage is a second step only if the tarball proves awkward to run (a decision for after 4).
@@ -55,7 +55,7 @@ Requirements, each shippable alone:
    Done when: every row passes or is listed in `docs/known-issues.md` with the display server named.
 5. **Tools with the Linux executable**: once each on the test machine, `renderviews.py --openrct2
    <path>`, `drawviews.py` (its renders), `importparks.py` with one `.sv6` (`openrct2 convert`) and
-   one loose-object download, `perfrun.py run perf/quick.toml --exe <path>` (the perf log with patch 0019,
+   one loose-object download, `perfrun.py run perf/quick.toml --exe <path>` (the perf log with patch 0020,
    and `--user-data-path` sandboxes), and `mksequence.py --install` into the XDG user folder
    (`~/.config/OpenRCT2`). Fix path and process differences as they show (expected: the `.com` vs `.exe`
    choice in `renderviews.py`, process names in `userdata.py`'s running check, `pythonw` in the launcher).
@@ -204,11 +204,14 @@ each turn re-anchored on another surface; fixed the same day (the anchor is kept
    (checks, amber warnings, red failures), the build's messages (a click on one about a park opens it),
    Ctrl+B, a "Building n/m" chip on the bar, and every build bakes the game's edits into the playlist files;
    the playlist's Save button gave way to saving as you change. A build from the game marks the settings
-   page's renders old; ticking parks on and off stays on the settings page, as does a shared park cache
+   page's renders old; ticking parks on and off stays on the settings page (until 2026-11-12, below), as does a shared park cache
    (owner, 2026-11-11). Not yet tested in the game. Copy and Paste views through `screensaver.clipboard` followed
    (2026-11-12), then Import playlist and Export playlist through the system's file dialog (engine patch 0018,
    2026-11-12: the game shows the dialog and runs the generator on the picked bundle; an import is built and
-   played instead of the playlist). After that: the live editor without the generator.
+   played instead of the playlist), then parks and playlists in the park list (engine patch 0019, owner 2026-11-12:
+   Use ticks, Add park, switching playlists, New playlist from a folder, Duplicate; `docs/screensaver-ui.md` "Parks
+   and playlists"). The park library in the game is the next stage (`docs/roadmap.md`). After that: the live editor
+   without the generator.
 
 ## 3. Weather and day/night in the generator (low priority)
 

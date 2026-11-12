@@ -2920,6 +2920,17 @@ def build(playlist_path, out_dir, seed=None, layout=None, use_edits=True, overri
         raise ValueError("titles must be one of: %s" % ", ".join(TITLES))
     data = playlist_data(name, parks, defaults["window"], defaults, titles) if layout == "plugin" else None
     if data:
+        # Parks ticked off (`use = false`): the view editor lists them to tick on again
+        known = cache.names if cache else {}
+        unused = []
+        for e in playlist.get("park", []):
+            if e.get("use", True):
+                continue
+            ident = os.path.abspath(os.path.join(base_dir, e["file"])) + "|" + (e.get("member") or "")
+            saved = (known.get(ident) or {}).get("savedName")
+            unused.append({"key": park_key(e), "name": e.get("name") or saved or os.path.splitext(os.path.basename(e["file"]))[0]})
+        if unused:
+            data["unused"] = unused
         with open(seq_dir + ".playlist.json", "w", encoding="utf-8") as f:
             json.dump(data, f, indent=1)
     elif os.path.exists(seq_dir + ".playlist.json"):
@@ -3051,7 +3062,8 @@ PROPS = (("inertia", "views", "inertia"), ("panChanges", "views", "pan_changes")
 def apply_props(playlist, props):
     """The playlist (as tomllib reads it) with the editor's properties and park order applied:
     holds back to unscaled seconds (the plugin's are times time_scale), Unset titles and title music
-    removed, parks reordered by key (parks the order does not name keep their place after it)."""
+    removed, parks reordered by key (parks the order does not name keep their place after it), parks
+    ticked on or off (`use`, park key -> bool)."""
     data = json.loads(json.dumps(playlist))
     views = data.setdefault("views", {})
     scale = float(views.get("time_scale", VIEW_DEFAULTS["time_scale"])) or 1.0
@@ -3075,6 +3087,15 @@ def apply_props(playlist, props):
         rank = {k: i for i, k in enumerate(order)}
         parks = data["park"]
         data["park"] = sorted(parks, key=lambda e: (rank.get(park_key(e), len(order)), parks.index(e)))
+    # The editor's Use ticks (park key -> on/off): off keeps the park's entry without playing it
+    use = props.get("use")
+    if isinstance(use, dict):
+        for e in data.get("park", []):
+            on = use.get(park_key(e))
+            if on is False:
+                e["use"] = False
+            elif on is True:
+                e.pop("use", None)
     return data
 
 
@@ -3142,9 +3163,13 @@ def write_props(playlist_path, props):
     data = apply_props(playlist, props)
     if data == playlist:
         return []
-    changed = [k for k, _, _ in PROPS if k in props] + (["park order"] if data.get("park") != playlist.get("park") else [])
+    # (the entries in their new order as they stand in the file: the text moves those, then takes the ticks)
+    ordered = apply_props(playlist, {"order": props["order"]}).get("park") if isinstance(props.get("order"), list) else playlist.get("park")
+    used = [e.get("use", True) for e in data.get("park", [])] != [e.get("use", True) for e in ordered or []]
+    changed = [k for k, _, _ in PROPS if k in props] + (["park order"] if ordered != playlist.get("park") else []) + \
+        (["parks in use"] if used else [])
     import tomlwrite
-    text = reorder_parks(raw.decode("utf-8"), data.get("park")) if data.get("park") != playlist.get("park") else raw.decode("utf-8")
+    text = reorder_parks(raw.decode("utf-8"), ordered) if ordered != playlist.get("park") else raw.decode("utf-8")
     out = (tomlwrite.patch(text, data) if text is not None else None) or tomlwrite.dumps(data)
     shutil.copy2(playlist_path, playlist_path + ".bak")
     with open(playlist_path, "w", encoding="utf-8", newline="\n") as f:
@@ -3223,7 +3248,26 @@ def register_generator(user_dir, name, source):
             "playlists": playlists}
     os.makedirs(folder, exist_ok=True)
     write_json_atomic(path, data, indent=1)
+    write_playlists_list(user_dir, playlists)
     return path
+
+
+def write_playlists_list(user_dir, playlists):
+    """The playlists the game can build and play (live/playlists.json, which the plugin reads: its files
+    API reaches only the live folder): name, file and park count, by name."""
+    out = []
+    for name, source in sorted(playlists.items(), key=lambda kv: kv[0].lower()):
+        entry = {"name": name, "file": os.path.basename(source)}
+        try:
+            with open(source, "rb") as f:
+                parks = tomllib.load(f).get("park", [])
+            entry["parks"] = sum(1 for e in parks if e.get("use", True))
+        except (OSError, tomllib.TOMLDecodeError):
+            entry["missing"] = True
+        out.append(entry)
+    os.makedirs(livefile.folder(user_dir), exist_ok=True)
+    write_json_atomic(os.path.join(livefile.folder(user_dir), "playlists.json"),
+                      {"playlistsVersion": 1, "written": int(time.time() * 1000), "playlists": out}, indent=1)
 
 
 def write_json_atomic(path, data, **kwargs):
@@ -3383,7 +3427,8 @@ def bake_live(source, name, user_dir):
     s = livefile.summary(live)
     parts = (["views of %d park%s" % (len(s["views"]), "s" if len(s["views"]) != 1 else "")] if s["views"] else []) + \
         (["reset %d park%s" % (len(s["resets"]), "s" if len(s["resets"]) != 1 else "")] if s["resets"] else []) + \
-        (["properties"] if s["props"] else []) + (["park order"] if s["order"] else [])
+        (["properties"] if s["props"] else []) + (["park order"] if s["order"] else []) + \
+        (["parks ticked on or off"] if s.get("use") else [])
     merge_edits(source, live["edits"])
     write_props(source, live["props"])
     livefile.mark_baked(live, user_dir)
@@ -3538,6 +3583,204 @@ def live_import(bundle_path, user_dir):
     return live_build(name, user_dir, imported=True)
 
 
+# --- parks and new playlists from the game (screensaver.addPark / newPlaylist / copyPlaylist) ---
+
+NEW_PLAYLIST_VIEWS = {"motion": "pans", "pan": "auto"}  # as the settings page starts a playlist
+
+
+def toml_string(text):
+    """A TOML basic string (JSON's escapes are TOML's)."""
+    return json.dumps(text, ensure_ascii=False)
+
+
+def entry_file(path, playlist_path):
+    """A park's `file` for a playlist: relative to the playlist's folder (absolute on another drive)."""
+    try:
+        rel = os.path.relpath(os.path.abspath(path), os.path.dirname(os.path.abspath(playlist_path)))
+    except ValueError:  # another drive
+        rel = os.path.abspath(path)
+    return rel.replace("\\", "/")
+
+
+def write_playlist_text(path, text):
+    """Write a playlist's new text (checked first), the old file as <playlist>.toml.bak."""
+    tomllib.loads(text)
+    if os.path.exists(path):
+        shutil.copy2(path, path + ".bak")
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        f.write(text)
+
+
+def add_park_entry(playlist_path, park_path):
+    """Add the park file or download `park_path` to the playlist as a new [[park]] (comments kept), or tick
+    it on again when the playlist has it unticked. Returns (line for the user, reason or None: loose
+    objects that need installing). Raises when the park can't be added."""
+    entry, reason = parkinfo.park_entry(park_path)
+    if entry is None:
+        raise ValueError("%s; add it with the settings page's folder scan, which converts and installs" % reason
+                         if "needs" in reason or "need " in reason else reason)
+    with open(playlist_path, "rb") as f:
+        raw = f.read().decode("utf-8")
+    data = tomllib.loads(raw)
+    base = os.path.dirname(os.path.abspath(playlist_path))
+    new = {"file": entry_file(entry["file"], playlist_path)}
+    key = park_key(new)
+    for e in data.get("park", []):
+        same = os.path.normcase(os.path.abspath(os.path.join(base, e["file"]))) == os.path.normcase(entry["file"]) and not e.get("member")
+        if same and e.get("use", True):
+            raise ValueError("%s is in the playlist already" % os.path.basename(park_path))
+        if same:
+            import tomlwrite
+            changed = json.loads(json.dumps(data))
+            for c in changed["park"]:
+                if c == e:
+                    c.pop("use", None)
+                    break
+            write_playlist_text(playlist_path, tomlwrite.patch(raw, changed) or tomlwrite.dumps(changed))
+            return "Ticked %s on again" % os.path.basename(park_path), reason
+        if park_key(e) == key:
+            raise ValueError("the playlist has another park with the file name %s; rename one of the files" % key)
+    block = "[[park]]\nfile = %s\n" % toml_string(new["file"])
+    if entry.get("author"):
+        block += "author = %s\n" % toml_string(entry["author"])
+    text = raw.rstrip("\n") + "\n\n" + block if raw.strip() else block
+    write_playlist_text(playlist_path, text)
+    return "Added %s to %s" % (os.path.basename(park_path), os.path.basename(playlist_path)), reason
+
+
+def new_playlist_target(user_dir, title):
+    """(name, file) for a new playlist: a name no registered playlist or installed sequence has, and a
+    file in the user's playlists folder no other playlist uses."""
+    folder = os.path.join(user_dir, "screensaver", "playlists")
+    taken = set(registered_playlists(user_dir))
+    seq_dir = os.path.join(user_dir, "sequence")
+    if os.path.isdir(seq_dir):
+        taken |= {os.path.splitext(n)[0] for n in os.listdir(seq_dir)}
+    name, n = title, 1
+    while name in taken or os.path.exists(os.path.join(folder, slug(name, 60) + ".toml")):
+        n += 1
+        name = "%s %d" % (title, n)
+    return name, os.path.join(folder, slug(name, 60) + ".toml")
+
+
+def registered_playlists(user_dir):
+    """Every playlist generator.json names, by sequence name."""
+    try:
+        with open(os.path.join(user_dir, "screensaver", GENERATOR_FILE), encoding="utf-8") as f:
+            playlists = json.load(f).get("playlists")
+    except (OSError, ValueError, AttributeError):
+        playlists = None
+    return playlists if isinstance(playlists, dict) else {}
+
+
+def forget_old_live(playlist, name, user_dir):
+    """Edits the game kept for an earlier playlist of this name are not the new playlist's."""
+    live = livefile.for_playlist(playlist, name, user_dir)
+    if live is not None:
+        livefile.mark_baked(live, user_dir)
+
+
+def task_failed(note, write, what, e):
+    import traceback
+    traceback.print_exc()
+    error = str(e) or e.__class__.__name__
+    note("error", "%s failed: %s" % (what, error))
+    write(ok=False, finished=int(time.time() * 1000), error=error)
+    return 1
+
+
+def live_add(name, park_path, user_dir):
+    """Add the park the user picked in the game's Open dialog (screensaver.addPark) to the playlist
+    installed as title sequence `name` (the game's edits baked in first), then build it as --live-build
+    does. The result goes to task-add.json in the live folder. Returns the process exit code."""
+    note, write = task_runner("add", user_dir, sequence=name, path=park_path)
+    try:
+        write(ok=None)
+        source = registered_playlist(name, user_dir)
+        took = bake_live(source, name, user_dir)
+        if took:
+            note("info", took)
+        line, reason = add_park_entry(source, park_path)
+        note("ok", line)
+        if reason:
+            note("warn", "%s; the park may miss scenery until they are installed (the settings page's folder scan does it)" % reason)
+        register_generator(user_dir, name, source)  # (the playlists list counts the new park)
+        write(ok=True, finished=int(time.time() * 1000), playlist=source)
+    except Exception as e:  # anything: the game shows it
+        return task_failed(note, write, "Adding the park", e)
+    return live_build(name, user_dir)
+
+
+def live_new(folder, user_dir):
+    """Make a new playlist of the parks in the folder the user picked in the game's folder dialog
+    (screensaver.newPlaylist): every park and download read in place, as the settings page's scan does,
+    the playlist written to <user dir>/screensaver/playlists and registered, then built as an import is.
+    The result goes to task-new.json in the live folder. Returns the process exit code."""
+    note, write = task_runner("new", user_dir, path=folder)
+    try:
+        write(ok=None)
+        entries, reasons = parkinfo.scan_folder(folder)
+        if not entries:
+            raise ValueError("no parks in %s%s" % (folder, " (%s)" % "; ".join(reasons) if reasons else ""))
+        name, path = new_playlist_target(user_dir, "RCT Screensaver " + (os.path.basename(os.path.normpath(folder)) or "parks"))
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        import tomlwrite
+        data = {"name": name, "order": "playlist", "layout": "plugin", "park_plugins": True, "views": dict(NEW_PLAYLIST_VIEWS),
+                "park": [dict(e, file=entry_file(e["file"], path)) for e in entries]}
+        write_playlist_text(path, tomlwrite.dumps(data, "Made in the screensaver's view editor from %s" % folder))
+        forget_old_live(path, name, user_dir)
+        register_generator(user_dir, name, path)
+        note("ok", "Made \"%s\" of %d park%s in %s" % (name, len(entries), "s" if len(entries) != 1 else "", folder))
+        for reason in reasons:
+            note("warn", "%s: left out or incomplete; the settings page's folder scan converts and installs" % reason)
+        write(ok=True, finished=int(time.time() * 1000), sequence=name, playlist=path)
+    except Exception as e:  # anything: the game shows it
+        return task_failed(note, write, "New playlist", e)
+    return live_build(name, user_dir, imported=True)
+
+
+def live_copy(name, to, user_dir):
+    """Copy the playlist installed as title sequence `name` (the game's edits baked in first) to the file
+    the user named in the game's Save dialog (screensaver.copyPlaylist), named after the file, with its
+    views file; park paths follow the new folder. Registered and built as an import is. The result goes
+    to task-copy.json in the live folder. Returns the process exit code."""
+    note, write = task_runner("copy", user_dir, path=to)
+    try:
+        write(ok=None)
+        source = registered_playlist(name, user_dir)
+        to = os.path.abspath(to)
+        if not to.lower().endswith(".toml"):
+            to += ".toml"
+        if os.path.normcase(to) == os.path.normcase(os.path.abspath(source)):
+            raise ValueError("that is the playlist's own file; give the copy another name")
+        new_name = os.path.splitext(os.path.basename(to))[0]
+        others = registered_playlists(user_dir)
+        if new_name == name or (new_name in others and os.path.normcase(os.path.abspath(others[new_name])) != os.path.normcase(to)):
+            raise ValueError("a playlist named \"%s\" exists; give the copy another name" % new_name)
+        took = bake_live(source, name, user_dir)
+        if took:
+            note("info", took)
+        with open(source, "rb") as f:
+            raw = f.read().decode("utf-8")
+        data = tomllib.loads(raw)
+        base = os.path.dirname(os.path.abspath(source))
+        data["name"] = new_name
+        for e in data.get("park", []):
+            e["file"] = entry_file(os.path.normpath(os.path.join(base, e["file"])), to)
+        import tomlwrite
+        os.makedirs(os.path.dirname(to), exist_ok=True)
+        write_playlist_text(to, tomlwrite.patch(raw, data) or tomlwrite.dumps(data))
+        if os.path.exists(edits_path(source)):
+            shutil.copy2(edits_path(source), edits_path(to))
+        forget_old_live(to, new_name, user_dir)
+        register_generator(user_dir, new_name, to)
+        note("ok", "Copied \"%s\" to \"%s\" (%s)" % (name, new_name, to))
+        write(ok=True, finished=int(time.time() * 1000), sequence=new_name, playlist=to)
+    except Exception as e:  # anything: the game shows it
+        return task_failed(note, write, "Duplicating the playlist", e)
+    return live_build(new_name, user_dir, imported=True)
+
+
 def install_companions(result, user_dir):
     """Put the build's companion plugins in the user plugin folder, replacing any installed before (only the
     generated files). Returns (steps, changed): changed holds the file names that are new or differ from
@@ -3624,10 +3867,22 @@ def main():
                     help="export the installed playlist of that title sequence name to a bundle (--to) for the running "
                          "game (it starts this: screensaver.exportPlaylist); the result goes to task-export.json in "
                          "<user dir>/screensaver/live")
-    ap.add_argument("--to", metavar="BUNDLE", help="with --live-export: the bundle to write")
+    ap.add_argument("--to", metavar="FILE", help="with --live-export: the bundle to write; with --live-copy: the new playlist file")
     ap.add_argument("--live-import", metavar="BUNDLE",
                     help="import a playlist bundle and build it for the running game (it starts this: "
                          "screensaver.importPlaylist); results in task-import.json and build-<sequence>.json")
+    ap.add_argument("--live-add", metavar="SEQUENCE",
+                    help="add a park (--park) to the installed playlist of that title sequence name and build it, for "
+                         "the running game (it starts this: screensaver.addPark); results in task-add.json and "
+                         "build-<sequence>.json")
+    ap.add_argument("--park", metavar="FILE", help="with --live-add: the park file or download to add")
+    ap.add_argument("--live-new", metavar="FOLDER",
+                    help="make a new playlist of the parks in a folder and build it, for the running game (it starts "
+                         "this: screensaver.newPlaylist); results in task-new.json and build-<sequence>.json")
+    ap.add_argument("--live-copy", metavar="SEQUENCE",
+                    help="copy the installed playlist of that title sequence name to a new playlist file (--to; named "
+                         "after it) and build it, for the running game (it starts this: screensaver.copyPlaylist); "
+                         "results in task-copy.json and build-<sequence>.json")
     ap.add_argument("-o", "--out", default="build/sequence", help="output directory (default: build/sequence)")
     ap.add_argument("--seed", type=int, help="seed for order = 'shuffle'")
     ap.add_argument("--layout", choices=LAYOUTS, help="overrides the playlist's layout (default: plugin)")
@@ -3669,6 +3924,16 @@ def main():
             sys.exit(live_export(args.live_export, os.path.abspath(args.to), user_dir))
         if args.live_import:
             sys.exit(live_import(os.path.abspath(args.live_import), user_dir))
+        if args.live_add:
+            if not args.park:
+                ap.error("--live-add needs --park")
+            sys.exit(live_add(args.live_add, os.path.abspath(args.park), user_dir))
+        if args.live_new:
+            sys.exit(live_new(os.path.abspath(args.live_new), user_dir))
+        if args.live_copy:
+            if not args.to:
+                ap.error("--live-copy needs --to")
+            sys.exit(live_copy(args.live_copy, os.path.abspath(args.to), user_dir))
         if args.install_built:
             check_installable(user_dir, args.force)
             result = load_built(args.install_built)

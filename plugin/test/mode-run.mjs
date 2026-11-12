@@ -1146,7 +1146,133 @@ console.log("ok: builds from the game (Build and play, progress, the live swap)"
 }
 console.log("ok: Import and Export playlist through the file dialogs");
 
-// Performance runs (engine patch 0019, tools/perfrun.py): the plugin's events go into the engine's
+// Parks and playlists (engine patch "add parks and make playlists through the system's dialogs"): the
+// open park list ticks parks on and off (skipped in play at once, saved for the next build), adds a park
+// through the Open dialog, and switches to the playlists: another one is built and played, a new one is
+// made from a folder or a copy, each through the generator.
+{
+    const ed = id => scene.get("rcts.ed." + id);
+    const edClick = id => { const e = ed(id); assert.ok(e, `${id} is shown`); const x = e.x + e.width / 2, y = e.y + e.height / 2; mouse("move", x, y); mouse("down", x, y); mouse("up", x, y); };
+    const gray = "#2a2e2c80";
+    const keys = playlist.parks.map(p => p.key ?? p.fileName);
+    playlist.unused = [{ key: "old-mill.park", name: "Old Mill" }]; // (a park the build left out)
+    mode.set(true);
+    tick(20);
+    mode.buildStatus = { ...mode.buildStatus, state: "idle", task: "" };
+    shortcuts["rctscreensaver.edit"]();
+    tick(2);
+    edClick("field"); tick();
+    assert.equal(scene.get("rcts.ed.parks.head").text, "Playlist order");
+    assert.ok(ed("ptick.0") && ed("ptick.0.check"), "every park has a tick, on");
+    assert.equal(ed("parks.add").fill, gray, "Add park is inactive on an engine without the dialogs");
+    // Tick the second park in the order off: saved at once, shown left out, skipped in play.
+    edClick("ptick.1"); tick();
+    const use = saved["RCTScreensaver.playlistProps"][playlist.sequence].use;
+    const second = Object.keys(use)[0];
+    assert.ok(keys.includes(second) && use[second] === false && Object.keys(use).length === 1, "the tick is saved");
+    assert.ok(!ed("ptick.1.check"), "shown off");
+    assert.match(ed("pname.1").text, /\(left out\)$/);
+    assert.equal(ed("ph.3").text, "NOT IN THE BUILD", "the parks the build left out, under the order");
+    assert.equal(ed("pname.4").text, "Old Mill");
+    edClick("pu.4"); tick();
+    assert.equal(saved["RCTScreensaver.playlistProps"][playlist.sequence].use["old-mill.park"], true, "ticked on for the next build");
+    assert.equal(ed("pcount.4").text, "needs a build");
+    dump("parks-ticks");
+    edClick("pu.4"); tick(); // (off again)
+    assert.ok(JSON.parse(mode.files.get("Mini.json")).props.use[second] === false, "and written to the live file for the next build");
+    // The last park in use stays on.
+    edClick("ptick.2"); tick();
+    edClick("ptick.0"); tick();
+    assert.equal(Object.values(saved["RCTScreensaver.playlistProps"][playlist.sequence].use).filter(v => v === false).length, 2,
+        "the last park in use can't be ticked off");
+    assert.equal(ed("parks.help").text, "One park at least stays in use");
+    edClick("ptick.2"); tick(); // (the third back on)
+    edClick("field"); tick(); // (closes the list)
+    shortcuts["rctscreensaver.edit"]();
+    tick(2);
+    // Next park from the first passes the second over.
+    const named = key => playlist.parks.find(p => (p.key ?? p.fileName) === key).name;
+    for (let i = 0; i < 2; i++) {
+        shortcuts["rctscreensaver.nextpark"]();
+        tick(30);
+    }
+    const entered = logs.filter(l => /park \d+\/3: /.test(l)).slice(-2).map(l => l.replace(/.*park \d+\/3: /, ""));
+    assert.ok(!entered.includes(named(second)), `a park ticked off is passed over (${entered.join(", ")})`);
+    // The engine with the dialogs: Add park, then the playlists.
+    Object.assign(mode, {
+        added: [], made: 0, copied: [], dialogClosed: false,
+        addPark(name) { this.added.push(name); if (this.dialogClosed) return false; this.buildStatus = { ...this.buildStatus, state: "running", task: "add", sequence: name, started: now }; return true; },
+        newPlaylist() { this.made++; this.buildStatus = { ...this.buildStatus, state: "running", task: "new", sequence: "", started: now }; return true; },
+        copyPlaylist(name) { this.copied.push(name); this.buildStatus = { ...this.buildStatus, state: "running", task: "copy", sequence: name, started: now }; return true; },
+    });
+    shortcuts["rctscreensaver.edit"]();
+    tick(2);
+    edClick("field"); tick();
+    assert.notEqual(ed("parks.add").fill, gray, "with them, Add park is active");
+    edClick("parks.add"); tick(2);
+    assert.deepEqual(mode.added, [playlist.sequence], "Add park asks the engine for the playing playlist");
+    assert.ok(!ed("parks"), "the list closes");
+    assert.equal(ed("build.state").text, "adding the park");
+    assert.equal(scene.get("rcts.ed.build.text")?.text, "Cancel park");
+    mode.files.set("task-add.json", JSON.stringify({ taskVersion: 1, task: "add", started: now, ok: false, finished: now,
+        sequence: playlist.sequence, error: "a.park is in the playlist already",
+        messages: [{ level: "error", text: "Adding the park failed: a.park is in the playlist already" }] }));
+    mode.buildStatus = { ...mode.buildStatus, state: "failed", finished: now };
+    tick(6);
+    assert.equal(ed("build.state").text, "failed");
+    assert.match(ed("msgt.0").text, /^Adding the park failed: a.park/, "the generator's reason");
+    // The playlists: the playing one marked, another built and played on a click.
+    mode.files.set("playlists.json", JSON.stringify({ playlistsVersion: 1, playlists: [
+        { name: "Evening", file: "evening.toml", parks: 2 }, { name: playlist.sequence, file: "mini.toml", parks: 3 },
+        { name: "Gone", file: "gone.toml", missing: true }] }));
+    edClick("field"); tick();
+    edClick("parks.mode"); tick();
+    assert.equal(scene.get("rcts.ed.parks.head").text, "Playlists");
+    assert.equal(ed("pname.0").text, "Evening");
+    assert.equal(ed("pcount.1").text, "playing", "the playing one is marked");
+    assert.equal(ed("pcount.2").text, "file missing");
+    assert.ok(ed("parks.new") && ed("parks.copy"), "New playlist and Duplicate under them");
+    dump("parks-playlists");
+    mode.builds.length = 0;
+    edClick("ppl.0"); tick(2);
+    assert.deepEqual(mode.builds, ["Evening"], "a click builds the other playlist");
+    assert.equal(ed("build.state").text, "building");
+    assert.equal(scene.get("rcts.ed.build.text")?.text, "Cancel switch");
+    mode.files.set("build-Evening.json", JSON.stringify({ buildVersion: 1, sequence: "Evening", started: now, ok: null, park: 1, parks: 2,
+        parkName: "Harbor", parkStates: [{ key: "h.park", name: "Harbor", state: "building" }, { state: "pending" }] }));
+    tick(6);
+    dump("parks-switching");
+    mode.cancelBuild = function () { this.buildStatus = { ...this.buildStatus, state: "cancelled" }; return true; };
+    edClick("build"); tick(6);
+    assert.match(ed("msgt.0").text, /^Switch cancelled/);
+    // New playlist from a folder and Duplicate go through the engine's dialogs.
+    edClick("field"); tick();
+    edClick("parks.mode"); tick();
+    edClick("parks.new"); tick(2);
+    assert.equal(mode.made, 1);
+    assert.equal(ed("build.state").text, "making the playlist");
+    edClick("build"); tick(6);
+    edClick("field"); tick();
+    edClick("parks.mode"); tick();
+    edClick("parks.copy"); tick(2);
+    assert.deepEqual(mode.copied, [playlist.sequence], "Duplicate copies the playing playlist");
+    assert.equal(ed("build.state").text, "copying the playlist");
+    edClick("build"); tick(6);
+    // Back as it was for the tests below.
+    delete playlist.unused;
+    delete mode.addPark; delete mode.newPlaylist; delete mode.copyPlaylist;
+    mode.cancelBuild = function () { return false; };
+    edClick("field"); tick();
+    edClick("ptick.1"); tick(); // (the second park on again)
+    edClick("field"); tick();
+    shortcuts["rctscreensaver.edit"]();
+    tick();
+    mode.set(false);
+    tick();
+}
+console.log("ok: parks ticked on and off, Add park, and switching, new and duplicated playlists");
+
+// Performance runs (engine patch 0020, tools/perfrun.py): the plugin's events go into the engine's
 // perf log as marks; bench mode keeps the mouse from showing the bar (marked instead) and starts
 // OpenRCT2's function profiler, exported on an interval.
 const marks = [];
@@ -1168,6 +1294,6 @@ assert.ok(marks.includes("input move"), "and the input is marked for the report 
 assert.ok(legacy.includes("profiler_start"), "the function profiler starts");
 assert.ok(intervals.some(v => v.ms === 60000), "and is exported every minute");
 assert.ok(legacy.includes('profiler_export "C:/perf run/profiler.csv"'), "to the quoted path");
-console.log("ok: perf marks, bench mode and the profiler (patch 0019)");
+console.log("ok: perf marks, bench mode and the profiler (patch 0020)");
 
 console.log("ok: screensaver mode (start, stop, keys, settings, no toolbox items)");

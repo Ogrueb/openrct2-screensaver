@@ -163,7 +163,9 @@ export class Player {
             this.sequence.play();
         }
         log(`playing "${this.playlist.sequence}" (${this.playlist.parks.length} parks)`);
-        this.enterPark(this.settings.shuffle ? context.getRandom(0, this.parkOrder.length) : 0, false);
+        const usable = range(this.parkOrder.length).filter(p => this.parkInUse(this.parkOrder[p]));
+        const first = usable.length ? usable : range(this.parkOrder.length);
+        this.enterPark(this.settings.shuffle ? first[context.getRandom(0, first.length)] : first[0], false);
     }
 
     stop(): void {
@@ -370,7 +372,7 @@ export class Player {
     }
 
     nextPark(): void {
-        const pos = this.upNext ?? (this.parkPos + 1) % this.parkOrder.length;
+        const pos = this.upNext ?? this.usableFrom(this.parkPos, 1);
         if (this.settings.shuffle) {
             this.history.push(this.parkPos);
         }
@@ -379,7 +381,7 @@ export class Player {
 
     previousPark(atLastView = false): void {
         const pos = (this.settings.shuffle ? this.history.pop() : undefined) ??
-            (this.parkPos - 1 + this.parkOrder.length) % this.parkOrder.length;
+            this.usableFrom(this.parkPos, -1);
         this.enterPark(pos, atLastView);
     }
 
@@ -391,10 +393,14 @@ export class Player {
             return;
         }
         this.unplayed.delete(this.parkPos);
-        if (this.unplayed.size === 0) {
-            this.unplayed = new Set(range(this.parkOrder.length).filter(p => p !== this.parkPos));
+        const usable = (p: number) => p !== this.parkPos && this.parkInUse(this.parkOrder[p]);
+        if (![...this.unplayed].some(usable)) {
+            this.unplayed = new Set(range(this.parkOrder.length).filter(usable));
         }
-        const pool = [...this.unplayed];
+        const pool = [...this.unplayed].filter(usable);
+        if (!pool.length) {
+            return; // (no other park in use: the next park is found in order)
+        }
         this.upNext = pool[context.getRandom(0, pool.length)];
     }
 
@@ -459,7 +465,9 @@ export class Player {
     /** The current park's views loop on their own: in the editor's preview, or when the playlist
      * has one park. */
     private loopsAlone(): boolean {
-        return this.editing || this.parkOrder.length === 1 || this.timelineAhead();
+        const used = this.parkOrder.filter(i => this.parkInUse(i));
+        return this.editing || this.parkOrder.length === 1 || (used.length === 1 && used[0] === this.parkOrder[this.parkPos])
+            || this.timelineAhead();
     }
 
     /** A cut-in view on the park's clock (a timeline cue) is still to come this visit: the park's
@@ -503,6 +511,12 @@ export class Player {
         return this.parkOrder.map(i => this.playlist.parks[i].key ?? this.playlist.parks[i].fileName);
     }
 
+    /** The key of the playlist's park at this index. */
+    parkKeyOf(index: number): string | undefined {
+        const park = this.playlist.parks[index];
+        return park ? park.key ?? park.fileName : undefined;
+    }
+
     /** The playlist index of the park with this key, or -1. */
     parkIndexOf(key: string): number {
         return this.playlist.parks.findIndex(p => (p.key ?? p.fileName) === key);
@@ -534,6 +548,64 @@ export class Player {
         return range(parks.length).sort((a, b) => rank(a) - rank(b));
     }
 
+    /** The position of the next park in use from `pos` in the play order (step 1 forward, -1 back); the
+     *  next one at all when none is in use. */
+    private usableFrom(pos: number, step: 1 | -1): number {
+        const n = this.parkOrder.length;
+        for (let k = 1; k <= n; k++) {
+            const next = (((pos + step * k) % n) + n) % n;
+            if (this.parkInUse(this.parkOrder[next])) {
+                return next;
+            }
+        }
+        return (((pos + step) % n) + n) % n;
+    }
+
+    /** A park of the playlist (by index) is ticked on: a park ticked off in the editor stays in the
+     *  list but playback passes it over, until the next build leaves it out. */
+    parkInUse(index: number): boolean {
+        const park = this.playlist.parks[index];
+        return !park || this.props.use?.[park.key ?? park.fileName] !== false;
+    }
+
+    /** Parks the playlist was built without (ticked off), each with its tick now: ticked on, it plays
+     *  after the next build. */
+    get unusedParks(): { key: string; name: string; on: boolean }[] {
+        return (this.playlist.unused ?? []).map(p => ({ ...p, on: this.props.use?.[p.key] === true }));
+    }
+
+    /** How many parks play: built and ticked on. */
+    get parksInUse(): number {
+        return this.playlist.parks.filter((_, i) => this.parkInUse(i)).length;
+    }
+
+    /** Ticks a park on or off (the editor's Use), saved at once (and so in the live file, which the next
+     *  build bakes into the playlist). The last park in use can't be ticked off: false then. */
+    setParkUse(key: string, on: boolean): boolean {
+        const index = this.parkIndexOf(key);
+        const unused = (this.playlist.unused ?? []).some(p => p.key === key);
+        if (index < 0 && !unused) {
+            return false;
+        }
+        if (!on && index >= 0 && this.parkInUse(index) && this.parksInUse <= 1) {
+            return false;
+        }
+        const use = { ...(this.savedProps.use ?? {}) };
+        if (on === (index >= 0)) {
+            delete use[key]; // as built: nothing for the playlist file to change
+        } else {
+            use[key] = on;
+        }
+        this.props.use = use;
+        this.savedProps.use = use;
+        savePlaylistProps(this.playlist.sequence, this.savedProps);
+        this.unplayed.clear(); // shuffle's round starts again from here
+        this.history = [];
+        this.pickNext();
+        log(`park ${key} ${on ? "ticked on" : "ticked off"}`);
+        return true;
+    }
+
     /** Moves a park in the play order (positions), keeping the park on screen; saved at once. */
     moveParkInOrder(from: number, to: number): void {
         const n = this.parkOrder.length;
@@ -558,7 +630,7 @@ export class Player {
     }
 
     /** The playlist's own values for the editor's Playlist properties, as built. */
-    get playlistDefaults(): Required<Omit<PlaylistProps, "order">> {
+    get playlistDefaults(): Required<Omit<PlaylistProps, "order" | "use">> {
         const p = this.playlist;
         return {
             inertia: p.inertia ?? this.settings.inertia,
@@ -579,7 +651,7 @@ export class Player {
     }
 
     /** The Playlist properties in force: the editor's over the playlist's own. */
-    get playlistProps(): Required<Omit<PlaylistProps, "order">> {
+    get playlistProps(): Required<Omit<PlaylistProps, "order" | "use">> {
         const d = this.playlistDefaults;
         const p = this.props;
         return {

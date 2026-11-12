@@ -216,8 +216,8 @@ The panel became three panes (round 8 of the mockups accepted, built the same da
 
 - **Views pane, top left.** Previous park, the park field (name, "N / M ▾" its place in the play order),
   next park, close. A press on the field held past 0.3 s opens the park list over the views and jumps to
-  the park the button is released on; a click opens it as **Playlist order**: rows with grips, numbers,
-  names and view counts, dragged to reorder the parks (saved in the game at once, `RCTScreensaver.
+  the park the button is released on; a click opens it as **Playlist order**: rows with grips, Use ticks
+  (2026-11-12, "Parks and playlists" below), numbers, names and view counts, dragged to reorder the parks (saved in the game at once, `RCTScreensaver.
   playlistProps.<sequence>.order`, and played in that order at once), clicked to go to a park (the list
   stays); a click anywhere else closes it (Esc is the engine's: it leaves the mode). The views list has a
   grip column: a row dragged 5 px lifts (the dragged row follows the mouse, its place dims, an orange line
@@ -347,7 +347,8 @@ closed.
   rebuild only changed parks, play at once, always bake; no settings in the pane).
 - A build still running when the game quits finishes on its own and is not taken in.
 - **Parks and the settings page** (owner, 2026-11-11): a park whose file is missing is left out of the build
-  with a red square and a message; ticking parks on and off stays a settings-page matter, with adding parks.
+  with a red square and a message; ticking parks on and off stayed a settings-page matter, with adding parks,
+  until the park list took both (owner, 2026-11-12; "Parks and playlists" below).
   The game's park cache (`screensaver/park-cache`) stays apart from the settings page's, so the first build
   from the game redoes every park. The settings page judges its renders against whichever build is newer,
   its own or the game's (`build/live/<sequence>.result.json`), so a build from the game marks them old; the
@@ -390,6 +391,46 @@ zip the settings page's Import and Export use (`tools/bundle.py`), without leavi
   script <name> starts after a restart of the game", right under the "Imported" line, and flags that park's square
   amber, already while the build runs for a script not installed yet (owner, 2026-11-12). The messages read newest
   first: the plugin's line, the build's, then the import's own unpacking lines; a script already installed with the same code gives none.
+
+### Parks and playlists (engine patch 0019, 2026-11-12)
+
+The first stage of the Generator page's park and playlist functions in the editor (owner, 2026-11-12, thread
+"Explore park selection and playlist creation in the live editor"); the park library with filters and pictures
+is the second (`docs/roadmap.md`, live view editor). All of it sits in the views pane's park list, opened by a
+click on the park field (Playlist order):
+
+- **Use ticks.** A tick box per park after its grip. Ticked off, a park keeps its place but is passed over by
+  Next park, Previous park and shuffle at once (shown "(left out)", its number and name dim); the last park in use
+  can't be ticked off (the header says so for a moment). Ticks save at once (`RCTScreensaver.playlistProps.
+  <sequence>.use`, park key → on/off, in the live file's `props`); a build bakes them into the playlist file
+  (`[[park]] use = false`, removed when ticked on; comments kept). The build lists the parks it left out in the
+  playlist (`unused`: key and name), shown under NOT IN THE BUILD with their ticks: ticked on, "needs a build".
+- **Add park…** (the list's last row) calls `screensaver.addPark(<sequence>)`: the engine shows the system's Open
+  dialog (`*.park;*.zip`, starting where the last park or bundle was picked) and runs `mksequence.py --live-add
+  <sequence> --park <file>`. The generator bakes the game's edits, appends a `[[park]]` with the file relative to
+  the playlist (absolute on another drive) and its builders from the NE catalogue or the file name, or ticks the
+  park on again when the playlist has it unticked; a park already in use, a clash of file names, an RCT save or a
+  file that is no park fails with the reason (saves and loose objects: the settings page's folder scan converts
+  and installs them). Its result goes to `live/task-add.json`, then the playlist builds and plays as with Build
+  and play.
+- **Playlists** (a button in the list's header; "Back to parks" returns): every playlist the game can build, from
+  `live/playlists.json`, which the generator writes whenever it registers one (`--install`, an import, a new
+  playlist, a copy): name, file and parks in use, the playing one marked "playing", a missing file in red. A click
+  on another builds it (`screensaver.build(<name>)`, only changed parks thanks to the park cache) and plays it as an
+  import is played (`applyBuild` of a sequence that is not playing): its edits come from its live file, the
+  playing playlist's edits leave the storage and stay in its own live file.
+- **New playlist from a folder…** calls `screensaver.newPlaylist()`: the system's folder dialog, then
+  `mksequence.py --live-new <folder>`, which reads the folder as the settings page's scan does (`parkinfo.
+  scan_folder`; parks and downloads in place, RCT saves and loose objects listed as warnings), writes
+  `screensaver/playlists/<slug>.toml` named "RCT Screensaver <folder>" (" 2" and so on when taken), registers it
+  and builds it; `live/task-new.json`.
+- **Duplicate this playlist…** calls `screensaver.copyPlaylist(<sequence>)`: the system's Save dialog in
+  `screensaver/playlists` ("<name> copy.toml"), then `mksequence.py --live-copy <sequence> --to <file>`: the
+  game's edits baked, the playlist copied with its views file, named after the file (another name than any other
+  playlist's), park paths following the new folder; registered and built; `live/task-copy.json`. The game has no
+  text input of its own, so the dialog's file name is the name.
+- The build pane follows each as it follows a build: the header ("adding the park", "making the playlist",
+  "copying the playlist", "building"), Cancel <task>, the squares and the messages; one task at a time.
 
 ### Live file (2026-11-10, owner's go-ahead in "Explore saving playlists without the Generator")
 

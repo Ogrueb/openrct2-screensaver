@@ -5,7 +5,7 @@ Every cell of the suite runs in its own sandbox: an OpenRCT2 user folder under t
 started with `--user-data-path`, holding a copy of your config.ini with the cell's settings, a
 link to your object folder, the screensaver plugin and the suite's playlist (built once per run
 with mksequence.py, editor views ignored). Your own OpenRCT2 folder is only read. The game starts
-in the screensaver mode with the perf log on (engine patch 0019) and quits itself after the
+in the screensaver mode with the perf log on (engine patch 0020) and quits itself after the
 cell's time; a cell that does not quit is closed, and a crash (an exit code, or a new dump in the
 sandbox's crash folder) is recorded and the run goes on.
 

@@ -10,7 +10,7 @@
 //   presentation), folded to its header when the window is too narrow for it beside the views pane.
 // Live editing (docs/screensaver-ui.md): a drag on the park moves the selected view, the wheel zooms it.
 
-import { builder, clock, ParkState } from "../builder";
+import { builder, clock, ParkState, PlaylistInfo, readPlaylists } from "../builder";
 import type { Editor, EditorView, RestorePoint } from "../editor";
 import { EDITOR_COLUMNS, EVENT_COLUMNS } from "../editor";
 import { modeSettings } from "../mode";
@@ -85,6 +85,10 @@ class Scroll {
 }
 
 /** A row press that becomes a drag once the mouse moves (views or parks). */
+/** A row of the open park list. */
+type ParkItem = { kind: "park"; p: number } | { kind: "unused"; i: number } | { kind: "playlist"; i: number }
+    | { kind: "head"; text: string } | { kind: "add" } | { kind: "new" } | { kind: "copy" };
+
 interface RowDrag {
     list: "views" | "parks";
     from: number;
@@ -122,6 +126,8 @@ export class EditorPanel implements EditorView {
     private rowDrag: RowDrag | undefined;
     private thumbDrag: { scroll: Scroll; y0: number; first0: number; count: () => number; visible: number } | undefined;
     private dropdown: { persistent: boolean; downAt: number } | undefined; // the park list
+    private playlists: PlaylistInfo[] | undefined; // the open list shows the playlists (read as it opens)
+    private useNote: { text: string; at: number } | undefined; // why a tick did nothing, for a moment
     private picked: string | undefined; // the restore point highlighted
     private propsOpen = true; // the Playlist properties unfolded
     private clipShown = false; // a Copy/Paste note is on its button (it goes after a moment)
@@ -234,7 +240,7 @@ export class EditorPanel implements EditorView {
         } else if (e.type === "wheel") {
             const step = e.delta > 0 ? -1 : 1; // a step away from the user (delta > 0) scrolls up
             if (this.parksRect && contains(this.parksRect, this.mouse.x, this.mouse.y)) {
-                this.parks.by(step, ed.parkNames.length, this.parkRows());
+                this.parks.by(step, this.parkItems(ed).length, this.parkRows());
             } else if (contains(this.listRect, this.mouse.x, this.mouse.y)) {
                 this.views.by(step, ed.routeIndices().length, EDITOR.visibleRows);
             } else if (this.eventsRect && contains(this.eventsRect, this.mouse.x, this.mouse.y)) {
@@ -279,7 +285,7 @@ export class EditorPanel implements EditorView {
         if (step && r.list === "views") {
             this.views.by(step, ed.routeIndices().length, EDITOR.visibleRows);
         } else if (step) {
-            this.parks.by(step, ed.parkNames.length, this.parkRows());
+            this.parks.by(step, this.parkItems(ed).length, this.parkRows());
         }
     }
 
@@ -297,6 +303,7 @@ export class EditorPanel implements EditorView {
         this.downOn = hit;
         if (hit === "field") {
             this.dropdown = { persistent: false, downAt: this.now() };
+            this.playlists = undefined;
             this.parks.first = Math.max(0, ed.playback.playOrder.indexOf(ed.parkIndex) - 2);
         } else if (hit?.startsWith("row.") || hit?.startsWith("park.")) {
             const views = hit.startsWith("row.");
@@ -304,7 +311,7 @@ export class EditorPanel implements EditorView {
         } else if (hit?.endsWith(".thumb")) {
             const which = hit.slice(0, -6);
             const scroll = this.scrollOf(which);
-            const count = which === "parks" ? () => ed.parkNames.length : which === "points" ? () => ed.restorePoints().length
+            const count = which === "parks" ? () => this.parkItems(ed).length : which === "points" ? () => ed.restorePoints().length
                 : which === "messages" ? () => builder.messages.length
                 : which === "events" ? () => ed.eventIndices().length : () => ed.routeIndices().length;
             const visible = which === "parks" ? this.parkRows() : which === "points" || which === "messages" ? EDITOR.boxRows
@@ -315,7 +322,7 @@ export class EditorPanel implements EditorView {
             const scroll = this.scrollOf(which);
             const page = which === "parks" ? this.parkRows() : which === "points" || which === "messages" ? 3
                 : which === "events" ? EDITOR.eventRows : EDITOR.visibleRows;
-            const count = which === "parks" ? ed.parkNames.length : which === "points" ? ed.restorePoints().length
+            const count = which === "parks" ? this.parkItems(ed).length : which === "points" ? ed.restorePoints().length
                 : which === "messages" ? builder.messages.length
                 : which === "events" ? ed.eventIndices().length : ed.routeIndices().length;
             scroll.by(this.mouse.y < (scroll.thumb?.y ?? 0) ? -page : page, count, page);
@@ -463,6 +470,10 @@ export class EditorPanel implements EditorView {
         }
         if (id.startsWith("park.")) {
             this.goToPark(Number(id.slice(5))); // a click in the open list: the list stays
+            return;
+        }
+        if (id.startsWith("parks.")) {
+            this.parkListAction(e, id.slice(6));
             return;
         }
         if (id.startsWith("msg.") || id.startsWith("sq.")) {
@@ -833,64 +844,201 @@ export class EditorPanel implements EditorView {
         }
     }
 
-    /** The park list, over the views list: the playlist's order, its rows dragged to reorder it. */
+    /** The park list's rows below its header. Held to jump: the parks in play order. Open as Playlist
+     *  order: those, then the parks the build left out (ticked off) and Add park; or, switched over, the
+     *  playlists the game knows, then New playlist and Duplicate. */
+    private parkItems(e: Editor): ParkItem[] {
+        const order = e.playback.playOrder;
+        if (!this.dropdown?.persistent) {
+            return order.map((_, p) => ({ kind: "park", p }));
+        }
+        if (this.playlists) {
+            return [...this.playlists.map((_, i) => ({ kind: "playlist", i }) as ParkItem),
+                { kind: "new" }, { kind: "copy" }];
+        }
+        const unused = e.playback.unusedParks;
+        return [...order.map((_, p) => ({ kind: "park", p }) as ParkItem),
+            ...(unused.length ? [{ kind: "head", text: "NOT IN THE BUILD" } as ParkItem] : []),
+            ...unused.map((_, i) => ({ kind: "unused", i }) as ParkItem), { kind: "add" }];
+    }
+
+    /** A click on a row or button of the open park list (its id after "parks."). */
+    private parkListAction(e: Editor, what: string): void {
+        const p = e.playback;
+        if (what === "mode") {
+            this.playlists = this.playlists ? undefined : readPlaylists();
+            this.parks.first = 0;
+        } else if (what.startsWith("tick.")) {
+            const index = p.playOrder[Number(what.slice(5))];
+            const park = index !== undefined ? p.parkKeyOf(index) : undefined;
+            if (park !== undefined && !p.setParkUse(park, !p.parkInUse(index))) {
+                this.useNote = { text: "One park at least stays in use", at: this.now() };
+            }
+        } else if (what.startsWith("unused.")) {
+            const park = p.unusedParks[Number(what.slice(7))];
+            if (park) {
+                p.setParkUse(park.key, !park.on);
+            }
+        } else if (what === "add") {
+            this.dropdown = undefined;
+            this.messages.first = 0;
+            builder.addPark(p.sequenceName);
+        } else if (what === "new" || what === "copy") {
+            this.dropdown = undefined;
+            this.playlists = undefined;
+            this.messages.first = 0;
+            if (what === "new") {
+                builder.newPlaylist();
+            } else {
+                builder.copyPlaylist(p.sequenceName);
+            }
+        } else if (what.startsWith("pl.")) {
+            const other = this.playlists?.[Number(what.slice(3))];
+            if (other && other.name !== p.sequenceName && !other.missing) {
+                this.dropdown = undefined;
+                this.playlists = undefined;
+                this.messages.first = 0;
+                builder.openPlaylist(other.name);
+            }
+        }
+    }
+
+    /** The park list, over the views list: the playlist's order, its rows dragged to reorder it and
+     *  ticked on and off; Add park; the playlists, to switch, make a new one or duplicate this one. */
     private parkList(e: Editor, scene: Scene): void {
         const s = EDITOR;
         const overlay = this.mode.overlay;
         const order = e.playback.playOrder;
+        const persistent = this.dropdown?.persistent === true;
+        if (!persistent) {
+            this.playlists = undefined;
+        }
+        const items = this.parkItems(e);
         const area = { x: this.listRect.x, y: this.listRect.y, width: this.paneViews.width - 2 * s.pad, height: this.listRect.height };
         this.parksRect = area;
         const visible = this.parkRows();
-        const bar = order.length > visible ? s.scrollBar + 2 : 0;
+        const bar = items.length > visible ? s.scrollBar + 2 : 0;
         this.parks.layout({ x: area.x + area.width - s.scrollBar, y: area.y + s.parkRow, width: s.scrollBar, height: visible * s.parkRow },
-            order.length, visible);
+            items.length, visible);
         const z = Z.tip - 4; // over the views list
         scene.set("parks", { type: "rect", ...area, fill: "#0b170fff", z });
         bevel(scene, "parks", area, THEME.bevelDark, THEME.bevelLight, THEME.bevel, z);
         // The open list carries the field's gold border (owner, 2026-11-10).
         scene.set("parks.open", { type: "rect", ...area, fill: "#00000000", border: THEME.fieldOpen, borderWidth: 2, z: z + 3 });
-        const head = this.dropdown?.persistent ? "Playlist order" : "Release on a park to go there";
+        const head = !persistent ? "Release on a park to go there" : this.playlists ? "Playlists" : "Playlist order";
         label(scene, "parks.head", head, { x: area.x + 8, y: area.y, width: 0, height: s.parkRow }, s.textSize, overlay, true);
         scene.set("parks.head", { ...scene.get("parks.head")!, z: z + 2 });
-        if (this.dropdown?.persistent) {
-            const help = "drag to reorder · click to go";
-            const w = measure(overlay, help, s.textSize - 2).width;
-            label(scene, "parks.help", help, { x: area.x + area.width - bar - 8 - w, y: area.y, width: 0, height: s.parkRow }, s.textSize - 2, overlay);
-            scene.set("parks.help", { ...scene.get("parks.help")!, colour: THEME.textDim, z: z + 2 });
+        const parksOn = builder.parksAvailable;
+        const busy = builder.running;
+        if (persistent) {
+            // Parks | Playlists: the list switches between the park order and the playlists
+            const text = this.playlists ? "Back to parks" : "Playlists";
+            const w = measure(overlay, text, s.textSize - 1, true).width + 34;
+            const r = this.place("parks.mode", { x: area.x + area.width - bar - 4 - w, y: area.y + 3, width: w, height: s.parkRow - 6 },
+                this.playlists ? "Back to this playlist's parks" : "Switch to another playlist, make a new one or duplicate this one");
+            button(scene, "parks.mode", r, this.state("parks.mode"), { icon: this.playlists ? "prev-view" : "next-view", iconSize: 16, text, textSize: s.textSize - 1, left: true }, overlay);
+            lift(scene, "parks.mode", z);
+            const note = this.useNote && this.now() - this.useNote.at < 2500 ? this.useNote.text
+                : this.playlists ? "" : "drag to reorder · tick to play";
+            if (note) {
+                const hw = measure(overlay, note, s.textSize - 2).width;
+                const hx = area.x + area.width - bar - 12 - w - hw;
+                if (hx > area.x + measure(overlay, head, s.textSize, true).width + 16) {
+                    label(scene, "parks.help", note, { x: hx, y: area.y, width: 0, height: s.parkRow }, s.textSize - 2, overlay);
+                    scene.set("parks.help", { ...scene.get("parks.help")!, colour: note === this.useNote?.text ? THEME.pending : THEME.textDim, z: z + 2 });
+                }
+            }
         }
         const width = area.width - bar;
         const top = area.y + s.parkRow;
         const hover = this.hovered;
         const r = this.rowDrag?.list === "parks" && this.rowDrag.moving ? this.rowDrag : undefined;
         const countW = measure(overlay, "000 views", s.textSize).width;
+        const tickW = persistent && !this.playlists ? 26 : 0;
+        const text = (id: string, t: string, x: number, y: number, colour?: string, bold = false) => {
+            label(scene, id, t, { x, y, width: 0, height: s.parkRow }, s.textSize, overlay, bold);
+            scene.set(id, { ...scene.get(id)!, z: z + 2, ...(colour ? { colour } : {}) });
+        };
         for (let i = 0; i < visible; i++) {
-            const p = this.parks.first + i;
-            const index = order[p];
-            if (index === undefined) {
+            const k = this.parks.first + i;
+            const item = items[k];
+            if (!item) {
                 break;
             }
-            const box = this.place(`park.${p}`, { x: area.x, y: top + i * s.parkRow, width, height: s.parkRow });
-            // Held to jump, the park under the mouse is the one a release goes to: gold (owner, 2026-11-10).
-            const jump = !this.dropdown?.persistent && hover === `park.${p}`;
-            const fill = jump ? THEME.faceAltHover : index === e.parkIndex ? THEME.faceOn
-                : hover === `park.${p}` && !r ? THEME.faceHover : i % 2 ? THEME.face : "#00000000";
-            scene.set(`park.${p}`, { type: "rect", ...box, fill, z: z + 1 });
-            if (this.dropdown?.persistent) {
-                grip(scene, `pgrip.${i}`, box.x + 5, box.y + box.height / 2, z + 2);
+            const y = top + i * s.parkRow;
+            const rowRect = { x: area.x, y, width, height: s.parkRow };
+            if (item.kind === "head") {
+                text(`ph.${i}`, item.text, area.x + 8, y, THEME.textDim, true);
+                continue;
             }
-            const n = e.playback.viewCountOf(index);
-            const texts: [string, string, number][] = [
-                [`pn.${i}`, String(p + 1), box.x + s.grip + 4],
-                [`pname.${i}`, fit(overlay, e.parkNames[index] ?? "", s.textSize, width - s.grip - 40 - countW - 16), box.x + s.grip + 40],
-                [`pcount.${i}`, `${n} view${n === 1 ? "" : "s"}`, box.x + width - 8 - measure(overlay, `${n} view${n === 1 ? "" : "s"}`, s.textSize).width],
-            ];
-            for (const [id, text, x] of texts) {
-                label(scene, id, text, { x, y: box.y, width: 0, height: box.height }, s.textSize, overlay, id.startsWith("pname") && index === e.parkIndex);
-                scene.set(id, { ...scene.get(id)!, z: z + 2, ...(id.startsWith("pcount") ? { colour: THEME.textDim } : {}) });
+            if (item.kind === "park") {
+                const p = item.p;
+                const index = order[p];
+                const used = e.playback.parkInUse(index);
+                // (the tick first: the row under it would take the click)
+                if (tickW) {
+                    const tick = this.place(`parks.tick.${p}`, { x: area.x + s.grip + 2, y: y + 4, width: 20, height: s.parkRow - 8 },
+                        used ? "Playing: click to leave it out (it stays in the playlist)" : "Left out: click to play it again");
+                    this.tickBox(scene, `ptick.${i}`, tick, used, this.hit() === `parks.tick.${p}`, z + 2);
+                }
+                const box = this.place(`park.${p}`, rowRect);
+                // Held to jump, the park under the mouse is the one a release goes to: gold (owner, 2026-11-10).
+                const jump = !persistent && hover === `park.${p}`;
+                const fill = jump ? THEME.faceAltHover : index === e.parkIndex ? THEME.faceOn
+                    : hover === `park.${p}` && !r ? THEME.faceHover : i % 2 ? THEME.face : "#00000000";
+                scene.set(`park.${p}`, { type: "rect", ...box, fill, z: z + 1 });
+                if (persistent) {
+                    grip(scene, `pgrip.${i}`, box.x + 5, box.y + box.height / 2, z + 2);
+                }
+                const n = e.playback.viewCountOf(index);
+                const dim = used ? undefined : THEME.textDim;
+                text(`pn.${i}`, String(p + 1), box.x + s.grip + 4 + tickW, y, dim);
+                const name = (e.parkNames[index] ?? "") + (used ? "" : " (left out)");
+                text(`pname.${i}`, fit(overlay, name, s.textSize, width - s.grip - 40 - tickW - countW - 16), box.x + s.grip + 40 + tickW, y,
+                    dim, index === e.parkIndex);
+                const views = `${n} view${n === 1 ? "" : "s"}`;
+                text(`pcount.${i}`, views, box.x + width - 8 - measure(overlay, views, s.textSize).width, y, THEME.textDim);
+                if (r && r.from === p) {
+                    scene.set(`pdim.${i}`, { type: "rect", ...box, fill: THEME.rowDimmed, z: z + 3 });
+                }
+                continue;
             }
-            if (r && r.from === p) {
-                scene.set(`pdim.${i}`, { type: "rect", ...box, fill: THEME.rowDimmed, z: z + 3 });
+            if (item.kind === "unused") {
+                const park = e.playback.unusedParks[item.i];
+                const tick = this.place(`parks.unused.${item.i}`, rowRect,
+                    park.on ? "Plays after the next build: click to leave it out again" : "Not in the build: click to play it after the next build");
+                scene.set(`pu.${i}`, { type: "rect", ...tick, fill: hover === `parks.unused.${item.i}` ? THEME.faceHover : i % 2 ? THEME.face : "#00000000", z: z + 1 });
+                this.tickBox(scene, `ptick.${i}`, { x: area.x + s.grip + 2, y: y + 4, width: 20, height: s.parkRow - 8 }, park.on, false, z + 2);
+                text(`pname.${i}`, fit(overlay, park.name, s.textSize, width - s.grip - 40 - tickW - countW - 16), area.x + s.grip + 40 + tickW, y,
+                    park.on ? undefined : THEME.textDim);
+                const state = park.on ? "needs a build" : "left out";
+                text(`pcount.${i}`, state, area.x + width - 8 - measure(overlay, state, s.textSize).width, y, park.on ? THEME.pending : THEME.textDim);
+                continue;
             }
+            if (item.kind === "playlist") {
+                const pl = this.playlists![item.i];
+                const playing = pl.name === e.playback.sequenceName;
+                const off = playing || pl.missing === true || busy;
+                const tip = playing ? "Playing now" : pl.missing ? `${pl.file} is missing` : busy ? `Wait for the ${builder.noun} to finish`
+                    : `Switch to "${pl.name}": it is built (only changed parks) and played`;
+                const row = this.place(`parks.pl.${item.i}`, rowRect, tip, off);
+                scene.set(`ppl.${i}`, { type: "rect", ...row, fill: playing ? THEME.faceOn : hover === `parks.pl.${item.i}` && !off ? THEME.faceHover : i % 2 ? THEME.face : "#00000000", z: z + 1 });
+                const right = playing ? "playing" : pl.missing ? "file missing" : `${pl.parks ?? 0} park${pl.parks === 1 ? "" : "s"}`;
+                const rw = measure(overlay, right, s.textSize).width;
+                text(`pname.${i}`, fit(overlay, pl.name, s.textSize, width - 24 - rw - 16), area.x + 12, y, pl.missing ? THEME.textDim : undefined, playing);
+                text(`pcount.${i}`, right, area.x + width - 8 - rw, y, pl.missing ? THEME.warning : THEME.textDim);
+                continue;
+            }
+            // The action rows: Add park; New playlist; Duplicate
+            const [label0, tip, icon] = item.kind === "add" ? ["Add park…", "Pick a park file or download (.park, .zip); it is added and the playlist built", "add"]
+                : item.kind === "new" ? ["New playlist from a folder…", "Pick a folder of parks: a playlist of them is made, built and played", "add"]
+                : ["Duplicate this playlist…", "Name a copy of this playlist (with your edits); it is built and played", "import"];
+            const off = !parksOn || busy;
+            const why = !parksOn ? "needs the patched engine with these dialogs" : busy ? `wait for the ${builder.noun} to finish` : "";
+            const id = `parks.${item.kind}`;
+            const row = this.place(id, { x: area.x + 4, y: y + 2, width: width - 8, height: s.parkRow - 4 }, why ? `${label0.replace("…", "")}: ${why}` : tip, off);
+            button(scene, id, row, this.state(id), { icon, iconSize: 16, text: label0, textSize: s.textSize, left: true }, overlay);
+            lift(scene, id, z);
         }
         if (this.parks.track) {
             scene.set("parks.track", { type: "rect", ...this.parks.track, fill: THEME.editorList, z: z + 1 });
@@ -901,8 +1049,20 @@ export class EditorPanel implements EditorView {
         if (r) {
             const list = { ...area, width };
             this.dragged(scene, list, s.parkRow, this.parks.first, order.length, r, ghost => {
-                label(scene, "ghost.name", e.parkNames[order[r.from]] ?? "", { x: ghost.x + s.grip + 34, y: ghost.y, width: 0, height: ghost.height }, s.textSize, overlay, true);
+                label(scene, "ghost.name", e.parkNames[order[r.from]] ?? "", { x: ghost.x + s.grip + 34 + tickW, y: ghost.y, width: 0, height: ghost.height }, s.textSize, overlay, true);
             });
+        }
+    }
+
+    /** A tick box: a check on a lit face while on. */
+    private tickBox(scene: Scene, id: string, r: Rect, on: boolean, hover: boolean, z: number): void {
+        const overlay = this.mode.overlay;
+        scene.set(id, { type: "rect", ...r, fill: on ? THEME.faceOn : hover ? THEME.faceHover : THEME.editorList, z });
+        bevel(scene, id, r, THEME.bevelDark, THEME.bevelLight, THEME.bevel, z + 1);
+        if (on) {
+            const px = iconPixels(16, overlay.scale);
+            const side = px / overlay.scale;
+            scene.set(`${id}.check`, { type: "image", src: iconPath("check", px), x: Math.round(r.x + (r.width - side) / 2), y: Math.round(r.y + (r.height - side) / 2), z: z + 2 });
         }
     }
 
@@ -1232,12 +1392,14 @@ export class EditorPanel implements EditorView {
         const build = this.place("build", { x: x0, y, width: inner, height: s.buildButton },
             unavailable ? line.text : task === "export" ? "Stop the export (Ctrl+B)"
                 : task === "import" ? "Stop the import; the playlist plays on as it was (Ctrl+B)"
+                : task === "new" || task === "copy" || task === "open" ? `Stop the ${builder.noun}; the playlist plays on as it was (Ctrl+B)`
+                : task === "add" ? "Stop adding the park; the playlist plays on as it was (Ctrl+B)"
                 : running ? "Stop the build; the playlist plays on as it was (Ctrl+B)"
                 : nothing ? "Nothing to build: the playlist files hold every edit"
                 : "Save your live edits to the playlist and build it in the background, then play it (Ctrl+B)", unavailable || nothing);
         const st = this.state("build");
         button(scene, "build", build, { ...st, face: running || unavailable || nothing || st.hover || st.down ? undefined : THEME.buildFace },
-            { icon: running ? "close" : "build", iconSize: s.toolIcon, text: !running ? "Build and play" : task === "export" ? "Cancel export" : task === "import" ? "Cancel import" : "Cancel build", textSize: 16, hint: "Ctrl+B" }, overlay);
+            { icon: running ? "close" : "build", iconSize: s.toolIcon, text: !running ? "Build and play" : task === "build" ? "Cancel build" : `Cancel ${builder.noun}`, textSize: 16, hint: "Ctrl+B" }, overlay);
         y += s.buildButton + 10;
         // The messages: what the build took in, built, warned about; one about a park opens it.
         this.sectionLabel(scene, "build.msgs", "MESSAGES", x0, y);
@@ -1424,6 +1586,15 @@ function foldMark(scene: Scene, id: string, open: boolean, x: number, cy: number
     const px = iconPixels(20, overlay.scale);
     const side = px / overlay.scale;
     scene.set(id, { type: "image", src: iconPath(open ? "fold-open" : "fold-closed", px), x: Math.round(x), y: Math.round(cy - side / 2), z: Z.icon });
+}
+
+/** Raises a button (its face, bevel and content) by `dz`: drawn over the open park list. */
+function lift(scene: Scene, id: string, dz: number): void {
+    for (const [key, el] of scene) {
+        if (key === id || key.startsWith(id + ".")) {
+            scene.set(key, { ...el, z: (el.z ?? 0) + dz });
+        }
+    }
 }
 
 /** Six dots: the drag handle of a row. */

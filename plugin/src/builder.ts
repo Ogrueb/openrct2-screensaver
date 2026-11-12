@@ -10,17 +10,41 @@
 // dialog and run the same generator on the picked file (--live-export, --live-import), reporting to
 // task-export.json / task-import.json in the live folder. An import builds the bundle's playlist as a
 // live build, and the plugin then has the engine install and play it (applyBuild of another sequence).
+//
+// Parks and new playlists (engine patch "add parks and make playlists through the system's dialogs"):
+// screensaver.addPark(sequence) shows the Open dialog for a park, which the generator adds to the
+// playlist and builds (--live-add); newPlaylist() shows the folder dialog and makes a playlist of the
+// parks in the picked folder (--live-new); copyPlaylist(sequence) shows the Save dialog and copies the
+// playlist under the name given (--live-copy). Each reports to task-<task>.json and then builds; a new
+// playlist plays as an import does. Another registered playlist (live/playlists.json) is switched to by
+// building it (a build of another sequence: "open"), which the parks' cache makes quick.
 
 import { Edits, editsChanged, filesApi, lastLiveSave, liveSaveCount, liveFileName, loadBuiltEdits, loadEdits, Playlist, saveBuiltEdits, Settings } from "./storage";
 
 export type BuildState = "idle" | "running" | "done" | "failed" | "cancelled";
 
-/** What the generator runs for: a build of the playing playlist, an export, an import. */
-export type BuildTask = "build" | "export" | "import";
+/** What the generator runs for: a build of the playing playlist, an export, an import, a park added, a new
+ *  playlist from a folder, a copy of the playlist, a build of another playlist to switch to it. */
+export type BuildTask = "build" | "export" | "import" | "add" | "new" | "copy" | "open";
+
+/** The tasks that report to task-<task>.json before their build. */
+type FileTask = "export" | "import" | "add" | "new" | "copy";
+
+/** The tasks whose build replaces the playing playlist with another one. */
+const NEW_PLAYLIST: BuildTask[] = ["import", "new", "copy", "open"];
+
+/** How the build pane names each task. */
+const NOUN: Record<BuildTask, string> = {
+    build: "build", export: "export", import: "import", add: "park", new: "new playlist", copy: "copy", open: "switch",
+};
+const DOING: Record<BuildTask, string> = {
+    build: "Building", export: "Exporting", import: "Importing", add: "Adding the park", new: "Making the playlist",
+    copy: "Copying the playlist", open: "Switching",
+};
 
 export interface BuildStatus {
     state: BuildState;
-    task?: string; // "build", "export" or "import" (an engine with bundles)
+    task?: string; // "build", "export", "import", "add", "new" or "copy" (an engine with bundles)
     sequence: string;
     exitCode: number;
     started: number; // ms since 1970
@@ -38,6 +62,31 @@ export interface BuildApi {
     // was closed, throws with the reason when it cannot start (absent: an engine without bundles).
     exportPlaylist?(sequence: string): boolean;
     importPlaylist?(): boolean;
+    // The system's Open, folder or Save dialog, then the generator; as above (absent: an engine without them).
+    addPark?(sequence: string): boolean;
+    newPlaylist?(): boolean;
+    copyPlaylist?(sequence: string): boolean;
+}
+
+/** A playlist the game can build and play (live/playlists.json, which the generator writes). */
+export interface PlaylistInfo {
+    name: string;
+    file: string;
+    parks?: number;
+    missing?: boolean;
+}
+
+export function readPlaylists(): PlaylistInfo[] {
+    const text = filesApi()?.readFile("playlists.json");
+    if (!text) {
+        return [];
+    }
+    try {
+        const list = JSON.parse(text) as { playlistsVersion?: number; playlists?: PlaylistInfo[] };
+        return list && list.playlistsVersion === 1 && Array.isArray(list.playlists) ? list.playlists : [];
+    } catch {
+        return [];
+    }
 }
 
 /** A park of the build, in play order (the build pane's squares). */
@@ -81,22 +130,23 @@ export function buildApi(): BuildApi | undefined {
         && typeof screensaver.applyBuild === "function" ? screensaver as BuildApi : undefined;
 }
 
-/** What mksequence.py --live-export / --live-import writes for the plugin (task-<task>.json in the live folder). */
+/** What mksequence.py --live-export / --live-import / --live-add / --live-new / --live-copy writes for the plugin
+ *  (task-<task>.json in the live folder). */
 export interface TaskResult {
     taskVersion: 1;
-    task: "export" | "import";
+    task: FileTask;
     started: number;
     ok: boolean | null; // null: still running
     finished?: number;
     error?: string;
     path?: string; // the bundle
-    sequence?: string; // export: the playlist's; import: the imported playlist's, once unpacked
-    playlist?: string; // import: the playlist file it wrote
+    sequence?: string; // export, add: the playlist's; import, new, copy: the new playlist's, once written
+    playlist?: string; // import, new, copy: the playlist file it wrote; add: the playlist's file
     missing?: string[]; // import: parks neither in the bundle nor the park folder
     messages?: BuildMessage[];
 }
 
-export function readTaskResult(task: "export" | "import"): TaskResult | undefined {
+export function readTaskResult(task: FileTask): TaskResult | undefined {
     const text = filesApi()?.readFile(`task-${task}.json`);
     if (!text) {
         return undefined;
@@ -183,6 +233,12 @@ export class Builder {
         return this.available && typeof this.api!.exportPlaylist === "function" && typeof this.api!.importPlaylist === "function";
     }
 
+    /** Add park, New playlist and Duplicate: an engine with those dialogs. */
+    get parksAvailable(): boolean {
+        return this.available && typeof this.api!.addPark === "function" && typeof this.api!.newPlaylist === "function"
+            && typeof this.api!.copyPlaylist === "function";
+    }
+
     get running(): boolean {
         return this.task !== undefined;
     }
@@ -192,9 +248,9 @@ export class Builder {
         return this.task;
     }
 
-    /** A build is under way: Build and play's, or an import's once the bundle is unpacked. */
+    /** A build is under way: Build and play's or a switch's, or another task's once its build starts. */
     private get building(): boolean {
-        return this.task === "build" || (this.task === "import" && this.sequence !== undefined);
+        return this.task === "build" || this.task === "open" || (this.task !== undefined && this.task !== "export" && this.sequence !== undefined);
     }
 
     start(sequence: string): void {
@@ -229,11 +285,52 @@ export class Builder {
         this.startBundle("import", () => this.api!.importPlaylist!());
     }
 
-    private startBundle(task: "export" | "import", run: () => boolean, sequence?: string): void {
-        if (!this.bundlesAvailable || this.running) {
+    /** Add park: the system's Open dialog, then the park added to the playlist and the playlist built. */
+    addPark(sequence: string): void {
+        if (this.parksAvailable) {
+            this.startEdits = JSON.parse(JSON.stringify(loadEdits())) as Edits; // (baked in as a build does)
+            this.last = this.last ?? readBuildResult(sequence);
+            this.startBundle("add", () => this.api!.addPark!(sequence), sequence);
+        }
+    }
+
+    /** New playlist from a folder: the system's folder dialog, then the playlist made, built and played. */
+    newPlaylist(): void {
+        if (this.parksAvailable) {
+            this.startBundle("new", () => this.api!.newPlaylist!());
+        }
+    }
+
+    /** Duplicate: the system's Save dialog names the copy, which is made, built and played. */
+    copyPlaylist(sequence: string): void {
+        if (this.parksAvailable) {
+            this.startBundle("copy", () => this.api!.copyPlaylist!(sequence), sequence);
+        }
+    }
+
+    /** Switches to another playlist the game knows: it is built (only changed parks) and played. */
+    openPlaylist(sequence: string): void {
+        if (!this.api || this.running) {
             return;
         }
-        const name = task === "export" ? "Export" : "Import";
+        try {
+            this.api.build(sequence);
+        } catch (e) {
+            this.outcome = { phase: "failed", text: `Switch failed: ${message(e)}`, warning: true };
+            this.notes = [{ level: "error", text: `Could not switch to "${sequence}": ${message(e)}` }];
+            log(`switch to "${sequence}" did not start: ${message(e)}`);
+            return;
+        }
+        this.begin("open", sequence);
+        this.last = undefined; // (the squares are the other playlist's from here)
+        log(`switching to "${sequence}"`);
+    }
+
+    private startBundle(task: FileTask, run: () => boolean, sequence?: string): void {
+        if (!(task === "export" || task === "import" ? this.bundlesAvailable : this.parksAvailable) || this.running) {
+            return;
+        }
+        const name = { export: "Export", import: "Import", add: "Adding a park", new: "New playlist", copy: "Duplicate" }[task];
         let picked: boolean;
         try {
             picked = run();
@@ -248,7 +345,8 @@ export class Builder {
             return; // the dialog was closed
         }
         this.begin(task, undefined);
-        log(task === "export" ? `exporting "${sequence}"` : "importing a playlist");
+        log(task === "export" ? `exporting "${sequence}"` : task === "import" ? "importing a playlist"
+            : task === "add" ? `adding a park to "${sequence}"` : task === "new" ? "making a playlist from a folder" : `copying "${sequence}"`);
     }
 
     private begin(task: BuildTask, sequence: string | undefined): void {
@@ -284,8 +382,8 @@ export class Builder {
             return;
         }
         let imported: TaskResult | undefined;
-        if (this.task === "import") {
-            imported = fresh(readTaskResult("import"));
+        if (this.task !== "build" && this.task !== "open") {
+            imported = fresh(readTaskResult(this.task));
             if (imported?.ok && imported.sequence && !this.sequence) {
                 this.sequence = imported.sequence;
                 this.last = undefined; // (the squares are the imported playlist's from here)
@@ -303,20 +401,24 @@ export class Builder {
         this.progress = undefined;
         const took = Date.now() - this.started;
         const from = (r: { messages?: BuildMessage[] } | undefined) => [...(r?.messages ?? [])].reverse();
-        if (task === "import" && !(imported?.ok && sequence)) {
+        const what = { build: "Build", open: "Switch", import: "Import", add: "Adding the park", new: "New playlist", copy: "Duplicate", export: "Export" }[task];
+        if (task !== "build" && task !== "open" && !(imported?.ok && sequence)) {
             const why = status.state === "cancelled" ? "cancelled" : imported?.error || status.error || "the generator failed";
-            this.outcome = { phase: status.state === "cancelled" ? "idle" : "failed", text: `Import ${status.state === "cancelled" ? "cancelled" : "failed: " + why}`, warning: status.state !== "cancelled" };
+            this.outcome = { phase: status.state === "cancelled" ? "idle" : "failed", text: `${what} ${status.state === "cancelled" ? "cancelled" : "failed: " + why}`, warning: status.state !== "cancelled" };
             this.notes = imported?.messages?.some(m => m.level === "error") ? from(imported)
-                : [{ level: status.state === "cancelled" ? "info" : "error", text: `Import ${status.state === "cancelled" ? "cancelled; the playlist plays on as it was" : `failed: ${why} (log: screensaver/build.log in the user folder)`}` }, ...from(imported)];
-            log(`import ${status.state === "cancelled" ? "cancelled" : "failed: " + why}`);
+                : [{ level: status.state === "cancelled" ? "info" : "error", text: `${what} ${status.state === "cancelled" ? "cancelled; the playlist plays on as it was" : `failed: ${why} (log: screensaver/build.log in the user folder)`}` }, ...from(imported)];
+            log(`${NOUN[task]} ${status.state === "cancelled" ? "cancelled" : "failed: " + why}`);
             return;
         }
-        // (the import's own lines come before its build's, so they are listed under them: newest first)
-        this.earlier = task === "import" ? from(imported) : [];
+        // (the task's own lines come before its build's, so they are listed under them: newest first)
+        this.earlier = task !== "build" && task !== "open" ? from(imported) : [];
         this.last = current;
         if (status.state === "cancelled") {
             this.outcome = { phase: "idle", text: "Build cancelled" };
             this.notes = [{ level: "info", text: task === "import" ? "Build cancelled; the imported playlist is in your playlists folder, the old one plays on"
+                : task === "new" || task === "copy" ? "Build cancelled; the new playlist is in your playlists folder, the old one plays on"
+                : task === "add" ? "Build cancelled; the park is in the playlist file and plays after the next build"
+                : task === "open" ? "Switch cancelled; the playlist plays on as it was"
                 : "Build cancelled; the playlist plays on as it was" }];
             return;
         }
@@ -329,7 +431,8 @@ export class Builder {
             log(`build of "${sequence}" failed: ${why} (log: screensaver/build.log in the user folder)`);
             return;
         }
-        const error = this.onReady ? this.onReady(current, task === "import") : "nothing to play it";
+        const replaces = NEW_PLAYLIST.includes(task);
+        const error = this.onReady ? this.onReady(current, replaces) : "nothing to play it";
         if (error) {
             this.outcome = { phase: "failed", text: `Built, but not taken in: ${error}`, warning: true };
             this.notes = [{ level: "error", text: `Built, but not taken in: ${error}` }];
@@ -337,20 +440,21 @@ export class Builder {
             return;
         }
         this.builtFrom = current.started;
-        if (task === "build") {
+        if (task === "build" || task === "add") {
             saveBuiltEdits(this.startEdits); // edits made while it ran still need a build
         }
         const warnings = current.warnings?.length ?? 0;
         const at = timeOfDay(current.finished ?? Date.now());
+        const done = { build: "Built", add: "Built", import: "Imported", new: "Made", copy: "Copied", open: "Switched", export: "Exported" }[task];
         this.outcome = {
-            phase: "done", text: `${task === "import" ? "Imported" : "Built"} at ${at}, now playing${warnings ? `; ${warnings} warning${warnings > 1 ? "s" : ""}` : ""}`,
+            phase: "done", text: `${done} at ${at}, now playing${warnings ? `; ${warnings} warning${warnings > 1 ? "s" : ""}` : ""}`,
         };
-        this.notes = [{ level: "ok", text: task === "import" ? `Imported "${sequence}" ${at} in ${clock(took)}, now playing`
-            : `Built ${at} in ${clock(took)}, now playing` }];
+        this.notes = [{ level: "ok", text: task === "build" || task === "add" ? `Built ${at} in ${clock(took)}, now playing`
+            : `${done} "${sequence}" ${at} in ${clock(took)}, now playing` }];
         for (const w of current.warnings ?? []) {
             log(`build warning: ${w}`);
         }
-        log(`${task === "import" ? "imported" : "build of"} "${sequence}" now playing`);
+        log(`${NOUN[task]} "${sequence}" now playing`);
     }
 
     private finishExport(status: BuildStatus, result: TaskResult | undefined): void {
@@ -380,14 +484,16 @@ export class Builder {
         if (this.task === "export") {
             return { phase: "running", text: "Exporting the playlist" };
         }
-        if (this.task === "import" && !this.sequence) {
-            return { phase: "running", text: "Importing the playlist" };
+        if (this.task && this.task !== "build" && this.task !== "open" && !this.sequence) {
+            return { phase: "running", text: this.task === "import" ? "Importing the playlist" : DOING[this.task] };
         }
         if (this.running) {
             const p = this.progress;
             const name = (p?.parkKey && this.nameOf?.(p.parkKey)) || p?.parkName;
             const where = p?.parks ? `Park ${p.park} of ${p.parks}${name ? " · " + name : ""}` : "Starting";
-            return { phase: "running", text: this.task === "import" ? `Building the import · ${where}` : where };
+            return { phase: "running", text: this.task === "import" ? `Building the import · ${where}`
+                : this.task === "new" || this.task === "copy" ? `Building the new playlist · ${where}`
+                : this.task === "open" ? `Building "${this.sequence}" · ${where}` : where };
         }
         return this.outcome ?? { phase: "idle", text: "" };
     }
@@ -410,6 +516,7 @@ export class Builder {
         }
         const count = this.count;
         return this.task === "export" ? "Exporting" : this.task === "import" && !count ? "Importing"
+            : this.task && this.task !== "build" && this.task !== "open" && !count ? DOING[this.task]
             : count ? `Building ${count.park}/${count.parks}` : "Building";
     }
 
@@ -465,7 +572,12 @@ export class Builder {
         return saved !== undefined && saved > Math.max(this.builtFrom, installed ?? 0);
     }
 
-    /** Another playlist plays now (an import): what was kept about the old one goes. */
+    /** What the running task is called on the Cancel button ("Cancel <noun>"). */
+    get noun(): string | undefined {
+        return this.task ? NOUN[this.task] : undefined;
+    }
+
+    /** Another playlist plays now (an import, a new playlist, a switch): what was kept about the old one goes. */
     forgetPlaylist(): void {
         this.dirtyStamp = "";
         this.startEdits = {};

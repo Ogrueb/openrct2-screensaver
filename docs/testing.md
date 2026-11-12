@@ -249,6 +249,26 @@ with patch 0018 and an install from this version (`generator.json` with the play
 - [x] A broken zip says why once, in the messages (no line above them); Cancel import stops it and the playlist
       plays on.
 
+### Parks and playlists (patch 0019, 2026-11-12)
+Needs an engine build with patch 0019 and an install from this version (`generator.json` and
+`screensaver\live\playlists.json`).
+- [ ] In the mode's editor, a click on the park field opens Playlist order with a tick per park. Ticking a park
+      off greys it ("(left out)"), Next park passes it over at once, and the build pane's Build and play lights up.
+      Ticking off every park but one leaves the last on ("One park at least stays in use").
+- [ ] Build and play: the playlist file gets `use = false` on that park (comments kept); after the build the
+      park is listed under NOT IN THE BUILD. Ticking it there says "needs a build"; the next build plays it again.
+- [ ] Add park… (last row) opens Windows' Open dialog for `.park` and `.zip`; the picked park is added at the
+      end of the playlist file and the playlist built ("Added <file> to <playlist>"), then plays with it. A park
+      already in the playlist says so.
+- [ ] Playlists (button in the list's header) lists every installed playlist with its park count, the playing
+      one marked. A click on another builds it ("Building "<name>" · Park n of m") and plays it with the editor
+      open; a click back switches back, the edits made in the first one still there.
+- [ ] New playlist from a folder… opens the folder dialog; the new playlist ("RCT Screensaver <folder>") is
+      written to `Documents\OpenRCT2\screensaver\playlists`, built and played, and listed under Playlists.
+- [ ] Duplicate this playlist… opens the Save dialog in that folder ("<name> copy.toml"); the copy is named after
+      the file, built and played; the original keeps its file and edits.
+- [ ] After a restart of the game, the last playlist built from the game plays.
+
 ### Live file (patch 0016, 2026-11-10)
 Passed in the game on 2026-11-10 (example playlist, Windows), except the settings page's panel, checked
 through its function only. Needs an engine build with patch 0016 and an install from this version

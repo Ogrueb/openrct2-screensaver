@@ -56,7 +56,7 @@ class LiveBundle(unittest.TestCase):
         self.assertEqual([m["level"] for m in result["messages"]], ["ok", "warn"])
 
     def test_export_bakes_the_games_edits_first(self):
-        os.makedirs(livefile.folder(self.user))
+        os.makedirs(livefile.folder(self.user), exist_ok=True)
         with open(livefile.path("My List", self.user), "w") as f:
             json.dump({"version": 1, "sequence": "My List", "saved": 1000, "source": os.path.abspath(self.playlist),
                        "edits": {}, "props": {"titles": "on"}}, f)
