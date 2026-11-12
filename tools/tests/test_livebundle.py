@@ -135,8 +135,9 @@ class LiveBundle(unittest.TestCase):
             f.write("// host")
 
         def fake_build(path, out, **kwargs):
+            kwargs["progress"](0, 1, {"key": "a.park", "name": "Park A", "state": "built", "warnings": [], "companions": ["Animator"]})
             return {"name": "My List", "layout": "plugin", "dir": os.path.join(out, "My List"),
-                    "parks": [], "playlist": {"version": 1, "sequence": "My List", "parks": []}, "titleMusic": "keep",
+                    "parks": [{"key": "a.park", "name": "Park A", "savedName": "Park A", "warnings": []}], "playlist": {"version": 1, "sequence": "My List", "parks": []}, "titleMusic": "keep",
                     "companionDir": companion_dir, "companions": [("rct-screensaver-companion-animator.js", {"name": "Animator"}, ["Park A"])],
                     "source": os.path.abspath(path), "live": None}
 
@@ -148,8 +149,9 @@ class LiveBundle(unittest.TestCase):
             self.assertEqual(self.quiet(mksequence.live_build, "My List", self.user, True), 0)
             first = result()
             self.assertTrue(os.path.exists(os.path.join(self.user, "plugin", "rct-screensaver-companion-animator.js")))
-            self.assertEqual(first["warnings"], ["Park script Animator (Park A) starts after a restart of the game"])
-            self.assertIn("warn", [m["level"] for m in first["messages"]])
+            self.assertEqual(first["warnings"], ["Park A: park script Animator starts after a restart of the game"])
+            self.assertIn({"level": "warn", "text": first["warnings"][0], "park": "a.park"}, first["messages"])
+            self.assertEqual(first["parkStates"][0]["warnings"], 1, "its square is flagged")
             # The same scripts installed already: nothing waits for a restart
             self.quiet(mksequence.live_build, "My List", self.user, True)
             self.assertEqual(result()["warnings"], [])
