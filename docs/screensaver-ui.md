@@ -383,7 +383,9 @@ zip the settings page's Import and Export use (`tools/bundle.py`), without leavi
   storage, clears the old playlist's view edits and its built edits from the storage (its live file
   keeps them for its next build), and starts the player on the new sequence, opening the editor again. An
   import of the playlist that plays (same name) is taken in like a build. The imported playlist plays on after
-  a restart; its parks' companion scripts need a normal install (`mksequence.py --install`).
+  a restart. Its parks' companion scripts are put in the user plugin folder with the build (replacing the old
+  playlist's), but the game loads plugins only as it starts: when they changed, the build pane lists a warning
+  per script, "Park script <name> (<parks>) starts after a restart of the game" (owner, 2026-11-12).
 
 ### Live file (2026-11-10, owner's go-ahead in "Explore saving playlists without the Generator")
 

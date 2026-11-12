@@ -97,7 +97,8 @@ class LiveBundle(unittest.TestCase):
         os.makedirs(other)
         built = []
 
-        def fake_live_build(name, user_dir):
+        def fake_live_build(name, user_dir, imported=False):
+            self.assertTrue(imported)
             built.append((name, user_dir))
             return 0
 
@@ -121,11 +122,41 @@ class LiveBundle(unittest.TestCase):
 
     def test_import_backs_up_a_playlist_it_replaces(self):
         _, out = self.export()
-        with mock.patch.object(mksequence, "live_build", lambda name, user_dir: 0):
+        with mock.patch.object(mksequence, "live_build", lambda name, user_dir, imported=False: 0):
             self.quiet(mksequence.live_import, out, self.user)
             self.quiet(mksequence.live_import, out, self.user)
         backups = os.listdir(os.path.join(self.user, "screensaver", "backups"))
         self.assertTrue(any(b.startswith("my-list.toml.") for b in backups), backups)
+
+    def test_imported_park_scripts_are_installed_with_a_restart_warning(self):
+        companion_dir = os.path.join(self.tmp.name, "companions")
+        os.makedirs(companion_dir)
+        with open(os.path.join(companion_dir, "rct-screensaver-companion-animator.js"), "w") as f:
+            f.write("// host")
+
+        def fake_build(path, out, **kwargs):
+            return {"name": "My List", "layout": "plugin", "dir": os.path.join(out, "My List"),
+                    "parks": [], "playlist": {"version": 1, "sequence": "My List", "parks": []}, "titleMusic": "keep",
+                    "companionDir": companion_dir, "companions": [("rct-screensaver-companion-animator.js", {"name": "Animator"}, ["Park A"])],
+                    "source": os.path.abspath(path), "live": None}
+
+        def result():
+            _, path = mksequence.live_build_paths("My List", self.user)
+            with open(path, encoding="utf-8") as f:
+                return json.load(f)
+        with mock.patch.object(mksequence, "build", fake_build):
+            self.assertEqual(self.quiet(mksequence.live_build, "My List", self.user, True), 0)
+            first = result()
+            self.assertTrue(os.path.exists(os.path.join(self.user, "plugin", "rct-screensaver-companion-animator.js")))
+            self.assertEqual(first["warnings"], ["Park script Animator (Park A) starts after a restart of the game"])
+            self.assertIn("warn", [m["level"] for m in first["messages"]])
+            # The same scripts installed already: nothing waits for a restart
+            self.quiet(mksequence.live_build, "My List", self.user, True)
+            self.assertEqual(result()["warnings"], [])
+            # A plain build from the game leaves the plugin folder alone
+            os.remove(os.path.join(self.user, "plugin", "rct-screensaver-companion-animator.js"))
+            self.quiet(mksequence.live_build, "My List", self.user)
+            self.assertFalse(os.path.exists(os.path.join(self.user, "plugin", "rct-screensaver-companion-animator.js")))
 
     def test_import_of_a_bad_file_fails_with_a_reason(self):
         bad = os.path.join(self.tmp.name, "bad.zip")

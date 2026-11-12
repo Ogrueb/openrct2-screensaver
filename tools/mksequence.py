@@ -3238,7 +3238,7 @@ def live_build_paths(name, user_dir):
     return out, os.path.join(livefile.folder(user_dir), "build-" + livefile.file_name(name))
 
 
-def live_build(name, user_dir):
+def live_build(name, user_dir, imported=False):
     """Build the playlist installed as title sequence `name` while the game runs (started by the game:
     screensaver.build). The build goes to <user dir>/screensaver/build/live/<name>, never into the
     installed sequence or plugin.store.json (both the game's while it runs): the plugin takes the
@@ -3297,6 +3297,15 @@ def live_build(name, user_dir):
         if result["layout"] != "plugin" or not result["playlist"]:
             raise ValueError("%s does not use the plugin layout; install it with mksequence.py --install" % source)
         warnings = ["%s: %s" % (p["name"], w) for p in result["parks"] for w in p["warnings"]]
+        if imported:
+            # An imported playlist's park scripts (companion plugins) go in now, but the game loads plugins only
+            # as it starts (owner, 2026-11-12: say so in the build pane)
+            _, changed = install_companions(result, user_dir)
+            if changed and result["companions"]:
+                for _, meta, park_names in result["companions"]:
+                    w = "Park script %s (%s) starts after a restart of the game" % (meta["name"], ", ".join(park_names))
+                    note("warn", w)
+                    warnings.append(w)
         rebuilt = sum(1 for st in states if st["state"] == "built")
         cached = sum(1 for st in states if st["state"] == "cached")
         note("ok", "Built %d park%s (%d rebuilt, %d unchanged)" % (rebuilt + cached, "s" if rebuilt + cached != 1 else "", rebuilt, cached))
@@ -3500,7 +3509,33 @@ def live_import(bundle_path, user_dir):
         note("error", "Import failed: %s" % error)
         write(ok=False, finished=int(time.time() * 1000), error=error)
         return 1
-    return live_build(name, user_dir)
+    return live_build(name, user_dir, imported=True)
+
+
+def install_companions(result, user_dir):
+    """Put the build's companion plugins in the user plugin folder, replacing any installed before (only the
+    generated files). Returns (steps, changed): changed is True when the folder's companions differ from
+    before, which the game takes in only at its next start."""
+    plugin_dir = os.path.join(user_dir, "plugin")
+    steps = []
+
+    def read(path):
+        with open(path, "rb") as f:
+            return f.read()
+    before = {}
+    if os.path.isdir(plugin_dir):
+        for old in os.listdir(plugin_dir):
+            if old.startswith(companions.FILE_PREFIX) and old.endswith(".js"):
+                before[old] = read(os.path.join(plugin_dir, old))
+                os.remove(os.path.join(plugin_dir, old))
+    after = {}
+    for file_name, meta, _ in result["companions"]:
+        os.makedirs(plugin_dir, exist_ok=True)
+        dest = os.path.join(plugin_dir, file_name)
+        shutil.copy2(os.path.join(result["companionDir"], file_name), dest)
+        after[file_name] = read(dest)
+        steps.append("companion %s -> %s" % (meta["name"], dest))
+    return steps, before != after
 
 
 def install(result, user_dir, pulled=(), camera_log=False, props_pulled=False):
@@ -3530,17 +3565,8 @@ def install(result, user_dir, pulled=(), camera_log=False, props_pulled=False):
             steps.append("icons -> " + icons)
     elif result["layout"] == "plugin":
         steps.append("plugin not built (plugin/dist/rct-screensaver.js missing); install it separately")
-    # Companion plugins: this playlist's replace any installed before (only the generated files).
+    steps += install_companions(result, user_dir)[0]
     plugin_dir = os.path.join(user_dir, "plugin")
-    if os.path.isdir(plugin_dir):
-        for old in os.listdir(plugin_dir):
-            if old.startswith(companions.FILE_PREFIX) and old.endswith(".js"):
-                os.remove(os.path.join(plugin_dir, old))
-    for file_name, meta, _ in result["companions"]:
-        os.makedirs(plugin_dir, exist_ok=True)
-        dest = os.path.join(plugin_dir, file_name)
-        shutil.copy2(os.path.join(result["companionDir"], file_name), dest)
-        steps.append("companion %s -> %s" % (meta["name"], dest))
     # An intransient companion that is also installed as a plugin of its own runs on the title
     # screen by itself too: twice on its parks.
     names = {meta["name"] for _, meta, _ in result["companions"] if meta["type"] == "intransient"}
