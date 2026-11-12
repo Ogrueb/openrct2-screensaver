@@ -264,7 +264,15 @@ The panel became three panes (round 8 of the mockups accepted, built the same da
   Fold marks (the box's header, Playlist, the park field) are icons, as the game's font has no triangles;
   the open park field and its list have a gold border, and held to jump, the park under the mouse is gold. On the map, the boxes clear while a park change is under way (the
   views are already the next park's) and come back once it shows; on another park the map steps out from the view shown, at its angle, and follows the viewport when a load turns it. Every Playlist button has a tooltip.
-  Copy and Paste views are inactive for now (no clipboard in the mode yet; left for the end, owner).
+  **Copy views** (Ctrl+C) puts the park's views on the clipboard as the settings page's drawing page writes them
+  (`{"format": "rct-screensaver-views", "version": 1, park, key, screen, views}`, `screen` the window), leaving out
+  its event views, as those come from the park's own data; **Paste views** (Ctrl+V) replaces the park's views
+  with the clipboard's (that text from here or the drawing page, or a bare view list): zooms move out by whole
+  levels from the copy's window as edits do (`scale.ts`), event views in the text are left out, the park's own
+  event views keep their places, and the views are hand-set (pinned at install). One change, so Undo returns.
+  The button says what happened for a moment ("Copied 7", "Pasted 7", "No views" in amber). Both need the
+  patched engine's clipboard (patch 0016; 2026-11-12). The drawing page's event settings in a copy are not
+  applied in the game: they are profile settings.
   Under it the foldable **Playlist** properties (the playlist's name at the right): Motion (Inertia
   Off/On; Angle and zoom change Off/Start/End, where Off makes every pan that would turn or zoom a cut,
   overviews excepted, and hides the two holds that no longer apply), Timing (change, arrival and return

@@ -205,8 +205,8 @@ each turn re-anchored on another surface; fixed the same day (the anchor is kept
    Ctrl+B, a "Building n/m" chip on the bar, and every build bakes the game's edits into the playlist files;
    the playlist's Save button gave way to saving as you change. A build from the game marks the settings
    page's renders old; ticking parks on and off stays on the settings page, as does a shared park cache
-   (owner, 2026-11-11). Not yet tested in the game. Copy and Paste views can use `screensaver.clipboard` (left for the
-   end, owner). After that: the live editor without the generator.
+   (owner, 2026-11-11). Not yet tested in the game. Copy and Paste views through `screensaver.clipboard` followed
+   (2026-11-12). After that: the live editor without the generator.
 
 ## 3. Weather and day/night in the generator (low priority)
 

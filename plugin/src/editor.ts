@@ -13,7 +13,8 @@
 
 import { toScreen, toWorld } from "./fit";
 import { Player } from "./player";
-import { CHECKPOINTS_PER_PARK, View, isCut, isPinned, loadCheckpoints, saveCheckpoints, saveSettings } from "./storage";
+import { scalingFor, scaleViews, screenOf } from "./scale";
+import { CHECKPOINTS_PER_PARK, View, filesApi, isCut, isPinned, loadCheckpoints, saveCheckpoints, saveSettings } from "./storage";
 
 const CLASSIFICATION = "rctscreensaver.editor";
 const WIDTH = 300;
@@ -45,6 +46,10 @@ export type EditorRow = [index: string, tile: string, angle: string, zoom: strin
 export const EDITOR_COLUMNS = ["#", "Tile", "Angle", "Zoom", "Hold", "Pan", "Set by"];
 export const EVENT_COLUMNS = ["#", "Kind", "Name", "Trigger", "Hold", "Plays"];
 const TICKS_PER_SECOND = 40;
+/** The text format Copy views writes and Paste views reads, shared with the settings page's drawing
+ *  page (tools/drawviews.html): {format, version, park, key, screen, views[, events]}. */
+const CLIP_FORMAT = "rct-screensaver-views";
+const CLIP_NOTE_MS = 2500; // how long the Copy/Paste buttons say what happened
 
 /** m:ss for a count of game ticks. */
 function clock(ticks: number): string {
@@ -817,6 +822,69 @@ export class Editor {
         });
     }
 
+    /** Copy and Paste views work: the patched engine's clipboard (patch 0016). */
+    get canClip(): boolean {
+        return filesApi() !== undefined;
+    }
+
+    /** What the last Copy or Paste did, for a moment (the panel shows it on the button). */
+    get clipNote(): { id: "copy" | "paste"; text: string; warning: boolean } | undefined {
+        return this.clip && Date.now() - this.clip.at < CLIP_NOTE_MS ? this.clip : undefined;
+    }
+
+    private clip?: { id: "copy" | "paste"; text: string; warning: boolean; at: number };
+
+    private noteClip(id: "copy" | "paste", text: string, warning = false): void {
+        this.clip = { id, text, warning, at: Date.now() };
+        this.refresh();
+    }
+
+    /** Copies the park's views to the clipboard as text (the settings page's format; event views stay,
+     *  as they belong to the park: its clock, trains and shows). */
+    copyViews(): void {
+        const api = filesApi();
+        if (!api || this.player.isLoading) {
+            return;
+        }
+        const views = this.player.currentViews.filter(v => !this.isEvent(v)).map(v => {
+            const { origin: _origin, ...rest } = v;
+            return rest;
+        });
+        const name = this.player.parkNames[this.player.parkIndex];
+        api.clipboard = JSON.stringify({ format: CLIP_FORMAT, version: 1, park: name, key: this.player.parkKey,
+            screen: [ui.width, ui.height], views }, null, 1);
+        this.noteClip("copy", `Copied ${views.length}`);
+    }
+
+    /** Replaces the park's views with views from the clipboard (Copy's text, from here or the settings
+     *  page, or a bare view list): zooms scaled from the window they were set in, the park's own event
+     *  views kept where they were. One change, so Undo returns. */
+    pasteViews(): void {
+        const api = filesApi();
+        if (!api || this.player.isLoading || !this.player.canEdit) {
+            return;
+        }
+        const pasted = parseClip(api.clipboard);
+        if (typeof pasted === "string") {
+            this.noteClip("paste", pasted, true);
+            return;
+        }
+        const scaling = scalingFor(pasted.screen, { width: ui.width, height: ui.height });
+        const views = scaleViews(pasted.views, scaling);
+        this.change(() => {
+            const current = this.views();
+            const result = views.map(v => ({ ...v }));
+            current.forEach((v, i) => {
+                if (this.isEvent(v)) {
+                    result.splice(Math.min(i, result.length), 0, v);
+                }
+            });
+            const show = result.findIndex(v => !this.isEvent(v));
+            this.save(result, Math.max(0, show), true);
+        });
+        this.noteClip("paste", `Pasted ${views.length}`);
+    }
+
     /** The panes stay shown (the pin); off, they hide with the cursor like the controls bar. */
     get pinned(): boolean {
         return this.player.liveSettings.editorPinned !== false;
@@ -1228,4 +1296,31 @@ class WindowView implements EditorView {
         const status = e.status();
         w.findWidget<LabelWidget>("status").text = (status.warning ? "{RED}" : "") + status.text;
     }
+}
+
+/** Views from clipboard text, or why there are none. Event views in the text are left out: a park's
+ *  events come from its own data. */
+export function parseClip(text: string): { views: View[]; screen?: { width: number; height: number } } | string {
+    let data: unknown;
+    try {
+        data = JSON.parse(text);
+    } catch {
+        return "No views";
+    }
+    const obj = data as { views?: unknown; screen?: [number, number] } | null;
+    const list = Array.isArray(data) ? data : obj?.views;
+    if (!Array.isArray(list) || !list.length || !list.every(v => v && Number.isFinite(v.x) && Number.isFinite(v.y))) {
+        return "No views";
+    }
+    const views = (list as View[]).filter(v => !isPinned(v) && v.animation === undefined).map(v => {
+        const { origin: _origin, ...rest } = v;
+        return { ...rest,
+            x: +v.x, y: +v.y, z: Math.max(0, Math.min(MAX_Z, Math.round(+v.z || 0))), rotation: (Math.round(+v.rotation || 0) & 3),
+            zoom: Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, Math.round(+v.zoom || 0))),
+            hold: +v.hold > 0 ? Math.min(MAX_HOLD, Math.max(MIN_HOLD, Math.round(+v.hold))) : DEFAULT_HOLD, manual: true as const };
+    });
+    if (!views.length) {
+        return "Only events";
+    }
+    return { views, screen: Array.isArray(data) ? undefined : screenOf(obj?.screen) };
 }

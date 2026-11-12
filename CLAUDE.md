@@ -124,7 +124,8 @@ See README.md for usage.
   `screensaver.applyBuild` copies the build into the playing sequence and reloads its script, and the plugin
   swaps the new playlist in (`builder.ts`, `Player.swapPlaylist`). The editor's bottom-right Build pane (owner,
   2026-11-11): squares per park in play order (`parkStates`), park-tagged messages, Ctrl+B, a bar chip; every live
-  build bakes the live file first; Playlist properties save as they change (no Save). Next: Copy/Paste through the clipboard.
+  build bakes the live file first; Playlist properties save as they change (no Save). Copy/Paste views through the clipboard (2026-11-12, the
+  drawing page's text format). Import/Export playlist needs a file picker: engine work for a new thread (owner).
 - **Palette index 10** is both the void outside the map and the UI black; a packed water
   object that lightens it (Gardens of Light) washes out the stock interface (the white void was intended, but the UI must not suffer).
   Engine patch 0001 splits the two properly (the viewport painter rewrites its own index-10

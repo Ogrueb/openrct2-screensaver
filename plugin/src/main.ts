@@ -210,6 +210,8 @@ function registerShortcuts(): void {
         ["undo", "Undo (view editor)", ["CTRL+Z"], either(() => {}, e => e.undo())],
         ["map", "Map of the views on / off (view editor)", ["M"], either(() => {}, e => e.toggleMap())],
         ["redo", "Redo (view editor)", ["CTRL+Y", "CTRL+SHIFT+Z"], either(() => {}, e => e.redo())],
+        ["copyviews", "Copy the park's views (view editor)", ["CTRL+C"], either(() => {}, e => e.copyViews())],
+        ["pasteviews", "Paste views over the park's (view editor)", ["CTRL+V"], either(() => {}, e => e.pasteViews())],
         // The view editor's tools (owner, 2026-11-10; the toolbox's tooltips name them).
         ["addview", "Add a view (view editor)", ["INSERT"], either(() => {}, e => e.add())],
         ["setview", "Set the view to the camera (view editor)", ["C"], either(() => {}, e => { if (e.mapMode || !editorPanel) e.update(); })],

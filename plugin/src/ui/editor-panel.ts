@@ -124,6 +124,7 @@ export class EditorPanel implements EditorView {
     private dropdown: { persistent: boolean; downAt: number } | undefined; // the park list
     private picked: string | undefined; // the restore point highlighted
     private propsOpen = true; // the Playlist properties unfolded
+    private clipShown = false; // a Copy/Paste note is on its button (it goes after a moment)
     private buildShown = ""; // the build pane's state as last drawn (buildSignature)
     private buildOpen: boolean | undefined; // the build pane unfolded by hand (undefined: when there is room)
     private boxBottom = 0; // where the top-right box ends, for the build pane under it
@@ -177,7 +178,7 @@ export class EditorPanel implements EditorView {
         // A build's progress and outcome (the build pane).
         const build = e && !this.hidden ? this.buildSignature(e) : this.buildShown;
         if ((second >= 0 && second !== this.clockShown && !this.busy) || (e && e.playback.isLoading !== this.loadingShown)
-            || (build !== this.buildShown && !this.busy)) {
+            || (build !== this.buildShown && !this.busy) || (!!e?.clipNote !== this.clipShown && !this.busy)) {
             this.render();
         }
         if (!e || e.pinned || this.hidden || this.busy || this.over(this.mouse.x, this.mouse.y)) {
@@ -518,6 +519,8 @@ export class EditorPanel implements EditorView {
             case "play": e.togglePreview(); break;
             case "checkpoint": e.saveCheckpoint(); break;
             case "restore": if (this.picked) e.restoreTo(this.picked); break;
+            case "copy": e.copyViews(); break;
+            case "paste": e.pasteViews(); break;
             case "boxHead": this.boxOpen = this.boxFolded(); break;
             case "propsHead": this.propsOpen = !this.propsOpen; break;
             case "buildHead": this.buildOpen = this.buildFolded(); break;
@@ -1056,8 +1059,21 @@ export class EditorPanel implements EditorView {
         btn("restore", "restore", "Restore selected", x0 + inner - halfW, halfW,
             this.picked ? "Restore highlighted point" : "Highlight a point first", !editable || !this.picked);
         y += s.boxButton + 4;
-        btn("copy", "copy", "Copy views", x0, halfW, "Copy views (coming later)", true);
-        btn("paste", "paste", "Paste views", x0 + inner - halfW, halfW, "Paste views (coming later)", true);
+        // Copy and Paste views: the clipboard, in the settings page's text format (patched engine).
+        const note = e.clipNote;
+        this.clipShown = !!note;
+        const clipText = (id: "copy" | "paste", text: string) => note?.id === id ? note.text : text;
+        const noClip = "Needs the patched engine (its clipboard)";
+        btn("copy", "copy", clipText("copy", "Copy views"), x0, halfW,
+            e.canClip ? "Copy this park's views as text, for another park or the settings page (Ctrl+C)" : noClip, !e.canClip || e.playback.isLoading);
+        btn("paste", "paste", clipText("paste", "Paste views"), x0 + inner - halfW, halfW,
+            e.canClip ? "Replace this park's views with copied ones; its event views stay (Ctrl+V)" : noClip, !e.canClip || !editable);
+        if (note) {
+            const t = scene.get(`${note.id}.text`);
+            if (t) {
+                scene.set(`${note.id}.text`, { ...t, colour: note.warning ? THEME.warning : THEME.textGood });
+            }
+        }
         y += s.boxButton + 10;
         // Playlist properties, folded under their header.
         const ph = this.place("propsHead", { x: x0, y, width: inner, height: s.propHeader }, this.propsOpen ? "Fold" : "Unfold");

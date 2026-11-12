@@ -271,7 +271,6 @@ assert.ok(scene.get("rcts.bar.titles.icon").src.includes("titles-off"), "on -> o
     }
     assert.equal(ed("redo").fill, "#2a2e2c80", "an inactive tool is flat and gray (nothing to redo)");
     assert.equal(ed("redo.icon").opacity, 0.35, "its icon dimmed");
-    assert.equal(ed("copy").fill, "#2a2e2c80", "Copy views waits for later");
     assert.equal(ed("update").fill, "#2a2e2c80", "Set to camera waits for the map: in Frame mode the view follows the camera");
     assert.ok(ed("box.mark").src.includes("/fold-open-") && ed("props.mark").src.includes("/fold-open-"), "fold marks are icons");
     {
@@ -335,6 +334,41 @@ assert.ok(scene.get("rcts.bar.titles.icon").src.includes("titles-off"), "on -> o
     // Live editing: a drag on the park moves the camera, and the selected view goes where it ends.
     const edits = () => Object.values(saved["RCTScreensaver.edits"] ?? {})[0]?.views ?? [];
     const editsCount = () => edits().length;
+    {
+        // Copy and Paste views (the clipboard, the settings page's text format).
+        const isEvent = v => v.animation !== undefined || v.show !== undefined || v.cue !== undefined;
+        const own = () => edits().filter(v => !isEvent(v));
+        edClick("copy");
+        const clip = JSON.parse(mode.clipboard);
+        assert.equal(clip.format, "rct-screensaver-views", "Copy writes the shared format");
+        assert.deepEqual(clip.screen, [1920, 1080], "with the window the views were set in");
+        assert.equal(clip.views.length, own().length, "every view of the park but its event views");
+        const events = JSON.stringify(edits().filter(isEvent));
+        assert.ok(clip.views.every(v => v.origin === undefined), "without the playlist indexes");
+        assert.equal(ed("copy.text").text, `Copied ${clip.views.length}`, "the button says it worked");
+        const copied = JSON.stringify(own().map(v => [v.x, v.y, v.zoom]));
+        const total = edits().length;
+        edClick("add");
+        assert.equal(edits().length, total + 1);
+        edClick("paste");
+        assert.equal(JSON.stringify(own().map(v => [v.x, v.y, v.zoom])), copied, "Paste puts the copied views back");
+        assert.equal(JSON.stringify(edits().filter(isEvent)), events, "the park's event views stay");
+        assert.ok(own().every(v => v.manual), "as hand-set views, pinned at install");
+        shortcuts["rctscreensaver.undo"]();
+        assert.equal(edits().length, total + 1, "one change: Undo returns the views before it");
+        // Views set in a 4K window come in a level out here (as the plugin scales edits).
+        mode.clipboard = JSON.stringify({ format: "rct-screensaver-views", version: 1, screen: [3840, 2160],
+            views: [{ x: 10, y: 12, z: 48, rotation: 1, zoom: -1, hold: 6 }, { x: 20, y: 22, z: 48, rotation: 0, zoom: 0, show: "eclipse" }] });
+        shortcuts["rctscreensaver.pasteviews"]();
+        assert.equal(JSON.stringify(own().map(v => [v.x, v.zoom, v.hold])), "[[10,0,6]]", "Ctrl+V; zooms from the copy's window; event views left out");
+        mode.clipboard = "hello";
+        edClick("paste");
+        assert.equal(ed("paste.text").text, "No views", "text that is not views says so");
+        assert.equal(own().length, 1, "and changes nothing");
+        shortcuts["rctscreensaver.undo"]();
+        tick(30);
+        assert.equal(ed("paste.text").text, "Paste views", "the note goes after a moment");
+    }
     mouse("wheel", c.x + 2, c.y + 4, 0, 1);
     edClick("row.0");
     const tile = () => ed("cell.0.1").text;

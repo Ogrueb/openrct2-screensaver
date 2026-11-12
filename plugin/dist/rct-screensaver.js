@@ -548,6 +548,34 @@
     return result;
   }
 
+  // src/scale.ts
+  var DESIGN_SCREEN = { width: 1920, height: 1080 };
+  var ZOOM_SLACK = 0.25;
+  var MIN_ZOOM2 = -2;
+  var MAX_ZOOM2 = 3;
+  var NO_SCALING = { offset: 0, scale: 1 };
+  function scalingFor(design, window) {
+    if (!design || design.width <= 0 || design.height <= 0 || window.width <= 0 || window.height <= 0) {
+      return NO_SCALING;
+    }
+    const scale = Math.min(window.width / design.width, window.height / design.height);
+    const offset = Math.ceil(Math.log2(1 / scale) - ZOOM_SLACK);
+    return { offset: Object.is(offset, -0) ? 0 : offset, scale };
+  }
+  function scaleViews(views, scaling) {
+    if (scaling.offset === 0) {
+      return views;
+    }
+    return views.map((v) => ({ ...v, zoom: Math.min(MAX_ZOOM2, Math.max(MIN_ZOOM2, v.zoom + scaling.offset)) }));
+  }
+  function scaleTolerance(tolerance, scaling) {
+    const factor = Math.min(1, scaling.scale);
+    return (zoom) => tolerance(zoom - scaling.offset) * factor;
+  }
+  function screenOf(pair) {
+    return pair && pair.length === 2 ? { width: pair[0], height: pair[1] } : void 0;
+  }
+
   // src/editor.ts
   var CLASSIFICATION = "rctscreensaver.editor";
   var WIDTH = 300;
@@ -555,8 +583,8 @@
   var TILE2 = 32;
   var PAN_STEP = 64;
   var PAN_FAST = 4;
-  var MIN_ZOOM2 = -2;
-  var MAX_ZOOM2 = 3;
+  var MIN_ZOOM3 = -2;
+  var MAX_ZOOM3 = 3;
   var MIN_HOLD = 1;
   var MAX_HOLD = 600;
   var DEFAULT_HOLD = 10;
@@ -568,6 +596,8 @@
   var EDITOR_COLUMNS = ["#", "Tile", "Angle", "Zoom", "Hold", "Pan", "Set by"];
   var EVENT_COLUMNS = ["#", "Kind", "Name", "Trigger", "Hold", "Plays"];
   var TICKS_PER_SECOND = 40;
+  var CLIP_FORMAT = "rct-screensaver-views";
+  var CLIP_NOTE_MS = 2500;
   function clock2(ticks) {
     const s = Math.max(0, Math.round(ticks / TICKS_PER_SECOND));
     return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
@@ -819,7 +849,7 @@
     }
     zoom(delta) {
       this.stopPreview();
-      this.camera.zoom = Math.min(MAX_ZOOM2, Math.max(MIN_ZOOM2, this.camera.zoom + delta));
+      this.camera.zoom = Math.min(MAX_ZOOM3, Math.max(MIN_ZOOM3, this.camera.zoom + delta));
       this.applyCamera();
     }
     /** Play on or off: the park's views play with their pans while the editor stays open. */
@@ -884,7 +914,7 @@
       this.map = !this.map;
       if (this.map) {
         const view = this.player.currentViews[this.selected];
-        this.camera.zoom = Math.min(MAX_ZOOM2, (view?.zoom ?? this.camera.zoom) + MAP_OUT);
+        this.camera.zoom = Math.min(MAX_ZOOM3, (view?.zoom ?? this.camera.zoom) + MAP_OUT);
         this.mapPark = this.player.parkIndex;
         this.applyCamera();
       } else if (this.selectedIndex >= 0) {
@@ -943,7 +973,7 @@
     }
     /** Changes a view's zoom: a box's corner dragged on the map. */
     zoomView(index, zoom) {
-      this.mapEdit(index, () => ({ zoom: Math.min(MAX_ZOOM2, Math.max(MIN_ZOOM2, Math.round(zoom))) }));
+      this.mapEdit(index, () => ({ zoom: Math.min(MAX_ZOOM3, Math.max(MIN_ZOOM3, Math.round(zoom))) }));
     }
     mapEdit(index, edit) {
       const target = this.player.currentViews[index];
@@ -975,7 +1005,7 @@
           y: round2((y - TILE2 / 2) / TILE2),
           z: Math.round(z),
           rotation: this.camera.rotation,
-          zoom: near?.zoom ?? Math.max(MIN_ZOOM2, this.camera.zoom - MAP_OUT),
+          zoom: near?.zoom ?? Math.max(MIN_ZOOM3, this.camera.zoom - MAP_OUT),
           hold: near?.hold ?? DEFAULT_HOLD,
           manual: true
         });
@@ -1241,6 +1271,68 @@
         this.refresh();
       });
     }
+    /** Copy and Paste views work: the patched engine's clipboard (patch 0016). */
+    get canClip() {
+      return filesApi() !== void 0;
+    }
+    /** What the last Copy or Paste did, for a moment (the panel shows it on the button). */
+    get clipNote() {
+      return this.clip && Date.now() - this.clip.at < CLIP_NOTE_MS ? this.clip : void 0;
+    }
+    noteClip(id, text, warning = false) {
+      this.clip = { id, text, warning, at: Date.now() };
+      this.refresh();
+    }
+    /** Copies the park's views to the clipboard as text (the settings page's format; event views stay,
+     *  as they belong to the park: its clock, trains and shows). */
+    copyViews() {
+      const api = filesApi();
+      if (!api || this.player.isLoading) {
+        return;
+      }
+      const views = this.player.currentViews.filter((v) => !this.isEvent(v)).map((v) => {
+        const { origin: _origin, ...rest } = v;
+        return rest;
+      });
+      const name = this.player.parkNames[this.player.parkIndex];
+      api.clipboard = JSON.stringify({
+        format: CLIP_FORMAT,
+        version: 1,
+        park: name,
+        key: this.player.parkKey,
+        screen: [ui.width, ui.height],
+        views
+      }, null, 1);
+      this.noteClip("copy", `Copied ${views.length}`);
+    }
+    /** Replaces the park's views with views from the clipboard (Copy's text, from here or the settings
+     *  page, or a bare view list): zooms scaled from the window they were set in, the park's own event
+     *  views kept where they were. One change, so Undo returns. */
+    pasteViews() {
+      const api = filesApi();
+      if (!api || this.player.isLoading || !this.player.canEdit) {
+        return;
+      }
+      const pasted = parseClip(api.clipboard);
+      if (typeof pasted === "string") {
+        this.noteClip("paste", pasted, true);
+        return;
+      }
+      const scaling = scalingFor(pasted.screen, { width: ui.width, height: ui.height });
+      const views = scaleViews(pasted.views, scaling);
+      this.change(() => {
+        const current = this.views();
+        const result = views.map((v) => ({ ...v }));
+        current.forEach((v, i) => {
+          if (this.isEvent(v)) {
+            result.splice(Math.min(i, result.length), 0, v);
+          }
+        });
+        const show = result.findIndex((v) => !this.isEvent(v));
+        this.save(result, Math.max(0, show), true);
+      });
+      this.noteClip("paste", `Pasted ${views.length}`);
+    }
     /** The panes stay shown (the pin); off, they hide with the cursor like the controls bar. */
     get pinned() {
       return this.player.liveSettings.editorPinned !== false;
@@ -1314,7 +1406,7 @@
         this.selected = this.player.viewIndex;
         if (this.mapPark !== this.player.parkIndex && view) {
           this.cameraFromView(view);
-          this.camera.zoom = Math.min(MAX_ZOOM2, view.zoom + MAP_OUT);
+          this.camera.zoom = Math.min(MAX_ZOOM3, view.zoom + MAP_OUT);
           this.mapPark = this.player.parkIndex;
         }
         this.applyCamera();
@@ -1673,6 +1765,36 @@
       w.findWidget("status").text = (status.warning ? "{RED}" : "") + status.text;
     }
   };
+  function parseClip(text) {
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      return "No views";
+    }
+    const obj = data;
+    const list = Array.isArray(data) ? data : obj?.views;
+    if (!Array.isArray(list) || !list.length || !list.every((v) => v && Number.isFinite(v.x) && Number.isFinite(v.y))) {
+      return "No views";
+    }
+    const views = list.filter((v) => !isPinned(v) && v.animation === void 0).map((v) => {
+      const { origin: _origin, ...rest } = v;
+      return {
+        ...rest,
+        x: +v.x,
+        y: +v.y,
+        z: Math.max(0, Math.min(MAX_Z, Math.round(+v.z || 0))),
+        rotation: Math.round(+v.rotation || 0) & 3,
+        zoom: Math.max(MIN_ZOOM3, Math.min(MAX_ZOOM3, Math.round(+v.zoom || 0))),
+        hold: +v.hold > 0 ? Math.min(MAX_HOLD, Math.max(MIN_HOLD, Math.round(+v.hold))) : DEFAULT_HOLD,
+        manual: true
+      };
+    });
+    if (!views.length) {
+      return "Only events";
+    }
+    return { views, screen: Array.isArray(data) ? void 0 : screenOf(obj?.screen) };
+  }
 
   // src/mode.ts
   function screensaverApi() {
@@ -2193,7 +2315,7 @@
   }
 
   // src/pan.ts
-  var MAX_ZOOM3 = 3;
+  var MAX_ZOOM4 = 3;
   var MIN_PAN_MS = 500;
   function panTolerance(zoom, base = 500, step = 100) {
     return Math.max(step, base - step * (zoom + 2));
@@ -2243,7 +2365,7 @@
       const b = toScreen(to.x, to.y, to.z, rotation);
       const distance = Math.hypot(b.x - a.x, b.y - a.y);
       const speedAt = (z) => distance / 2 ** z * 1e3 / Math.max(1, moveMs);
-      const widest = dz === 0 ? Math.min(MAX_ZOOM3, from.zoom + 1) : Math.max(from.zoom, to.zoom);
+      const widest = dz === 0 ? Math.min(MAX_ZOOM4, from.zoom + 1) : Math.max(from.zoom, to.zoom);
       while (zoom < widest && speedAt(zoom) > tolerance(zoom)) {
         zoom++;
       }
@@ -2301,34 +2423,6 @@
   }
   function cubic(t) {
     return t < 0.5 ? 4 * t * t * t : 1 - 4 * (1 - t) * (1 - t) * (1 - t);
-  }
-
-  // src/scale.ts
-  var DESIGN_SCREEN = { width: 1920, height: 1080 };
-  var ZOOM_SLACK = 0.25;
-  var MIN_ZOOM3 = -2;
-  var MAX_ZOOM4 = 3;
-  var NO_SCALING = { offset: 0, scale: 1 };
-  function scalingFor(design, window) {
-    if (!design || design.width <= 0 || design.height <= 0 || window.width <= 0 || window.height <= 0) {
-      return NO_SCALING;
-    }
-    const scale = Math.min(window.width / design.width, window.height / design.height);
-    const offset = Math.ceil(Math.log2(1 / scale) - ZOOM_SLACK);
-    return { offset: Object.is(offset, -0) ? 0 : offset, scale };
-  }
-  function scaleViews(views, scaling) {
-    if (scaling.offset === 0) {
-      return views;
-    }
-    return views.map((v) => ({ ...v, zoom: Math.min(MAX_ZOOM4, Math.max(MIN_ZOOM3, v.zoom + scaling.offset)) }));
-  }
-  function scaleTolerance(tolerance, scaling) {
-    const factor = Math.min(1, scaling.scale);
-    return (zoom) => tolerance(zoom - scaling.offset) * factor;
-  }
-  function screenOf(pair) {
-    return pair && pair.length === 2 ? { width: pair[0], height: pair[1] } : void 0;
   }
 
   // src/player.ts
@@ -5486,6 +5580,8 @@
       // the restore point highlighted
       this.propsOpen = true;
       // the Playlist properties unfolded
+      this.clipShown = false;
+      // a Copy/Paste note is on its button (it goes after a moment)
       this.buildShown = "";
       // the build pane unfolded by hand (undefined: when there is room)
       this.boxBottom = 0;
@@ -5531,7 +5627,7 @@
       e?.syncMap();
       const second = e && this.eventsRect && !this.hidden ? Math.floor(e.playback.parkClock / 40) : -1;
       const build = e && !this.hidden ? this.buildSignature(e) : this.buildShown;
-      if (second >= 0 && second !== this.clockShown && !this.busy || e && e.playback.isLoading !== this.loadingShown || build !== this.buildShown && !this.busy) {
+      if (second >= 0 && second !== this.clockShown && !this.busy || e && e.playback.isLoading !== this.loadingShown || build !== this.buildShown && !this.busy || !!e?.clipNote !== this.clipShown && !this.busy) {
         this.render();
       }
       if (!e || e.pinned || this.hidden || this.busy || this.over(this.mouse.x, this.mouse.y)) {
@@ -5893,6 +5989,12 @@
           break;
         case "restore":
           if (this.picked) e.restoreTo(this.picked);
+          break;
+        case "copy":
+          e.copyViews();
+          break;
+        case "paste":
+          e.pasteViews();
           break;
         case "boxHead":
           this.boxOpen = this.boxFolded();
@@ -6497,8 +6599,34 @@
         !editable || !this.picked
       );
       y += s.boxButton + 4;
-      btn("copy", "copy", "Copy views", x0, halfW, "Copy views (coming later)", true);
-      btn("paste", "paste", "Paste views", x0 + inner - halfW, halfW, "Paste views (coming later)", true);
+      const note = e.clipNote;
+      this.clipShown = !!note;
+      const clipText = (id, text) => note?.id === id ? note.text : text;
+      const noClip = "Needs the patched engine (its clipboard)";
+      btn(
+        "copy",
+        "copy",
+        clipText("copy", "Copy views"),
+        x0,
+        halfW,
+        e.canClip ? "Copy this park's views as text, for another park or the settings page (Ctrl+C)" : noClip,
+        !e.canClip || e.playback.isLoading
+      );
+      btn(
+        "paste",
+        "paste",
+        clipText("paste", "Paste views"),
+        x0 + inner - halfW,
+        halfW,
+        e.canClip ? "Replace this park's views with copied ones; its event views stay (Ctrl+V)" : noClip,
+        !e.canClip || !editable
+      );
+      if (note) {
+        const t = scene.get(`${note.id}.text`);
+        if (t) {
+          scene.set(`${note.id}.text`, { ...t, colour: note.warning ? THEME.warning : THEME.textGood });
+        }
+      }
       y += s.boxButton + 10;
       const ph = this.place("propsHead", { x: x0, y, width: inner, height: s.propHeader }, this.propsOpen ? "Fold" : "Unfold");
       scene.set("propsHead", { type: "rect", ...ph, fill: this.hit() === "propsHead" ? THEME.faceHover : "#00000000", z: Z.face });
@@ -7029,6 +7157,10 @@
       }, (e) => e.toggleMap())],
       ["redo", "Redo (view editor)", ["CTRL+Y", "CTRL+SHIFT+Z"], either(() => {
       }, (e) => e.redo())],
+      ["copyviews", "Copy the park's views (view editor)", ["CTRL+C"], either(() => {
+      }, (e) => e.copyViews())],
+      ["pasteviews", "Paste views over the park's (view editor)", ["CTRL+V"], either(() => {
+      }, (e) => e.pasteViews())],
       // The view editor's tools (owner, 2026-11-10; the toolbox's tooltips name them).
       ["addview", "Add a view (view editor)", ["INSERT"], either(() => {
       }, (e) => e.add())],
