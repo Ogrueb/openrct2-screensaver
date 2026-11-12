@@ -855,5 +855,67 @@ def main(paths):
                 report(member, archive.read(member))
 
 
+OBJECT_EXTENSIONS = (".parkobj", ".dat")  # loose objects importparks.py installs
+
+
+def park_entry(path):
+    """A playlist entry for one park file or download, read in place: ({file (absolute), author?}, None),
+    or (None, why it can't be used directly: an RCT save to convert, not a park, ...). A download that
+    also ships loose objects gives its entry and the reason (the objects need installing)."""
+    name = os.path.basename(path)
+    low = name.lower()
+    if low.endswith(LEGACY_EXTENSIONS):
+        return None, "%s is an RCT save (needs converting)" % name
+    if low.endswith(OBJECT_EXTENSIONS):
+        return None, "%s is a loose object (needs installing)" % name
+    if low.endswith(".zip") or os.path.isdir(path):
+        try:
+            archive = Archive(path)
+            parks = archive.parks()
+        except (OSError, ValueError, zipfile.BadZipFile):
+            return None, "%s could not be read" % name
+        if archive.legacy() and not parks:
+            return None, "%s holds an RCT save (needs converting)" % name
+        if not parks:
+            return None, "%s holds no park" % name
+        reason = "%s ships loose objects (need installing)" % name if any(
+            f[0].lower().endswith(OBJECT_EXTENSIONS) for f in archive.files) else None
+        entry = {"file": os.path.abspath(path)}
+        authors = download_authors(path, latest(parks)[0])
+        if authors:
+            entry["author"] = ", ".join(authors)
+        return entry, reason
+    if low.endswith(".park"):
+        # Builders from the NE catalogue or the file's name, as for downloads (owner, 2026-11-03)
+        entry = {"file": os.path.abspath(path)}
+        authors = download_authors(path)
+        if authors:
+            entry["author"] = ", ".join(authors)
+        return entry, None
+    return None, "%s is not a park" % name
+
+
+def scan_folder(folder):
+    """Park entries for every park in a folder, read in place: [{file (absolute), member?, author?}].
+    Returns (entries, reasons) where reasons lists why importparks.py is needed instead (RCT2
+    saves to convert, loose objects to install), if any."""
+    entries, reasons = [], []
+    for name in sorted(os.listdir(folder)):
+        path = os.path.join(folder, name)
+        low = name.lower()
+        if is_junk(name):
+            continue
+        if not (low.endswith(LEGACY_EXTENSIONS + OBJECT_EXTENSIONS + (".zip", ".park")) or os.path.isdir(path)):
+            continue
+        entry, reason = park_entry(path)
+        # (a folder or zip that is no park at all is passed over, as before)
+        if reason and (entry or not reason.endswith(("could not be read", "holds no park"))):
+            reasons.append(reason)
+        if entry:
+            entries.append(entry)
+    return entries, reasons
+
+
 if __name__ == "__main__":
     main(sys.argv[1:])
+

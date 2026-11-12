@@ -59,8 +59,6 @@ LOGS = os.path.join(ROOT, "build", "logs")  # every job's output, one file per r
 PLAYLISTS = os.path.join(ROOT, "playlists")  # the shipped ones; saved copies go to USER_PLAYLISTS
 HEADER = "Written by tools/settings.py (the generator's settings page); comments are not kept."
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)  # no console window for tools run from the page
-LEGACY = (".sv6", ".sc6", ".sv4", ".sc4")  # RCT saves importparks.py converts with OpenRCT2
-OBJECTS = (".parkobj", ".dat")  # loose objects importparks.py installs
 PARK_FILES = (".park", ".zip")
 
 
@@ -193,44 +191,7 @@ def park_facts(facts, entry, base_dir, lib, park_profiles):
 # --- the playlist being edited ---
 
 def scan_folder(folder):
-    """Park entries for every park in a folder, read in place: [{file (absolute), member?, author?}].
-    Returns (entries, reasons) where reasons lists why importparks.py is needed instead (RCT2
-    saves to convert, loose objects to install), if any."""
-    entries, reasons = [], []
-    for name in sorted(os.listdir(folder)):
-        path = os.path.join(folder, name)
-        low = name.lower()
-        if parkinfo.is_junk(name):
-            continue
-        if low.endswith(LEGACY):
-            reasons.append("%s is an RCT save (needs converting)" % name)
-        elif low.endswith(OBJECTS):
-            reasons.append("%s is a loose object (needs installing)" % name)
-        elif low.endswith(".zip") or os.path.isdir(path):
-            try:
-                archive = parkinfo.Archive(path)
-                parks = archive.parks()
-            except (OSError, ValueError, zipfile.BadZipFile):
-                continue
-            if archive.legacy() and not parks:
-                reasons.append("%s holds an RCT save (needs converting)" % name)
-                continue
-            if any(f[0].lower().endswith(OBJECTS) for f in archive.files):
-                reasons.append("%s ships loose objects (need installing)" % name)
-            if parks:
-                authors = parkinfo.download_authors(path, parkinfo.latest(parks)[0])
-                entry = {"file": os.path.abspath(path)}
-                if authors:
-                    entry["author"] = ", ".join(authors)
-                entries.append(entry)
-        elif low.endswith(".park"):
-            # Builders from the NE catalogue or the file's name, as for downloads (owner, 2026-11-03)
-            entry = {"file": os.path.abspath(path)}
-            authors = parkinfo.download_authors(path)
-            if authors:
-                entry["author"] = ", ".join(authors)
-            entries.append(entry)
-    return entries, reasons
+    return parkinfo.scan_folder(folder)
 
 
 class Session:

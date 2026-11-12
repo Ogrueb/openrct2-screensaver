@@ -1,0 +1,335 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: RCT Screensaver <noreply@example.invalid>
+Date: Thu, 12 Nov 2026 19:36:34 +0000
+Subject: [PATCH] Screensaver: add parks and make playlists through the
+ system's dialogs
+
+screensaver.addPark(sequence) shows the system's Open dialog for a park (a
+.park, or a download holding one) and runs the registered generator with
+--live-add <sequence> --park <file>, which adds it to the playlist and
+builds it. screensaver.newPlaylist() shows the folder dialog and runs it
+with --live-new <folder>, which makes a playlist of the parks in it and
+builds it. screensaver.copyPlaylist(sequence) shows the Save dialog in the
+user's playlists folder and runs it with --live-copy <sequence> --to
+<file>, which copies the playlist under the file's name and builds it.
+Each returns false when the dialog is closed; applyBuild then plays a new
+playlist as it plays an imported one. buildStatus.task names them add,
+new and copy.
+---
+ src/openrct2-ui/screensaver/Build.cpp       | 159 ++++++++++++++++++++
+ src/openrct2-ui/screensaver/Build.h         |  19 ++-
+ src/openrct2-ui/scripting/ScScreensaver.hpp |  66 +++++++-
+ 3 files changed, 240 insertions(+), 4 deletions(-)
+
+diff --git a/src/openrct2-ui/screensaver/Build.cpp b/src/openrct2-ui/screensaver/Build.cpp
+index 1e13634..2cf6083 100644
+--- a/src/openrct2-ui/screensaver/Build.cpp
++++ b/src/openrct2-ui/screensaver/Build.cpp
+@@ -521,6 +521,165 @@ namespace OpenRCT2::Ui::Screensaver::Build
+         return StartTask("import", "", { "--live-import", path }, error);
+     }
+ 
++    namespace
++    {
++        // Nothing runs and a generator is registered; else false with the reason.
++        bool CanStartTask(std::string& error)
++        {
++            if (IsRunning())
++            {
++                error = "Wait for the " + GetStatus().task + " to finish";
++                return false;
++            }
++            return ReadGenerator(error).has_value();
++        }
++
++        // The folder the last park was picked in (this run only); first the bundles' folder.
++        u8string& ParkFolder()
++        {
++            static u8string folder;
++            if (folder.empty())
++                folder = BundleFolder();
++            return folder;
++        }
++
++        // The system's dialog: the picked path, or empty when closed. Throws when the system has none.
++        u8string ShowDialog(const Ui::FileDialogDesc& desc)
++        {
++            try
++            {
++                return GetContext()->GetUiContext().ShowFileDialog(desc);
++            }
++            catch (const std::exception& e)
++            {
++                LOG_ERROR("Screensaver: no file dialog: %s", e.what());
++                throw;
++            }
++        }
++
++        // A file name from a playlist's name: characters file systems refuse dropped.
++        u8string SafeFileName(const std::string& text, const char* fallback, const char* extension)
++        {
++            u8string name;
++            for (unsigned char c : text)
++            {
++                if (c >= 0x20 && c != 0x7F && c != '/' && c != '\\' && c != '"' && c != ':' && c != '*' && c != '?'
++                    && c != '<' && c != '>' && c != '|')
++                    name.push_back(static_cast<char>(c));
++            }
++            return (name.empty() ? u8string(fallback) : name) + extension;
++        }
++    } // namespace
++
++    bool AddPark(const std::string& sequence, bool& cancelled, std::string& error)
++    {
++        cancelled = false;
++        if (!IsSequenceName(sequence))
++        {
++            error = "Not a title sequence name: " + sequence;
++            return false;
++        }
++        if (!CanStartTask(error))
++            return false;
++        Ui::FileDialogDesc desc;
++        desc.Type = Ui::FileDialogType::open;
++        desc.Title = "Add a park to the playlist";
++        desc.InitialDirectory = ParkFolder();
++        desc.Filters.emplace_back("Park or park download", "*.park;*.zip");
++        u8string path;
++        try
++        {
++            path = ShowDialog(desc);
++        }
++        catch (const std::exception& e)
++        {
++            error = std::string("No file dialog: ") + e.what();
++            return false;
++        }
++        if (path.empty())
++        {
++            cancelled = true;
++            return false;
++        }
++        ParkFolder() = fs::u8path(path).parent_path().u8string();
++        std::error_code ec;
++        if (!fs::is_regular_file(fs::u8path(path), ec))
++        {
++            error = "Not a file: " + path;
++            return false;
++        }
++        return StartTask("add", sequence, { "--live-add", sequence, "--park", path }, error);
++    }
++
++    bool NewPlaylist(bool& cancelled, std::string& error)
++    {
++        cancelled = false;
++        if (!CanStartTask(error))
++            return false;
++        u8string path;
++        try
++        {
++            path = GetContext()->GetUiContext().ShowDirectoryDialog("New playlist: pick a folder of parks");
++        }
++        catch (const std::exception& e)
++        {
++            LOG_ERROR("Screensaver: no folder dialog: %s", e.what());
++            error = std::string("No folder dialog: ") + e.what();
++            return false;
++        }
++        if (path.empty())
++        {
++            cancelled = true;
++            return false;
++        }
++        std::error_code ec;
++        if (!fs::is_directory(fs::u8path(path), ec))
++        {
++            error = "Not a folder: " + path;
++            return false;
++        }
++        ParkFolder() = path;
++        return StartTask("new", "", { "--live-new", path }, error);
++    }
++
++    bool CopyPlaylist(const std::string& sequence, bool& cancelled, std::string& error)
++    {
++        cancelled = false;
++        if (!IsSequenceName(sequence))
++        {
++            error = "Not a title sequence name: " + sequence;
++            return false;
++        }
++        if (!CanStartTask(error))
++            return false;
++        // The user's playlists folder, where the settings page keeps its playlists too
++        auto folder = Path::Combine(ScreensaverFolder(), "playlists");
++        std::error_code ec;
++        fs::create_directories(fs::u8path(folder), ec);
++        Ui::FileDialogDesc desc;
++        desc.Type = Ui::FileDialogType::save;
++        desc.Title = "Duplicate playlist: name the copy";
++        desc.InitialDirectory = folder;
++        desc.DefaultFilename = Path::Combine(folder, SafeFileName(sequence + " copy", "playlist copy", ".toml"));
++        desc.Filters.emplace_back("Playlist", "*.toml");
++        u8string path;
++        try
++        {
++            path = ShowDialog(desc);
++        }
++        catch (const std::exception& e)
++        {
++            error = std::string("No file dialog: ") + e.what();
++            return false;
++        }
++        if (path.empty())
++        {
++            cancelled = true;
++            return false;
++        }
++        return StartTask("copy", sequence, { "--live-copy", sequence, "--to", path }, error);
++    }
++
+     Status GetStatus()
+     {
+         auto& shared = GetShared();
+diff --git a/src/openrct2-ui/screensaver/Build.h b/src/openrct2-ui/screensaver/Build.h
+index cd4b5f6..87552b6 100644
+--- a/src/openrct2-ui/screensaver/Build.h
++++ b/src/openrct2-ui/screensaver/Build.h
+@@ -23,6 +23,9 @@
+ // playlist to the chosen file; Import unpacks the chosen bundle into the user's folder and builds it,
+ // and Apply() then installs the new sequence and plays it. One task (build, export or import) runs at
+ // a time.
++//
++// AddPark(), NewPlaylist() and CopyPlaylist() do the same for a park picked in the Open dialog, a folder
++// of parks picked in the folder dialog, and a playlist file named in the Save dialog.
+ 
+ #pragma once
+ 
+@@ -43,7 +46,7 @@ namespace OpenRCT2::Ui::Screensaver::Build
+     struct Status
+     {
+         State state = State::idle;
+-        std::string task; // "build", "export" or "import"
++        std::string task; // "build", "export", "import", "add", "new" or "copy"
+         std::string sequence;
+         int32_t exitCode = 0;
+         int64_t started = 0;  // ms since 1970
+@@ -66,6 +69,20 @@ namespace OpenRCT2::Ui::Screensaver::Build
+     // to import and build it. False as for Export().
+     bool Import(bool& cancelled, std::string& error);
+ 
++    // Shows the system's Open dialog for a park (a .park, or a download holding one) and, once one is
++    // picked, runs the generator to add it to the title sequence's playlist and build it. False as for
++    // Export().
++    bool AddPark(const std::string& sequence, bool& cancelled, std::string& error);
++
++    // Shows the system's folder dialog and, once a folder is picked, runs the generator to make a new
++    // playlist of the parks in it and build it; Apply() then installs and plays it. False as for Export().
++    bool NewPlaylist(bool& cancelled, std::string& error);
++
++    // Shows the system's Save dialog for a playlist file (the user's playlists folder first) and, once
++    // a name is given, runs the generator to copy the title sequence's playlist under that name and build
++    // it; Apply() then installs and plays the copy. False as for Export().
++    bool CopyPlaylist(const std::string& sequence, bool& cancelled, std::string& error);
++
+     Status GetStatus();
+ 
+     // Stops a running build; false when none runs.
+diff --git a/src/openrct2-ui/scripting/ScScreensaver.hpp b/src/openrct2-ui/scripting/ScScreensaver.hpp
+index 25336af..6d23c99 100644
+--- a/src/openrct2-ui/scripting/ScScreensaver.hpp
++++ b/src/openrct2-ui/scripting/ScScreensaver.hpp
+@@ -7,7 +7,8 @@
+  * OpenRCT2 is licensed under the GNU General Public License version 3.
+  *****************************************************************************/
+ 
+-// The `screensaver` global (mode, settings, mouse, overlay, files, clipboard, builds, playlist bundles).
++// The `screensaver` global (mode, settings, mouse, overlay, files, clipboard, builds, playlist bundles,
++// parks and new playlists).
+ 
+ #pragma once
+ 
+@@ -542,6 +543,9 @@ namespace OpenRCT2::Scripting
+                 JS_CFUNC_DEF("applyBuild", 1, ScScreensaver::applyBuild),
+                 JS_CFUNC_DEF("exportPlaylist", 1, ScScreensaver::exportPlaylist),
+                 JS_CFUNC_DEF("importPlaylist", 0, ScScreensaver::importPlaylist),
++                JS_CFUNC_DEF("addPark", 1, ScScreensaver::addPark),
++                JS_CFUNC_DEF("newPlaylist", 0, ScScreensaver::newPlaylist),
++                JS_CFUNC_DEF("copyPlaylist", 1, ScScreensaver::copyPlaylist),
+             };
+             RegisterBase(ctx, "Screensaver", nullptr, funcs);
+             ScreensaverJS::InstallListeners();
+@@ -683,8 +687,9 @@ namespace OpenRCT2::Scripting
+             return JS_UNDEFINED;
+         }
+ 
+-        // { state: "idle" | "running" | "done" | "failed" | "cancelled", task: "build" | "export" |
+-        //   "import" (empty before the first), sequence, exitCode, started, finished (ms since 1970), error }
++        // { state: "idle" | "running" | "done" | "failed" | "cancelled", task: "build" | "export" | "import" |
++        //   "add" | "new" | "copy" (empty before the first), sequence, exitCode, started, finished (ms since 1970),
++        //   error }
+         static JSValue buildStatus_get(JSContext* ctx, JSValue)
+         {
+             auto status = Ui::Screensaver::Build::GetStatus();
+@@ -757,6 +762,61 @@ namespace OpenRCT2::Scripting
+             }
+             return JS_NewBool(ctx, !cancelled);
+         }
++
++        // addPark(sequence) shows the system's Open dialog for a park and adds the picked one to that
++        // title sequence's playlist, then builds it, in the background (buildStatus follows it). False
++        // when the dialog was closed; throws with the reason when it cannot start.
++        static JSValue addPark(JSContext* ctx, JSValue, int argc, JSValue* argv)
++        {
++            if (argc < 1 || !JS_IsString(argv[0]))
++            {
++                JS_ThrowTypeError(ctx, "addPark(sequence): sequence must be a string");
++                return JS_EXCEPTION;
++            }
++            bool cancelled = false;
++            std::string error;
++            if (!Ui::Screensaver::Build::AddPark(JSToStdString(ctx, argv[0]), cancelled, error) && !cancelled)
++            {
++                JS_ThrowPlainError(ctx, "%s", error.c_str());
++                return JS_EXCEPTION;
++            }
++            return JS_NewBool(ctx, !cancelled);
++        }
++
++        // newPlaylist() shows the system's folder dialog and makes a playlist of the parks in the picked
++        // folder, then builds it, in the background (applyBuild then plays it). False when the dialog was
++        // closed; throws with the reason when it cannot start.
++        static JSValue newPlaylist(JSContext* ctx, JSValue, int, JSValue*)
++        {
++            bool cancelled = false;
++            std::string error;
++            if (!Ui::Screensaver::Build::NewPlaylist(cancelled, error) && !cancelled)
++            {
++                JS_ThrowPlainError(ctx, "%s", error.c_str());
++                return JS_EXCEPTION;
++            }
++            return JS_NewBool(ctx, !cancelled);
++        }
++
++        // copyPlaylist(sequence) shows the system's Save dialog to name a copy of that title sequence's
++        // playlist, then copies and builds it in the background (applyBuild then plays it). False when
++        // the dialog was closed; throws with the reason when it cannot start.
++        static JSValue copyPlaylist(JSContext* ctx, JSValue, int argc, JSValue* argv)
++        {
++            if (argc < 1 || !JS_IsString(argv[0]))
++            {
++                JS_ThrowTypeError(ctx, "copyPlaylist(sequence): sequence must be a string");
++                return JS_EXCEPTION;
++            }
++            bool cancelled = false;
++            std::string error;
++            if (!Ui::Screensaver::Build::CopyPlaylist(JSToStdString(ctx, argv[0]), cancelled, error) && !cancelled)
++            {
++                JS_ThrowPlainError(ctx, "%s", error.c_str());
++                return JS_EXCEPTION;
++            }
++            return JS_NewBool(ctx, !cancelled);
++        }
+     };
+ 
+     inline JSValue ScScreensaver::overlay_get(JSContext* ctx, JSValue)

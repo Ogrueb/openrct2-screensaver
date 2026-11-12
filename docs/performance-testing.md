@@ -12,7 +12,7 @@ the first results.
 
 | Part | What it does |
 |---|---|
-| Engine patch 0019 | `--perf-log <file>` writes the perf log (format below). `--perf-quit-after <s>` quits after that many seconds. `--no-background-loading` loads title parks the stock way, for A/B runs (`TitleSequence.backgroundLoading` then reads false). Plugin API: `screensaver.perfLog` and `screensaver.perfMark(text)`. |
+| Engine patch 0020 | `--perf-log <file>` writes the perf log (format below). `--perf-quit-after <s>` quits after that many seconds. `--no-background-loading` loads title parks the stock way, for A/B runs (`TitleSequence.backgroundLoading` then reads false). Plugin API: `screensaver.perfLog` and `screensaver.perfMark(text)`. |
 | Plugin | Every camera-log event (`view`, `move`, `stop`, `change`, `plan`, ...) and each park load goes into the perf log as a mark, whether or not the camera log is on. The `bench` setting plays the first order of every park, never shuffles, and turns mouse input into an `input` mark instead of showing the controls bar. `profilerExport` starts OpenRCT2's function profiler and exports it every minute. |
 | `tools/perfrun.py` | `run`: runs a suite's cells in sandboxes, then calls the report. `sample`: writes a playlist of parks spread over simulation size. `baseline`: keeps a run's report as the suite's baseline. |
 | `tools/perfreport.py` | Labels each frame (still or panning, zoom, park, view, park switch) and computes the numbers per group. It also compares a run with a baseline, or pairs of cells within a run. |
@@ -127,7 +127,7 @@ sample and event, so a crash loses at most 10 s of frames.
 
 ## Limits
 
-- The stock engine cannot write the perf log, and patch 0019 depends on patches 0001-0018, so
+- The stock engine cannot write the perf log, and patch 0020 depends on patches 0001-0019, so
   there is no "stock" cell. Engine features are compared by turning them off in the patched
   build instead: `--no-background-loading`, ride music, sound, the plugin (the stock title
   player plays the same views) and companions.

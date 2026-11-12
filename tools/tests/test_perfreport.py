@@ -1,4 +1,4 @@
-"""tools/perfreport.py on synthetic perf logs (the format engine patch 0019 writes)."""
+"""tools/perfreport.py on synthetic perf logs (the format engine patch 0020 writes)."""
 
 import json
 import os

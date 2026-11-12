@@ -97,12 +97,13 @@ def for_playlist(playlist_path, sequence, user_dir=None, include_baked=False):
 
 
 def summary(live):
-    """A short description of what a live file holds: parks with views, resets, properties, order."""
+    """A short description of what a live file holds: parks with views, resets, properties, order, Use ticks."""
     edits = live.get("edits", {})
     props = live.get("props", {})
     return {"saved": live.get("saved"), "views": sorted(k for k, v in edits.items() if isinstance(v, dict) and not v.get("reset")),
             "resets": sorted(k for k, v in edits.items() if isinstance(v, dict) and v.get("reset")),
-            "props": sorted(k for k in props if k != "order"), "order": isinstance(props.get("order"), list)}
+            "props": sorted(k for k in props if k not in ("order", "use")), "order": isinstance(props.get("order"), list),
+            "use": isinstance(props.get("use"), dict) and bool(props["use"])}
 
 
 def list_all(user_dir=None):

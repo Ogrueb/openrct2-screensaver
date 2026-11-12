@@ -46,10 +46,10 @@ Read by tools/perfreport.py; runs driven by tools/perfrun.py.
  create mode 100644 src/openrct2/PerfLog.h
 
 diff --git a/src/openrct2-ui/scripting/ScScreensaver.hpp b/src/openrct2-ui/scripting/ScScreensaver.hpp
-index 25336af..b9c33cd 100644
+index 6d23c99..e7a3adf 100644
 --- a/src/openrct2-ui/scripting/ScScreensaver.hpp
 +++ b/src/openrct2-ui/scripting/ScScreensaver.hpp
-@@ -19,6 +19,7 @@
+@@ -20,6 +20,7 @@
  
      #include <SDL.h>
      #include <openrct2/Context.h>
@@ -57,16 +57,16 @@ index 25336af..b9c33cd 100644
      #include <openrct2/PlatformEnvironment.h>
      #include <openrct2/core/FileSystem.hpp>
      #include <openrct2/core/Path.hpp>
-@@ -542,6 +543,8 @@ namespace OpenRCT2::Scripting
-                 JS_CFUNC_DEF("applyBuild", 1, ScScreensaver::applyBuild),
-                 JS_CFUNC_DEF("exportPlaylist", 1, ScScreensaver::exportPlaylist),
-                 JS_CFUNC_DEF("importPlaylist", 0, ScScreensaver::importPlaylist),
+@@ -546,6 +547,8 @@ namespace OpenRCT2::Scripting
+                 JS_CFUNC_DEF("addPark", 1, ScScreensaver::addPark),
+                 JS_CFUNC_DEF("newPlaylist", 0, ScScreensaver::newPlaylist),
+                 JS_CFUNC_DEF("copyPlaylist", 1, ScScreensaver::copyPlaylist),
 +                JS_CGETSET_DEF("perfLog", ScScreensaver::perfLog_get, nullptr),
 +                JS_CFUNC_DEF("perfMark", 1, ScScreensaver::perfMark),
              };
              RegisterBase(ctx, "Screensaver", nullptr, funcs);
              ScreensaverJS::InstallListeners();
-@@ -563,6 +566,19 @@ namespace OpenRCT2::Scripting
+@@ -567,6 +570,19 @@ namespace OpenRCT2::Scripting
              return JS_NewBool(ctx, Ui::Screensaver::IsActive());
          }
  

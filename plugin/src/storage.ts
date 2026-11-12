@@ -146,13 +146,16 @@ export interface Playlist {
     installed?: number;
     source?: string; // the playlist file it was installed from (mksequence.py --install), for the live file
     parks: ParkEntry[];
+    unused?: { key: string; name: string }[]; // parks ticked off (use = false): listed in the editor to tick on again
 }
 
 /** The view editor's Playlist properties (owner, 2026-11-10), by sequence name: they apply over the
  *  installed playlist until the next install moves them into the playlist file (mksequence.py
- *  pull_props). `order` lists park keys in play order; `titles` null is Unset (the viewer's own). */
+ *  pull_props). `order` lists park keys in play order; `use` ticks parks on and off; `titles` null is Unset
+ *  (the viewer's own). */
 export interface PlaylistProps {
     order?: string[];
+    use?: Record<string, boolean>; // the editor's Use ticks by park key: off is skipped in play, built out at the next build
     inertia?: boolean;
     panChanges?: PanChanges | "off"; // off: a pan that would change the angle or zoom cuts instead (not overviews)
     changeHold?: number;

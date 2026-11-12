@@ -44,7 +44,7 @@ The standalone tool builds became a potential enhancement.
 - License: GPLv3 (owner, 2026-11-03; `LICENSE`, the plugin's `package.json`).
 - The example parks left the repository (owner, 2026-11-03): `ExampleParks/README.md` lists their
   downloads; the public repository starts from a fresh history without them.
-- Package the patched OpenRCT2 builds without the diagnostics patch (0019: load timings, perf log):
+- Package the patched OpenRCT2 builds without the diagnostics patch (0020: load timings, perf log):
   the Engine build workflow's "Release build" input (2026-11-03); v0.1.0 carries the two
   executables, so users need no Actions login.
 - The stock-engine stopgaps are gone (owner, 2026-11-03): the generator's palette index 10 rewrite
@@ -319,7 +319,7 @@ them afterward; no hybrid format is planned) and the palette (the wallpaper wrap
 
 ### Engine patches (2026-10-26 to 10-27; `engine/`, `docs/engine-patches.md`)
 
-- 0003-0008 background loading (load timings in the test-only 0019): the next park is read, imported
+- 0003-0008 background loading (load timings in the test-only 0020): the next park is read, imported
   into a second game state and registered while the current one plays, so a switch costs about
   15-30 ms; `TitleSequence.backgroundLoading` lets the plugin skip the fade.
 - 0001 palette split: the void takes the park's color and the interface keeps its black
@@ -545,6 +545,16 @@ Later stage (owner, 2026-11-10): the live editor on its own, without the generat
 from the game's storage; writing them and the park order into the playlist files, builds, and the rest of the
 settings page's functions are to be drafted for the live editor later (`docs/enhancements.md` section 2, item 6).
 Next before that: the editing UI redesign (item 5, mockups in the project files' `editor-ui/`).
+
+Park library in the game (owner, 2026-11-12, thread "Explore park selection and playlist creation in the
+live editor"): the full replacement for the settings page's park screen, after the first stage (Use ticks,
+Add park, Duplicate and From a folder playlists, a playlist switcher). The generator lists the park folder
+for the game (`live/library.json`: name, builders, map size, scripts, event views, and a small top-down
+picture drawn with the stdlib as `tools/districts.py` draws its maps, shown through the overlay's PNG
+images), and the editor gets a Parks panel with search, the settings page's filters (size, scripts, special
+views) and "in playlist" ticks, with a New playlist from the ticked parks. The plugin's files API reads only
+`screensaver/live`, so the listing has to come from the generator, as a task the engine starts like a
+build. Estimate two to three days.
 
 ### Weather and day/night in the generator (owner, 2026-11-02)
 
