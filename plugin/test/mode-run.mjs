@@ -1154,6 +1154,7 @@ console.log("ok: Import and Export playlist through the file dialogs");
     const edClick = id => { const e = ed(id); assert.ok(e, `${id} is shown`); const x = e.x + e.width / 2, y = e.y + e.height / 2; mouse("move", x, y); mouse("down", x, y); mouse("up", x, y); };
     const gray = "#2a2e2c80";
     const keys = playlist.parks.map(p => p.key ?? p.fileName);
+    playlist.unused = [{ key: "old-mill.park", name: "Old Mill" }]; // (a park the build left out)
     mode.set(true);
     tick(20);
     mode.buildStatus = { ...mode.buildStatus, state: "idle", task: "" };
@@ -1170,6 +1171,13 @@ console.log("ok: Import and Export playlist through the file dialogs");
     assert.ok(keys.includes(second) && use[second] === false && Object.keys(use).length === 1, "the tick is saved");
     assert.ok(!ed("ptick.1.check"), "shown off");
     assert.match(ed("pname.1").text, /\(left out\)$/);
+    assert.equal(ed("ph.3").text, "NOT IN THE BUILD", "the parks the build left out, under the order");
+    assert.equal(ed("pname.4").text, "Old Mill");
+    edClick("pu.4"); tick();
+    assert.equal(saved["RCTScreensaver.playlistProps"][playlist.sequence].use["old-mill.park"], true, "ticked on for the next build");
+    assert.equal(ed("pcount.4").text, "needs a build");
+    dump("parks-ticks");
+    edClick("pu.4"); tick(); // (off again)
     assert.ok(JSON.parse(mode.files.get("Mini.json")).props.use[second] === false, "and written to the live file for the next build");
     // The last park in use stays on.
     edClick("ptick.2"); tick();
@@ -1223,11 +1231,16 @@ console.log("ok: Import and Export playlist through the file dialogs");
     assert.equal(ed("pcount.1").text, "playing", "the playing one is marked");
     assert.equal(ed("pcount.2").text, "file missing");
     assert.ok(ed("parks.new") && ed("parks.copy"), "New playlist and Duplicate under them");
+    dump("parks-playlists");
     mode.builds.length = 0;
     edClick("ppl.0"); tick(2);
     assert.deepEqual(mode.builds, ["Evening"], "a click builds the other playlist");
     assert.equal(ed("build.state").text, "building");
     assert.equal(scene.get("rcts.ed.build.text")?.text, "Cancel switch");
+    mode.files.set("build-Evening.json", JSON.stringify({ buildVersion: 1, sequence: "Evening", started: now, ok: null, park: 1, parks: 2,
+        parkName: "Harbor", parkStates: [{ key: "h.park", name: "Harbor", state: "building" }, { state: "pending" }] }));
+    tick(6);
+    dump("parks-switching");
     mode.cancelBuild = function () { this.buildStatus = { ...this.buildStatus, state: "cancelled" }; return true; };
     edClick("build"); tick(6);
     assert.match(ed("msgt.0").text, /^Switch cancelled/);
@@ -1245,6 +1258,7 @@ console.log("ok: Import and Export playlist through the file dialogs");
     assert.equal(ed("build.state").text, "copying the playlist");
     edClick("build"); tick(6);
     // Back as it was for the tests below.
+    delete playlist.unused;
     delete mode.addPark; delete mode.newPlaylist; delete mode.copyPlaylist;
     mode.cancelBuild = function () { return false; };
     edClick("field"); tick();
