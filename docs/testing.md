@@ -228,6 +228,22 @@ Needs an engine build with patch 0017 and an install from this version (it write
       (strip and contact sheet), and a build on the page leaves `screensaver\build\live` in place.
 - [ ] With `generator.json` removed, the line says why the build cannot start.
 
+### Import and Export playlist (patch 0018, 2026-11-12)
+Needs an engine build with patch 0018 and an install from this version (`generator.json` with the
+playlist's file).
+- [ ] In the mode's editor, Export playlist opens Windows' Save dialog over the game (not behind it), named
+      after the playlist, in Documents the first time and the last folder after. Closing it starts nothing.
+- [ ] Saving: the header says "exporting", then the messages list "Exported n parks ... to <file>" (and "Took
+      in your edits" when there were unbuilt edits). The zip opens in the settings page's Import and holds
+      the parks, the views file and any changed profiles of those parks.
+- [ ] Import playlist opens the Open dialog; picking a bundle shows "importing", then the squares of the
+      imported playlist build ("Building the import · Park n of m"). When it is done the screen dips to the
+      imported playlist's first park, the editor stays open on it, and the messages say "Imported "<name>" ...
+      now playing". The playlist is in `Documents\OpenRCT2\screensaver\playlists`, its parks under `bundles`.
+- [ ] After a restart of the game, the imported playlist plays. Build and play then builds it (not the old one).
+- [ ] Importing a bundle of the playlist that is playing replaces it in place (the park on screen plays on).
+- [ ] A broken zip says why in the messages; Cancel import stops it and the playlist plays on.
+
 ### Live file (patch 0016, 2026-11-10)
 Passed in the game on 2026-11-10 (example playlist, Windows), except the settings page's panel, checked
 through its function only. Needs an engine build with patch 0016 and an install from this version

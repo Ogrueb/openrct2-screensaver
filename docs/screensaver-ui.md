@@ -278,7 +278,7 @@ The panel became three panes (round 8 of the mockups accepted, built the same da
   overviews excepted, and hides the two holds that no longer apply), Timing (change, arrival and return
   holds, half-second steps) and Presentation (Title music Ride/Theme/Unset, Show titles Overview/On/Off/
   Unset; Unset leaves the viewer's own setting). Changes play at once (the music too); **Save** keeps them
-  in the game (`RCTScreensaver.playlistProps`); Import and Export are inactive (no way to pick files yet).
+  in the game (`RCTScreensaver.playlistProps`); Import and Export moved to the build pane (below).
 - **Install** picks both up: `mksequence.py --install` writes the park order and the saved properties into
   the playlist file (`[views] inertia`, `pan_changes` (now also "off"), `change_hold`, `arrive_hold`,
   `return_hold` divided back by `time_scale`; top-level `title_music` and `titles`, removed for Unset; the
@@ -299,8 +299,8 @@ closed.
   hand and on its own when the window is too short for it under the box; then "Park n of m · name" with the
   time so far, a square per park, the big **Build and play** button (Cancel build while it runs; Ctrl+B,
   also with the editor closed; inactive, and Ctrl+B does nothing, while every edit is built: owner's test,
-  2026-11-11), the MESSAGES list (3.5 rows, scrolls) and Import playlist / Export playlist
-  (inactive until there is a way to pick files). The playlist's Save button is gone: Playlist properties
+  2026-11-11), the MESSAGES list (3.5 rows, scrolls) and Import playlist / Export playlist (see "Import and
+  Export" below; inactive on an engine without patch 0018). The playlist's Save button is gone: Playlist properties
   save as they change, as the views do. With the editor closed, the controls bar carries a "Building 6/15"
   chip while a build runs.
 - **Squares:** one per park in play order, as the generator lists them (`parkStates`, the playlist file's
@@ -352,6 +352,38 @@ closed.
   from the game redoes every park. The settings page judges its renders against whichever build is newer,
   its own or the game's (`build/live/<sequence>.result.json`), so a build from the game marks them old; the
   page's own builds and bundle imports clear `build/` but keep `build/live`.
+
+### Import and Export (engine patch 0018, 2026-11-12)
+
+The build pane's Import playlist and Export playlist move a playlist between machines as a bundle, the same
+zip the settings page's Import and Export use (`tools/bundle.py`), without leaving the game.
+
+- **The game picks the file.** `screensaver.exportPlaylist(sequence)` and `screensaver.importPlaylist()` show
+  the system's own Save or Open dialog (OpenRCT2's `ShowFileDialog`: Windows' file dialog, zenity or kdialog on
+  Linux) filtered to `*.zip`, starting in Documents and then in the folder last used. The game waits while it is
+  open. A closed dialog returns false and starts nothing. A plugin passes no path, so it cannot choose a file to
+  write or read.
+- The engine then runs the registered generator, as for a build (one task at a time; Cancel and Ctrl+B
+  stop it): `mksequence.py --live-export <sequence> --to <file>` or `--live-import <file>`, each with
+  `--user-dir`. `buildStatus.task` says which runs.
+- **Export** bakes the game's edits into the playlist files (as a build does), then writes the bundle with the
+  park files of the ticked parks and the user's own profiles (`screensaver/parks`) of the playlist's parks
+  (matched by the park cache's saved names, else by reading the park). Its result goes to
+  `live/task-export.json` (`{taskVersion: 1, task, started, ok, finished, path, sequence, messages}`), whose
+  messages the pane lists. Nothing plays differently afterwards.
+- **Import** unpacks the bundle into the user folder (`screensaver/playlists/<slug>.toml`, parks under
+  `screensaver/bundles/<slug>/`, profiles into `screensaver/parks`; a file replaced is backed up to
+  `screensaver/backups`), looks for parks it does not carry in the settings page's park folder, registers the
+  playlist in `generator.json` and builds it as a live build (`build-<sequence>.json`, the pane's squares).
+  Its own result goes to `live/task-import.json` (with `sequence`, `playlist`, `missing`). A live file the game
+  kept for an earlier playlist of the same name is marked baked, so it does not apply to the imported one.
+- **Playing the import:** once its build is done the plugin calls `applyBuild(<sequence>)`. For a sequence
+  that is not playing the engine copies the build into its installed folder, or a new one in the user's
+  `sequence` folder, scans the sequences again and starts it. The plugin installs the new playlist in the
+  storage, clears the old playlist's view edits and its built edits from the storage (its live file
+  keeps them for its next build), and starts the player on the new sequence, opening the editor again. An
+  import of the playlist that plays (same name) is taken in like a build. The imported playlist plays on after
+  a restart; its parks' companion scripts need a normal install (`mksequence.py --install`).
 
 ### Live file (2026-11-10, owner's go-ahead in "Explore saving playlists without the Generator")
 

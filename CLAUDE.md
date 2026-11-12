@@ -125,7 +125,11 @@ See README.md for usage.
   swaps the new playlist in (`builder.ts`, `Player.swapPlaylist`). The editor's bottom-right Build pane (owner,
   2026-11-11): squares per park in play order (`parkStates`), park-tagged messages, Ctrl+B, a bar chip; every live
   build bakes the live file first; Playlist properties save as they change (no Save). Copy/Paste views through the clipboard (2026-11-12, the
-  drawing page's text format). Import/Export playlist needs a file picker: engine work for a new thread (owner).
+  drawing page's text format). Import/Export playlist (engine patch 0018, 2026-11-12; `docs/screensaver-ui.md` "Import and
+  Export"): the engine shows the system's Save/Open dialog and runs the generator on the picked bundle
+  (`--live-export <sequence> --to <zip>`: edits baked, parks and the user's profiles included; `--live-import <zip>`:
+  unpacked into the user folder, registered, built), reporting to `task-export.json`/`task-import.json` in the live
+  folder; an import's build replaces the playing playlist (`applyBuild` installs and plays its sequence).
 - **Palette index 10** is both the void outside the map and the UI black; a packed water
   object that lightens it (Gardens of Light) washes out the stock interface (the white void was intended, but the UI must not suffer).
   Engine patch 0001 splits the two properly (the viewport painter rewrites its own index-10
@@ -151,8 +155,8 @@ See README.md for usage.
   `.github/workflows/engine.yml` builds Windows x64 binaries (about 15 min) that replace
   `openrct2.exe`/`openrct2.com` in a stock install, plus a Linux tarball (Ubuntu 24.04 libraries) and an AppImage (any distribution; Fedora uses it), on pushes to `main` touching `engine/`
   or by manual run (pick the branch). The series is grouped by topic (owner, 2026-11-03; table in `engine/README.md`): 0001 palette,
-  0002 ride music, 0003-0008 background loading, 0009-0010 plugin API, 0011-0017 screensaver mode, and last
-  0018 diagnostics (park load timings and the perf log), which stays for testing and is dropped for release
+  0002 ride music, 0003-0008 background loading, 0009-0010 plugin API, 0011-0018 screensaver mode, and last
+  0019 diagnostics (park load timings and the perf log), which stays for testing and is dropped for release
   (owner, 2026-10-27). Patch comments carry no project name and use US English, so groups can go upstream. Patch 0002 adds "Ride music" to Options → Sound → Title screen music
   (`title_theme = 5`): the parks' ride music follows the view on the title screen instead of a theme. It
   cross-fades across park switches (1.5 s) and plays a park's single custom music object evenly (centered, any view).
@@ -170,7 +174,7 @@ See README.md for usage.
   3 min 42 s, incremental 30-40 s; the owner copies `bin\openrct2.exe` into the portable install
   themselves, as the PC's permission check blocks that step for Remote Control sessions).
 - **Performance testing** (roadmap step 3, a potential enhancement since 2026-11-07 grouped with the overnight soaks; `docs/performance-testing.md`; owner 2026-11-02: automated
-  and log-based, not manual): engine patch 0018 `--perf-log` writes per-frame stage times (tick, plugin,
+  and log-based, not manual): engine patch 0019 `--perf-log` writes per-frame stage times (tick, plugin,
   input, paint, present, with the camera), 10 s samples (memory, handles, QuickJS heap, image list
   fragmentation, entity counts) and events (load stages, plugin marks); it stays in every build until
   release. `tools/perfrun.py` runs the suites in `perf/` in sandbox user folders (`--user-data-path`,

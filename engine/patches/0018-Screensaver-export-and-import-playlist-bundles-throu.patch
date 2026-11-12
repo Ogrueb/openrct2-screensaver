@@ -1,0 +1,487 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: RCT Screensaver <noreply@example.invalid>
+Date: Thu, 12 Nov 2026 19:00:00 +0000
+Subject: [PATCH] Screensaver: export and import playlist bundles through the
+ system's file dialog
+
+screensaver.exportPlaylist(sequence) shows the system's Save dialog for a
+playlist bundle (a .zip) and runs the registered generator with
+--live-export <sequence> --to <file> in the background.
+screensaver.importPlaylist() shows the Open dialog and runs it with
+--live-import <file>, which unpacks the bundle into the user's folder and
+builds it. Both return false when the dialog is closed. The game shows the
+dialog and passes the picked file to the generator: a plugin never names a
+path. One task (build, export or import) runs at a time; buildStatus gains
+`task`.
+
+applyBuild(sequence) now also takes a sequence that is not playing (a
+playlist just imported): it is copied into its installed folder, or a new
+one in the user's sequence folder, the sequences are scanned again and it
+starts playing.
+---
+ src/openrct2-ui/screensaver/Build.cpp       | 267 +++++++++++++++++---
+ src/openrct2-ui/screensaver/Build.h         |  22 +-
+ src/openrct2-ui/scripting/ScScreensaver.hpp |  44 +++-
+ 3 files changed, 286 insertions(+), 47 deletions(-)
+
+diff --git a/src/openrct2-ui/screensaver/Build.cpp b/src/openrct2-ui/screensaver/Build.cpp
+index 31818b8..f8aba14 100644
+--- a/src/openrct2-ui/screensaver/Build.cpp
++++ b/src/openrct2-ui/screensaver/Build.cpp
+@@ -39,6 +39,8 @@
+ #include <openrct2/core/Json.hpp>
+ #include <openrct2/core/Path.hpp>
+ #include <openrct2/core/String.hpp>
++#include <openrct2/platform/Platform.h>
++#include <openrct2/ui/UiContext.h>
+ #include <openrct2/scenes/title/TitleScene.h>
+ #include <openrct2/scenes/title/TitleSequenceManager.h>
+ #include <openrct2/scenes/title/TitleSequencePlayer.h>
+@@ -168,8 +170,8 @@ namespace OpenRCT2::Ui::Screensaver::Build
+ #else
+             shared.pid = 0;
+ #endif
+-            LOG_INFO("Screensaver build of \"%s\": %s (exit code %d)", shared.status.sequence.c_str(),
+-                StateName(shared.status.state), exitCode);
++            LOG_INFO("Screensaver %s of \"%s\": %s (exit code %d)", shared.status.task.c_str(),
++                shared.status.sequence.c_str(), StateName(shared.status.state), exitCode);
+         }
+ 
+ #ifdef _WIN32
+@@ -327,6 +329,117 @@ namespace OpenRCT2::Ui::Screensaver::Build
+         }
+     }
+ 
++    namespace
++    {
++        // Runs the generator with these arguments after its own (`task` and `sequence` as the status
++        // reports them); one task at a time.
++        bool StartTask(
++            const std::string& task, const std::string& sequence, const std::vector<std::string>& extra, std::string& error)
++        {
++            auto& shared = GetShared();
++            {
++                std::lock_guard lock(shared.mutex);
++                if (shared.status.state == State::running)
++                {
++                    error = "A " + shared.status.task + " is running already"
++                        + (shared.status.sequence.empty() ? "" : " (" + shared.status.sequence + ")");
++                    return false;
++                }
++            }
++            auto generator = ReadGenerator(error);
++            if (!generator)
++                return false;
++            auto folder = ScreensaverFolder();
++            std::error_code ec;
++            fs::create_directories(fs::u8path(folder), ec);
++            auto user = GetContext()->GetPlatformEnvironment().GetDirectoryPath(DirBase::user);
++            // The repository's root: the generator's folder's parent (tools/mksequence.py).
++            auto cwd = fs::u8path(generator->script).parent_path().parent_path().u8string();
++            std::vector<std::string> args = { generator->python, generator->script };
++            args.insert(args.end(), extra.begin(), extra.end());
++            args.push_back("--user-dir");
++            args.push_back(user);
++            {
++                std::lock_guard lock(shared.mutex);
++                shared.status = Status{ State::running, task, sequence, 0, Now(), 0, "" };
++                shared.cancelled = false;
++            }
++            if (!Launch(args, std::string(cwd.begin(), cwd.end()), Path::Combine(folder, "build.log"), error))
++            {
++                std::lock_guard lock(shared.mutex);
++                shared.status.state = State::failed;
++                shared.status.finished = Now();
++                shared.status.error = error;
++                return false;
++            }
++            LOG_INFO("Screensaver %s of \"%s\" started", task.c_str(), sequence.c_str());
++            return true;
++        }
++
++        bool IsRunning()
++        {
++            auto& shared = GetShared();
++            std::lock_guard lock(shared.mutex);
++            return shared.status.state == State::running;
++        }
++
++        // The folder the last bundle was picked in (this run only); first the user's documents.
++        u8string& BundleFolder()
++        {
++            static u8string folder;
++            if (folder.empty())
++            {
++#ifdef _WIN32
++                // The user directory is <Documents>\OpenRCT2.
++                auto user = GetContext()->GetPlatformEnvironment().GetDirectoryPath(DirBase::user);
++                folder = fs::u8path(user).parent_path().u8string();
++#else
++                folder = Platform::GetFolderPath(SpecialFolder::userHome);
++#endif
++            }
++            return folder;
++        }
++
++        // The system's file dialog for a playlist bundle: the picked file, or empty when closed.
++        u8string PickBundle(Ui::FileDialogType type, const u8string& title, const u8string& defaultName)
++        {
++            Ui::FileDialogDesc desc;
++            desc.Type = type;
++            desc.Title = title;
++            desc.InitialDirectory = BundleFolder();
++            desc.DefaultFilename = defaultName.empty() ? u8string() : Path::Combine(BundleFolder(), defaultName);
++            // (the first filter's extension is the one a Save dialog adds)
++            desc.Filters.emplace_back("Playlist bundle", "*.zip");
++            u8string picked;
++            try
++            {
++                picked = GetContext()->GetUiContext().ShowFileDialog(desc);
++            }
++            catch (const std::exception& e)
++            {
++                // No dialog on this system (on Linux: neither zenity nor kdialog)
++                LOG_ERROR("Screensaver: no file dialog: %s", e.what());
++                throw;
++            }
++            if (!picked.empty())
++                BundleFolder() = fs::u8path(picked).parent_path().u8string();
++            return picked;
++        }
++
++        // A file name for the bundle: the sequence's name with characters file systems refuse dropped.
++        u8string BundleName(const std::string& sequence)
++        {
++            u8string name;
++            for (unsigned char c : sequence)
++            {
++                if (c >= 0x20 && c != 0x7F && c != '/' && c != '\\' && c != '"' && c != ':' && c != '*' && c != '?'
++                    && c != '<' && c != '>' && c != '|')
++                    name.push_back(static_cast<char>(c));
++            }
++            return (name.empty() ? u8string("playlist") : name) + ".zip";
++        }
++    } // namespace
++
+     bool Start(const std::string& sequence, std::string& error)
+     {
+         if (!IsSequenceName(sequence))
+@@ -334,42 +447,74 @@ namespace OpenRCT2::Ui::Screensaver::Build
+             error = "Not a title sequence name: " + sequence;
+             return false;
+         }
+-        auto& shared = GetShared();
++        return StartTask("build", sequence, { "--live-build", sequence }, error);
++    }
++
++    bool Export(const std::string& sequence, bool& cancelled, std::string& error)
++    {
++        cancelled = false;
++        if (!IsSequenceName(sequence))
+         {
+-            std::lock_guard lock(shared.mutex);
+-            if (shared.status.state == State::running)
+-            {
+-                error = "A build is running already (" + shared.status.sequence + ")";
+-                return false;
+-            }
++            error = "Not a title sequence name: " + sequence;
++            return false;
+         }
+-        auto generator = ReadGenerator(error);
+-        if (!generator)
++        if (IsRunning())
++        {
++            error = "Wait for the " + GetStatus().task + " to finish";
+             return false;
+-        auto folder = ScreensaverFolder();
+-        std::error_code ec;
+-        fs::create_directories(fs::u8path(folder), ec);
+-        auto user = GetContext()->GetPlatformEnvironment().GetDirectoryPath(DirBase::user);
+-        // The repository's root: the generator's folder's parent (tools/mksequence.py).
+-        auto cwd = fs::u8path(generator->script).parent_path().parent_path().u8string();
+-        std::vector<std::string> args = {
+-            generator->python, generator->script, "--live-build", sequence, "--user-dir", user,
+-        };
++        }
++        if (!ReadGenerator(error))
++            return false;
++        u8string path;
++        try
+         {
+-            std::lock_guard lock(shared.mutex);
+-            shared.status = Status{ State::running, sequence, 0, Now(), 0, "" };
+-            shared.cancelled = false;
++            path = PickBundle(Ui::FileDialogType::save, "Export playlist", BundleName(sequence));
+         }
+-        if (!Launch(args, std::string(cwd.begin(), cwd.end()), Path::Combine(folder, "build.log"), error))
++        catch (const std::exception& e)
+         {
+-            std::lock_guard lock(shared.mutex);
+-            shared.status.state = State::failed;
+-            shared.status.finished = Now();
+-            shared.status.error = error;
++            error = std::string("No file dialog: ") + e.what();
+             return false;
+         }
+-        LOG_INFO("Screensaver build of \"%s\" started", sequence.c_str());
+-        return true;
++        if (path.empty())
++        {
++            cancelled = true;
++            return false;
++        }
++        return StartTask("export", sequence, { "--live-export", sequence, "--to", path }, error);
++    }
++
++    bool Import(bool& cancelled, std::string& error)
++    {
++        cancelled = false;
++        if (IsRunning())
++        {
++            error = "Wait for the " + GetStatus().task + " to finish";
++            return false;
++        }
++        if (!ReadGenerator(error))
++            return false;
++        u8string path;
++        try
++        {
++            path = PickBundle(Ui::FileDialogType::open, "Import playlist", "");
++        }
++        catch (const std::exception& e)
++        {
++            error = std::string("No file dialog: ") + e.what();
++            return false;
++        }
++        if (path.empty())
++        {
++            cancelled = true;
++            return false;
++        }
++        std::error_code ec;
++        if (!fs::is_regular_file(fs::u8path(path), ec))
++        {
++            error = "Not a file: " + path;
++            return false;
++        }
++        return StartTask("import", "", { "--live-import", path }, error);
+     }
+ 
+     Status GetStatus()
+@@ -413,25 +558,50 @@ namespace OpenRCT2::Ui::Screensaver::Build
+             error = "No title sequence is playing";
+             return false;
+         }
+-        auto* item = TitleSequenceManager::GetItem(TitleGetCurrentSequence());
+-        if (item == nullptr || item->Name != sequence)
+-        {
+-            error = "The title sequence \"" + sequence + "\" is not the one playing";
+-            return false;
+-        }
+-        if (item->IsZip)
+-        {
+-            error = "The title sequence \"" + sequence + "\" is a .parkseq file; install it with mksequence.py --install";
+-            return false;
+-        }
++        auto* playing = TitleSequenceManager::GetItem(TitleGetCurrentSequence());
++        bool isPlaying = playing != nullptr && playing->Name == sequence;
+         auto built = fs::u8path(Path::Combine(ScreensaverFolder(), "build", "live", sequence));
+-        auto target = fs::u8path(item->Path);
+         std::error_code ec;
+         if (!fs::is_regular_file(built / "script.txt", ec))
+         {
+             error = "No build of \"" + sequence + "\" to apply";
+             return false;
+         }
++        // Another sequence (a playlist just imported): its installed folder, or a new one in the
++        // user's sequence folder.
++        auto index = isPlaying ? TitleGetCurrentSequence() : TitleSequenceManager::GetIndexForName(sequence.c_str());
++        auto* item = TitleSequenceManager::GetItem(index);
++        fs::path target;
++        if (item != nullptr)
++        {
++            if (item->IsZip)
++            {
++                error = "The title sequence \"" + sequence + "\" is a .parkseq file; install it with mksequence.py --install";
++                return false;
++            }
++            if (item->PredefinedIndex != TitleSequenceManager::kPredefinedIndexCustom)
++            {
++                error = "\"" + sequence + "\" is one of the game's own title sequences";
++                return false;
++            }
++            target = fs::u8path(item->Path);
++        }
++        else
++        {
++            auto sequences = GetContext()->GetPlatformEnvironment().GetDirectoryPath(DirBase::user, DirId::sequences);
++            target = fs::u8path(sequences) / fs::u8path(sequence);
++            if (fs::exists(target, ec) && !fs::is_directory(target, ec))
++            {
++                error = "Cannot install \"" + sequence + "\": " + target.u8string() + " is a file";
++                return false;
++            }
++            fs::create_directories(target, ec);
++            if (ec)
++            {
++                error = "Cannot create " + target.u8string() + ": " + ec.message();
++                return false;
++            }
++        }
+         // The new files first (each written beside its place and renamed over it), the script last.
+         std::set<fs::path> names;
+         std::vector<fs::path> parks;
+@@ -490,6 +660,19 @@ namespace OpenRCT2::Ui::Screensaver::Build
+                 fs::remove(it->path(), ignored);
+             }
+         }
++        if (!isPlaying)
++        {
++            // The new sequence is found by a new scan, and plays from its first park.
++            TitleSequenceManager::Scan();
++            auto newIndex = TitleSequenceManager::GetIndexForName(sequence.c_str());
++            if (newIndex == SIZE_MAX || !TitlePreviewSequence(newIndex))
++            {
++                error = "The title sequence \"" + sequence + "\" was installed but could not be played";
++                return false;
++            }
++            LOG_INFO("Screensaver build of \"%s\" installed and playing", sequence.c_str());
++            return true;
++        }
+         auto* player = static_cast<ITitleSequencePlayer*>(TitleGetSequencePlayer());
+         if (player == nullptr || !player->Reload())
+         {
+diff --git a/src/openrct2-ui/screensaver/Build.h b/src/openrct2-ui/screensaver/Build.h
+index 7410de7..cd4b5f6 100644
+--- a/src/openrct2-ui/screensaver/Build.h
++++ b/src/openrct2-ui/screensaver/Build.h
+@@ -17,6 +17,12 @@
+ // <user directory>/screensaver/build/live/<name> and never touches the installed one. Apply() then
+ // copies that into the installed sequence folder and reloads the playing sequence's script, at a
+ // moment the plugin chooses (no park is being read then).
++//
++// Export() and Import() run the same generator on a playlist bundle (a zip) the user picks in the
++// system's file dialog, shown by the game: the plugin never names a path. Export writes the playing
++// playlist to the chosen file; Import unpacks the chosen bundle into the user's folder and builds it,
++// and Apply() then installs the new sequence and plays it. One task (build, export or import) runs at
++// a time.
+ 
+ #pragma once
+ 
+@@ -37,6 +43,7 @@ namespace OpenRCT2::Ui::Screensaver::Build
+     struct Status
+     {
+         State state = State::idle;
++        std::string task; // "build", "export" or "import"
+         std::string sequence;
+         int32_t exitCode = 0;
+         int64_t started = 0;  // ms since 1970
+@@ -50,13 +57,24 @@ namespace OpenRCT2::Ui::Screensaver::Build
+     // when no generator is registered, the name is not acceptable or a build is running already.
+     bool Start(const std::string& sequence, std::string& error);
+ 
++    // Shows the system's Save dialog for a playlist bundle and, once a file is picked, runs the
++    // generator to export the title sequence's playlist into it. False with `cancelled` when the user
++    // closed the dialog, else false with the reason in `error`.
++    bool Export(const std::string& sequence, bool& cancelled, std::string& error);
++
++    // Shows the system's Open dialog for a playlist bundle and, once one is picked, runs the generator
++    // to import and build it. False as for Export().
++    bool Import(bool& cancelled, std::string& error);
++
+     Status GetStatus();
+ 
+     // Stops a running build; false when none runs.
+     bool Cancel();
+ 
+     // Copies the built sequence of that name into the installed title sequence of the same name,
+-    // which must be the one playing and a folder, and reloads its script; the park on screen keeps
+-    // playing until the next seek. False with the reason in `error`.
++    // which must be a folder. When it is the one playing, its script is reloaded and the park on
++    // screen keeps playing until the next seek; otherwise (a playlist just imported) it is installed
++    // in the user's sequence folder, created if need be, and starts playing. False with the reason
++    // in `error`.
+     bool Apply(const std::string& sequence, std::string& error);
+ } // namespace OpenRCT2::Ui::Screensaver::Build
+diff --git a/src/openrct2-ui/scripting/ScScreensaver.hpp b/src/openrct2-ui/scripting/ScScreensaver.hpp
+index acef79e..25336af 100644
+--- a/src/openrct2-ui/scripting/ScScreensaver.hpp
++++ b/src/openrct2-ui/scripting/ScScreensaver.hpp
+@@ -7,7 +7,7 @@
+  * OpenRCT2 is licensed under the GNU General Public License version 3.
+  *****************************************************************************/
+ 
+-// The `screensaver` global (mode, settings, mouse, overlay, files, clipboard, builds).
++// The `screensaver` global (mode, settings, mouse, overlay, files, clipboard, builds, playlist bundles).
+ 
+ #pragma once
+ 
+@@ -540,6 +540,8 @@ namespace OpenRCT2::Scripting
+                 JS_CGETSET_DEF("buildStatus", ScScreensaver::buildStatus_get, nullptr),
+                 JS_CFUNC_DEF("cancelBuild", 0, ScScreensaver::cancelBuild),
+                 JS_CFUNC_DEF("applyBuild", 1, ScScreensaver::applyBuild),
++                JS_CFUNC_DEF("exportPlaylist", 1, ScScreensaver::exportPlaylist),
++                JS_CFUNC_DEF("importPlaylist", 0, ScScreensaver::importPlaylist),
+             };
+             RegisterBase(ctx, "Screensaver", nullptr, funcs);
+             ScreensaverJS::InstallListeners();
+@@ -681,13 +683,14 @@ namespace OpenRCT2::Scripting
+             return JS_UNDEFINED;
+         }
+ 
+-        // { state: "idle" | "running" | "done" | "failed" | "cancelled", sequence, exitCode, started,
+-        //   finished (ms since 1970), error }
++        // { state: "idle" | "running" | "done" | "failed" | "cancelled", task: "build" | "export" |
++        //   "import" (empty before the first), sequence, exitCode, started, finished (ms since 1970), error }
+         static JSValue buildStatus_get(JSContext* ctx, JSValue)
+         {
+             auto status = Ui::Screensaver::Build::GetStatus();
+             JSValue obj = JS_NewObject(ctx);
+             JS_SetPropertyStr(ctx, obj, "state", JSFromStdString(ctx, Ui::Screensaver::Build::StateName(status.state)));
++            JS_SetPropertyStr(ctx, obj, "task", JSFromStdString(ctx, status.task));
+             JS_SetPropertyStr(ctx, obj, "sequence", JSFromStdString(ctx, status.sequence));
+             JS_SetPropertyStr(ctx, obj, "exitCode", JS_NewInt32(ctx, status.exitCode));
+             JS_SetPropertyStr(ctx, obj, "started", JS_NewFloat64(ctx, static_cast<double>(status.started)));
+@@ -719,6 +722,41 @@ namespace OpenRCT2::Scripting
+             }
+             return JS_UNDEFINED;
+         }
++
++        // exportPlaylist(sequence) shows the system's Save dialog for a playlist bundle and exports
++        // that title sequence's playlist into the picked file in the background (buildStatus follows
++        // it). False when the dialog was closed; throws with the reason when it cannot start.
++        static JSValue exportPlaylist(JSContext* ctx, JSValue, int argc, JSValue* argv)
++        {
++            if (argc < 1 || !JS_IsString(argv[0]))
++            {
++                JS_ThrowTypeError(ctx, "exportPlaylist(sequence): sequence must be a string");
++                return JS_EXCEPTION;
++            }
++            bool cancelled = false;
++            std::string error;
++            if (!Ui::Screensaver::Build::Export(JSToStdString(ctx, argv[0]), cancelled, error) && !cancelled)
++            {
++                JS_ThrowPlainError(ctx, "%s", error.c_str());
++                return JS_EXCEPTION;
++            }
++            return JS_NewBool(ctx, !cancelled);
++        }
++
++        // importPlaylist() shows the system's Open dialog for a playlist bundle and imports and builds
++        // the picked one in the background (buildStatus follows it; applyBuild then plays it). False
++        // when the dialog was closed; throws with the reason when it cannot start.
++        static JSValue importPlaylist(JSContext* ctx, JSValue, int, JSValue*)
++        {
++            bool cancelled = false;
++            std::string error;
++            if (!Ui::Screensaver::Build::Import(cancelled, error) && !cancelled)
++            {
++                JS_ThrowPlainError(ctx, "%s", error.c_str());
++                return JS_EXCEPTION;
++            }
++            return JS_NewBool(ctx, !cancelled);
++        }
+     };
+ 
+     inline JSValue ScScreensaver::overlay_get(JSContext* ctx, JSValue)

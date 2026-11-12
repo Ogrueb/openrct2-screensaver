@@ -4,7 +4,7 @@ import { builder, buildApi, BuildResult, message } from "./builder";
 import { Editor } from "./editor";
 import { modeSettings, perfLogging, perfMark, screensaverApi } from "./mode";
 import { Player } from "./player";
-import { loadPlaylist, loadSettings, Playlist, resolveSequence, savePlaylist, saveSettings, TITLES } from "./storage";
+import { loadPlaylist, loadSettings, Playlist, resolveSequence, savePlaylist, saveSettings, startPlaylistEdits, TITLES } from "./storage";
 import { Captions } from "./ui/captions";
 import { ControlsBar } from "./ui/controls";
 import { EditorPanel } from "./ui/editor-panel";
@@ -84,13 +84,16 @@ function stopPlayer(release = false): void {
 }
 
 /** Takes a build the game started in (builder.ts): the engine copies the new sequence into place and
- *  reloads its script, the new playlist is installed in the storage and the player swaps to it. */
-function takeBuild(result: BuildResult): string | undefined {
+ *  reloads its script, the new playlist is installed in the storage and the player swaps to it. The
+ *  build of a playlist just imported replaces the playing playlist: the engine installs its sequence
+ *  and plays it, and the player starts again on it (the editor opens again if it was open). */
+function takeBuild(result: BuildResult, imported = false): string | undefined {
     const api = buildApi();
     if (!api || !player?.isRunning || !result.playlist) {
         return "the screensaver is not playing";
     }
-    if (result.playlist.sequence !== player.sequenceName) {
+    const other = result.playlist.sequence !== player.sequenceName;
+    if (other && !imported) {
         return `another playlist is playing ("${player.sequenceName}")`;
     }
     try {
@@ -99,12 +102,16 @@ function takeBuild(result: BuildResult): string | undefined {
         return message(e);
     }
     const old = loadPlaylist();
-    const playlist: Playlist = { ...result.playlist, installed: Date.now(), source: result.playlist.source ?? old?.source };
+    const playlist: Playlist = { ...result.playlist, installed: Date.now(), source: result.playlist.source ?? (other ? undefined : old?.source) };
     const check = resolveSequence(playlist);
     if (typeof check === "string") {
         return check;
     }
     savePlaylist(playlist);
+    if (imported) {
+        startPlaylistEdits(playlist.sequence);
+        builder.forgetPlaylist();
+    }
     // The playlist's title music, as an install sets it (applied by the mode on its next entry).
     if (result.titleMusic) {
         const settings = player.liveSettings;
@@ -112,8 +119,18 @@ function takeBuild(result: BuildResult): string | undefined {
         saveSettings(settings);
         player.noteInstalledMusic(result.titleMusic);
     }
-    player.swapPlaylist(playlist);
-    return undefined;
+    if (!other) {
+        player.swapPlaylist(playlist);
+        return undefined;
+    }
+    // Another sequence: the engine plays it from its first park already; the player starts on it.
+    const reopen = editor?.isOpen ?? false;
+    stopPlayer();
+    startPlayer();
+    if (reopen) {
+        editor?.open();
+    }
+    return player?.isRunning ? undefined : "the imported playlist could not start";
 }
 builder.onReady = takeBuild;
 builder.nameOf = key => {

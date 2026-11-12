@@ -4,13 +4,23 @@
 // build-<sequence>.json in the live folder. Once it is done the plugin has the engine copy the
 // sequence in (screensaver.applyBuild) and swaps the new playlist in: the build is installed with
 // the game open.
+//
+// Playlist bundles (engine patch "export and import playlist bundles through the system's file
+// dialog"): screensaver.exportPlaylist(sequence) and importPlaylist() show the system's Save or Open
+// dialog and run the same generator on the picked file (--live-export, --live-import), reporting to
+// task-export.json / task-import.json in the live folder. An import builds the bundle's playlist as a
+// live build, and the plugin then has the engine install and play it (applyBuild of another sequence).
 
 import { Edits, editsChanged, filesApi, lastLiveSave, liveSaveCount, liveFileName, loadBuiltEdits, loadEdits, Playlist, saveBuiltEdits, Settings } from "./storage";
 
 export type BuildState = "idle" | "running" | "done" | "failed" | "cancelled";
 
+/** What the generator runs for: a build of the playing playlist, an export, an import. */
+export type BuildTask = "build" | "export" | "import";
+
 export interface BuildStatus {
     state: BuildState;
+    task?: string; // "build", "export" or "import" (an engine with bundles)
     sequence: string;
     exitCode: number;
     started: number; // ms since 1970
@@ -24,6 +34,10 @@ export interface BuildApi {
     readonly buildStatus: BuildStatus;
     cancelBuild(): boolean;
     applyBuild(sequence: string): void; // throws with the reason
+    // The system's Save / Open dialog, then the generator on the picked bundle; false when the dialog
+    // was closed, throws with the reason when it cannot start (absent: an engine without bundles).
+    exportPlaylist?(sequence: string): boolean;
+    importPlaylist?(): boolean;
 }
 
 /** A park of the build, in play order (the build pane's squares). */
@@ -65,6 +79,34 @@ declare const screensaver: Partial<BuildApi> | undefined;
 export function buildApi(): BuildApi | undefined {
     return typeof screensaver !== "undefined" && screensaver !== null && typeof screensaver.build === "function"
         && typeof screensaver.applyBuild === "function" ? screensaver as BuildApi : undefined;
+}
+
+/** What mksequence.py --live-export / --live-import writes for the plugin (task-<task>.json in the live folder). */
+export interface TaskResult {
+    taskVersion: 1;
+    task: "export" | "import";
+    started: number;
+    ok: boolean | null; // null: still running
+    finished?: number;
+    error?: string;
+    path?: string; // the bundle
+    sequence?: string; // export: the playlist's; import: the imported playlist's, once unpacked
+    playlist?: string; // import: the playlist file it wrote
+    missing?: string[]; // import: parks neither in the bundle nor the park folder
+    messages?: BuildMessage[];
+}
+
+export function readTaskResult(task: "export" | "import"): TaskResult | undefined {
+    const text = filesApi()?.readFile(`task-${task}.json`);
+    if (!text) {
+        return undefined;
+    }
+    try {
+        const result = JSON.parse(text) as TaskResult;
+        return result && result.taskVersion === 1 && result.task === task ? result : undefined;
+    } catch {
+        return undefined;
+    }
 }
 
 export function buildFileName(sequence: string): string {
@@ -109,12 +151,13 @@ function timeOfDay(ms: number): string {
 }
 
 export class Builder {
-    private sequence: string | undefined; // the build this plugin started
+    private task: BuildTask | undefined; // what this plugin started and still follows
+    private sequence: string | undefined; // the build being followed (an import's, once it is known)
     private started = 0;
     private lastPoll = 0;
     private progress: BuildResult | undefined; // the running build's last progress
     private last: BuildResult | undefined; // the last build's result (its squares and messages stay shown)
-    private notes: BuildMessage[] = []; // the plugin's own lines about the last build, after the generator's
+    private notes: BuildMessage[] = []; // the plugin's own lines about the last task, before the generator's
     private outcome: BuildLine | undefined;
     private builtFrom = 0; // when the build that plays started: edits saved since are not built
     private startEdits: Edits = {}; // the edits as the running build started
@@ -124,8 +167,9 @@ export class Builder {
     nameOf: ((key: string) => string | undefined) | undefined;
     orderOf: (() => string[]) | undefined;
 
-    /** Takes a finished build in; returns an error message, or undefined once it plays. */
-    onReady: ((result: BuildResult) => string | undefined) | undefined;
+    /** Takes a finished build in; returns an error message, or undefined once it plays. `imported`: the
+     *  build of a playlist just imported, which replaces the playing one. */
+    onReady: ((result: BuildResult, imported: boolean) => string | undefined) | undefined;
 
     constructor(private readonly api: BuildApi | undefined = buildApi()) {}
 
@@ -133,8 +177,23 @@ export class Builder {
         return this.api !== undefined && filesApi() !== undefined;
     }
 
+    /** Export and Import: an engine with the file dialogs. */
+    get bundlesAvailable(): boolean {
+        return this.available && typeof this.api!.exportPlaylist === "function" && typeof this.api!.importPlaylist === "function";
+    }
+
     get running(): boolean {
-        return this.sequence !== undefined;
+        return this.task !== undefined;
+    }
+
+    /** What runs: a build, an export, an import (undefined: nothing). */
+    get runningTask(): BuildTask | undefined {
+        return this.task;
+    }
+
+    /** A build is under way: Build and play's, or an import's once the bundle is unpacked. */
+    private get building(): boolean {
+        return this.task === "build" || (this.task === "import" && this.sequence !== undefined);
     }
 
     start(sequence: string): void {
@@ -152,72 +211,160 @@ export class Builder {
         }
         // The squares of the build before (also from an earlier run): parks not reached yet show them dimmed
         this.last = this.last ?? readBuildResult(sequence);
+        this.begin("build", sequence);
+        this.startEdits = JSON.parse(JSON.stringify(loadEdits())) as Edits; // (a copy: the editor changes its edits in place)
+        log(`building "${sequence}"`);
+    }
+
+    /** Export playlist: the system's Save dialog (the game waits while it is open), then the export in
+     *  the background. */
+    exportPlaylist(sequence: string): void {
+        this.startBundle("export", () => this.api!.exportPlaylist!(sequence), sequence);
+    }
+
+    /** Import playlist: the system's Open dialog, then the import and its build in the background. */
+    importPlaylist(): void {
+        this.startBundle("import", () => this.api!.importPlaylist!());
+    }
+
+    private startBundle(task: "export" | "import", run: () => boolean, sequence?: string): void {
+        if (!this.bundlesAvailable || this.running) {
+            return;
+        }
+        const name = task === "export" ? "Export" : "Import";
+        let picked: boolean;
+        try {
+            picked = run();
+        } catch (e) {
+            this.outcome = { phase: "failed", text: `${name} failed: ${message(e)}`, warning: true };
+            this.notes = [{ level: "error", text: `${name} did not start: ${message(e)}` }];
+            log(`${task} did not start: ${message(e)}`);
+            return;
+        }
+        if (!picked) {
+            return; // the dialog was closed
+        }
+        this.begin(task, undefined);
+        log(task === "export" ? `exporting "${sequence}"` : "importing a playlist");
+    }
+
+    private begin(task: BuildTask, sequence: string | undefined): void {
+        this.task = task;
         this.sequence = sequence;
         this.started = Date.now();
-        this.startEdits = JSON.parse(JSON.stringify(loadEdits())) as Edits; // (a copy: the editor changes its edits in place)
+        this.lastPoll = 0;
         this.progress = undefined;
         this.outcome = undefined;
         this.notes = [];
-        log(`building "${sequence}"`);
     }
 
     cancel(): void {
         if (this.api && this.running && this.api.cancelBuild()) {
-            log("build cancelled");
+            log(`${this.task} cancelled`);
         }
     }
 
-    /** Called on the plugin's update: follows a running build and takes it in when it is done. */
+    /** Called on the plugin's update: follows a running task and takes a build in when it is done. */
     update(): void {
-        if (!this.api || !this.sequence || Date.now() - this.lastPoll < POLL_MS) {
+        if (!this.api || !this.task || Date.now() - this.lastPoll < POLL_MS) {
             return;
         }
         this.lastPoll = Date.now();
-        const sequence = this.sequence;
         const status = this.api.buildStatus;
-        const result = readBuildResult(sequence);
-        const current = result && result.started >= this.started - STALE_MS ? result : undefined;
-        if (status.state === "running") {
+        const running = status.state === "running";
+        const fresh = <T extends { started: number }>(r: T | undefined) => r && r.started >= this.started - STALE_MS ? r : undefined;
+        if (this.task === "export") {
+            if (!running) {
+                this.finishExport(status, fresh(readTaskResult("export")));
+            }
+            return;
+        }
+        let imported: TaskResult | undefined;
+        if (this.task === "import") {
+            imported = fresh(readTaskResult("import"));
+            if (imported?.ok && imported.sequence && !this.sequence) {
+                this.sequence = imported.sequence;
+                this.last = undefined; // (the squares are the imported playlist's from here)
+            }
+        }
+        const sequence = this.sequence;
+        const current = sequence ? fresh(readBuildResult(sequence)) : undefined;
+        if (running) {
             this.progress = current ?? this.progress;
             return;
         }
+        const task = this.task;
+        this.task = undefined;
         this.sequence = undefined;
         this.progress = undefined;
-        this.last = current;
         const took = Date.now() - this.started;
+        const from = (r: { messages?: BuildMessage[] } | undefined) => [...(r?.messages ?? [])].reverse();
+        if (task === "import" && !(imported?.ok && sequence)) {
+            const why = status.state === "cancelled" ? "cancelled" : imported?.error || status.error || "the generator failed";
+            this.outcome = { phase: status.state === "cancelled" ? "idle" : "failed", text: `Import ${status.state === "cancelled" ? "cancelled" : "failed: " + why}`, warning: status.state !== "cancelled" };
+            this.notes = imported?.messages?.some(m => m.level === "error") ? from(imported)
+                : [{ level: status.state === "cancelled" ? "info" : "error", text: `Import ${status.state === "cancelled" ? "cancelled; the playlist plays on as it was" : `failed: ${why} (log: screensaver/build.log in the user folder)`}` }, ...from(imported)];
+            log(`import ${status.state === "cancelled" ? "cancelled" : "failed: " + why}`);
+            return;
+        }
+        const extra = task === "import" ? from(imported) : []; // (the import's own lines, under the plugin's)
+        this.last = current;
         if (status.state === "cancelled") {
             this.outcome = { phase: "idle", text: "Build cancelled" };
-            this.notes = [{ level: "info", text: "Build cancelled; the playlist plays on as it was" }];
+            this.notes = [{ level: "info", text: task === "import" ? "Build cancelled; the imported playlist is in your playlists folder, the old one plays on"
+                : "Build cancelled; the playlist plays on as it was" }, ...extra];
             return;
         }
         if (status.state !== "done" || !current?.ok || !current.playlist) {
             const why = current?.ok === false && current.error ? current.error : status.error || "the generator failed";
             this.outcome = { phase: "failed", text: `Build failed: ${why}`, warning: true };
             // The generator names the failure among its messages; else the engine's reason
-            this.notes = current?.messages?.some(m => m.level === "error") ? []
-                : [{ level: "error", text: `Build failed: ${why} (log: screensaver/build.log in the user folder)` }];
+            this.notes = [...(current?.messages?.some(m => m.level === "error") ? []
+                : [{ level: "error" as const, text: `Build failed: ${why} (log: screensaver/build.log in the user folder)` }]), ...extra];
             log(`build of "${sequence}" failed: ${why} (log: screensaver/build.log in the user folder)`);
             return;
         }
-        const error = this.onReady ? this.onReady(current) : "nothing to play it";
+        const error = this.onReady ? this.onReady(current, task === "import") : "nothing to play it";
         if (error) {
             this.outcome = { phase: "failed", text: `Built, but not taken in: ${error}`, warning: true };
-            this.notes = [{ level: "error", text: `Built, but not taken in: ${error}` }];
+            this.notes = [{ level: "error", text: `Built, but not taken in: ${error}` }, ...extra];
             log(`build of "${sequence}" not taken in: ${error}`);
             return;
         }
         this.builtFrom = current.started;
-        saveBuiltEdits(this.startEdits); // edits made while it ran still need a build
+        if (task === "build") {
+            saveBuiltEdits(this.startEdits); // edits made while it ran still need a build
+        }
         const warnings = current.warnings?.length ?? 0;
         const at = timeOfDay(current.finished ?? Date.now());
         this.outcome = {
-            phase: "done", text: `Built at ${at}, now playing${warnings ? `; ${warnings} warning${warnings > 1 ? "s" : ""}` : ""}`,
+            phase: "done", text: `${task === "import" ? "Imported" : "Built"} at ${at}, now playing${warnings ? `; ${warnings} warning${warnings > 1 ? "s" : ""}` : ""}`,
         };
-        this.notes = [{ level: "ok", text: `Built ${at} in ${clock(took)}, now playing` }];
+        this.notes = [{ level: "ok", text: task === "import" ? `Imported "${sequence}" ${at} in ${clock(took)}, now playing`
+            : `Built ${at} in ${clock(took)}, now playing` }, ...extra];
         for (const w of current.warnings ?? []) {
             log(`build warning: ${w}`);
         }
-        log(`build of "${sequence}" now playing`);
+        log(`${task === "import" ? "imported" : "build of"} "${sequence}" now playing`);
+    }
+
+    private finishExport(status: BuildStatus, result: TaskResult | undefined): void {
+        this.task = undefined;
+        const lines = [...(result?.messages ?? [])].reverse();
+        if (status.state === "cancelled") {
+            this.outcome = { phase: "idle", text: "Export cancelled" };
+            this.notes = [{ level: "info", text: "Export cancelled" }];
+        } else if (status.state === "done" && result?.ok) {
+            this.outcome = { phase: "idle", text: `Exported to ${result.path ?? "the bundle"}` };
+            // (the generator's own line names the file)
+            this.notes = lines;
+        } else {
+            const why = result?.ok === false && result.error ? result.error : status.error || "the generator failed";
+            this.outcome = { phase: "failed", text: `Export failed: ${why}`, warning: true };
+            this.notes = lines.some(m => m.level === "error") ? lines
+                : [{ level: "error", text: `Export failed: ${why} (log: screensaver/build.log in the user folder)` }, ...lines];
+        }
+        log(`export: ${this.outcome.text}`);
     }
 
     /** The line the editor shows (the controls bar's chip and the pane's header take theirs from it). */
@@ -225,16 +372,22 @@ export class Builder {
         if (!this.available) {
             return { phase: "unavailable", text: "Building from the game needs the patched engine" };
         }
+        if (this.task === "export") {
+            return { phase: "running", text: "Exporting the playlist" };
+        }
+        if (this.task === "import" && !this.sequence) {
+            return { phase: "running", text: "Importing the playlist" };
+        }
         if (this.running) {
             const p = this.progress;
             const name = (p?.parkKey && this.nameOf?.(p.parkKey)) || p?.parkName;
             const where = p?.parks ? `Park ${p.park} of ${p.parks}${name ? " · " + name : ""}` : "Starting";
-            return { phase: "running", text: where };
+            return { phase: "running", text: this.task === "import" ? `Building the import · ${where}` : where };
         }
         return this.outcome ?? { phase: "idle", text: "" };
     }
 
-    /** The running build's time so far, ms. */
+    /** The running task's time so far, ms. */
     get elapsed(): number {
         return this.running ? Date.now() - this.started : 0;
     }
@@ -242,7 +395,17 @@ export class Builder {
     /** The running build's park and count, for the controls bar's chip. */
     get count(): { park: number; parks: number } | undefined {
         const p = this.progress;
-        return this.running && p?.parks ? { park: p.park ?? 0, parks: p.parks } : undefined;
+        return this.building && p?.parks ? { park: p.park ?? 0, parks: p.parks } : undefined;
+    }
+
+    /** The controls bar's chip while a task runs (the header's state is the same, lower case). */
+    get chip(): string | undefined {
+        if (!this.running) {
+            return undefined;
+        }
+        const count = this.count;
+        return this.task === "export" ? "Exporting" : this.task === "import" && !count ? "Importing"
+            : count ? `Building ${count.park}/${count.parks}` : "Building";
     }
 
     /** The parks whose edits changed since the game's last build took them in (or since the install). */
@@ -272,7 +435,7 @@ export class Builder {
             const base = old && old.state !== "pending" && old.state !== "building" ? old : { key, name: p?.name, state: "built" as const };
             return { ...base, stale: dirty.has(key) };
         };
-        if (this.running) {
+        if (this.building) {
             return (this.progress?.parkStates ?? []).map(p => p.state === "pending" && p.key ? carried(p.key, p) : p);
         }
         const order = this.orderOf?.() ?? [];
@@ -284,9 +447,10 @@ export class Builder {
         return [...order.map(key => carried(key)), ...(this.last?.parkStates ?? []).filter(p => p.key && !shown.has(p.key))];
     }
 
-    /** The messages of the running build, else of the last one, newest first. */
+    /** The messages of the running build, else of the last one, newest first (the plugin's own lines
+     *  about the last task on top). */
     get messages(): BuildMessage[] {
-        const r = this.running ? this.progress : this.last;
+        const r = this.building ? this.progress : this.last;
         return [...this.notes, ...[...(r?.messages ?? [])].reverse()];
     }
 
@@ -294,6 +458,12 @@ export class Builder {
     pendingEdits(installed: number | undefined): boolean {
         const saved = lastLiveSave();
         return saved !== undefined && saved > Math.max(this.builtFrom, installed ?? 0);
+    }
+
+    /** Another playlist plays now (an import): what was kept about the old one goes. */
+    forgetPlaylist(): void {
+        this.dirtyStamp = "";
+        this.startEdits = {};
     }
 }
 /** An error's message (also one thrown from the engine's own realm). */

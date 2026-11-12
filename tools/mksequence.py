@@ -3283,26 +3283,12 @@ def live_build(name, user_dir):
 
     try:
         write(ok=None)
-        try:
-            with open(os.path.join(user_dir, "screensaver", GENERATOR_FILE), encoding="utf-8") as f:
-                source = (json.load(f).get("playlists") or {}).get(name)
-        except (OSError, ValueError, AttributeError):
-            source = None
-        if not isinstance(source, str) or not os.path.isfile(source):
-            raise ValueError("no playlist file is known for \"%s\"%s; install it once with mksequence.py --install"
-                             % (name, " (%s is missing)" % source if isinstance(source, str) else ""))
+        source = registered_playlist(name, user_dir)
         # The game's edits go into the playlist's own files first (as bakelive.py does), so the
         # playlist files always hold what plays
-        live = livefile.for_playlist(source, name, user_dir)
-        if live is not None:
-            s = livefile.summary(live)
-            parts = (["views of %d park%s" % (len(s["views"]), "s" if len(s["views"]) != 1 else "")] if s["views"] else []) + \
-                (["reset %d park%s" % (len(s["resets"]), "s" if len(s["resets"]) != 1 else "")] if s["resets"] else []) + \
-                (["properties"] if s["props"] else []) + (["park order"] if s["order"] else [])
-            merge_edits(source, live["edits"])
-            write_props(source, live["props"])
-            livefile.mark_baked(live, user_dir)
-            note("info", "Took in your edits: %s; saved to %s" % (", ".join(parts) or "nothing new", os.path.basename(source)))
+        took = bake_live(source, name, user_dir)
+        if took:
+            note("info", took)
             write(ok=None)
         result = build(source, out_dir, cache_dir=os.path.join(user_dir, "screensaver", "park-cache"),
                        user_dir=user_dir, progress=progress, skip_missing=True)
@@ -3327,6 +3313,194 @@ def live_build(name, user_dir):
         note("error", "%s: %s" % (failed["name"], error) if failed else error, failed and failed["key"])
         write(ok=False, finished=int(time.time() * 1000), error=error)
         return 1
+
+
+
+# --- playlist bundles from the game (screensaver.exportPlaylist / importPlaylist) ---
+
+TASK_VERSION = 1  # task-export.json / task-import.json in the live folder (no "version" key: the live-file tools skip them)
+BACKUPS_KEPT = 100  # as the settings page keeps
+
+
+def task_result_path(task, user_dir):
+    return os.path.join(livefile.folder(user_dir), "task-%s.json" % task)
+
+
+def registered_playlist(name, user_dir):
+    """The playlist file --install registered for title sequence `name` (generator.json), or raises."""
+    try:
+        with open(os.path.join(user_dir, "screensaver", GENERATOR_FILE), encoding="utf-8") as f:
+            source = (json.load(f).get("playlists") or {}).get(name)
+    except (OSError, ValueError, AttributeError):
+        source = None
+    if not isinstance(source, str) or not os.path.isfile(source):
+        raise ValueError("no playlist file is known for \"%s\"%s; install it once with mksequence.py --install"
+                         % (name, " (%s is missing)" % source if isinstance(source, str) else ""))
+    return source
+
+
+def bake_live(source, name, user_dir):
+    """Write the game's edits of playlist `source` (sequence `name`) into its files, as bakelive.py does.
+    Returns a line saying what was taken in, or None when there was nothing."""
+    live = livefile.for_playlist(source, name, user_dir)
+    if live is None:
+        return None
+    s = livefile.summary(live)
+    parts = (["views of %d park%s" % (len(s["views"]), "s" if len(s["views"]) != 1 else "")] if s["views"] else []) + \
+        (["reset %d park%s" % (len(s["resets"]), "s" if len(s["resets"]) != 1 else "")] if s["resets"] else []) + \
+        (["properties"] if s["props"] else []) + (["park order"] if s["order"] else [])
+    merge_edits(source, live["edits"])
+    write_props(source, live["props"])
+    livefile.mark_baked(live, user_dir)
+    return "Took in your edits: %s; saved to %s" % (", ".join(parts) or "nothing new", os.path.basename(source))
+
+
+def user_profile_files(playlist_path, user_dir):
+    """The user's own profiles (<user dir>/screensaver/parks) of the playlist's parks in use: a bundle
+    carries them, as the shipped ones come with every copy of the screensaver."""
+    home = os.path.join(user_dir, "screensaver")
+    folder = os.path.join(home, "parks")
+    if not os.path.isdir(folder) or not any(n.endswith(".toml") for n in os.listdir(folder)):
+        return []
+    found = {}
+    for stem, profile in profiles.read_folder(folder).items():
+        found[stem] = dict(profile, source="user")
+    everything = dict(profiles.load(user=False), **found)
+    with open(playlist_path, "rb") as f:
+        data = tomllib.load(f)
+    base = os.path.dirname(os.path.abspath(playlist_path))
+    names = {}
+    try:
+        with open(os.path.join(home, "park-cache", "names.json"), encoding="utf-8") as f:
+            names = json.load(f)
+    except (OSError, ValueError):
+        pass
+    out = []
+    for e in data.get("park", []):
+        if not e.get("use", True):
+            continue
+        path = os.path.normpath(os.path.join(base, e["file"]))
+        if not os.path.exists(path):
+            continue
+        known = names.get(os.path.abspath(path) + "|" + (e.get("member") or ""))
+        try:
+            if known and known.get("savedName") is not None:
+                saved, size = known["savedName"], known["mapSize"]
+            else:
+                _, raw = parkinfo.read_park_bytes(path, e.get("member"))
+                hdr, chunks, body = parkinfo.load(raw)
+                saved = parkinfo.parse_park(parkinfo.chunk_reader(chunks, body, 6), hdr["target"])["name"]
+                size = list(map_size(parkinfo.chunk_reader(chunks, body, 0x30)))
+            profile = profiles.find(everything, e, saved, size, os.path.basename(e["file"]))
+        except (ValueError, OSError, KeyError):
+            continue
+        if profile and profile.get("source") == "user" and profile["path"] not in out:
+            out.append(profile["path"])
+    return out
+
+
+def task_runner(task, user_dir, **base):
+    """(note, write) for a bundle task's result file, which the plugin reads (screensaver.readFile)."""
+    path = task_result_path(task, user_dir)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    messages = []
+    fields = dict(base, taskVersion=TASK_VERSION, task=task, started=int(time.time() * 1000))
+
+    def note(level, text, park=None):
+        messages.append(dict({"level": level, "text": text}, **({"park": park} if park else {})))
+
+    def write(**more):
+        fields.update(more)
+        write_json_atomic(path, dict(fields, messages=messages))
+    return note, write
+
+
+def live_export(name, out, user_dir):
+    """Export the playlist installed as title sequence `name` to the bundle `out`, which the user picked
+    in the game's Save dialog (screensaver.exportPlaylist): the game's edits are saved into the playlist
+    files first, and the bundle carries the park files and the user's profiles of them. The result goes
+    to task-export.json in the live folder. Returns the process exit code."""
+    note, write = task_runner("export", user_dir, sequence=name, path=out)
+    try:
+        write(ok=None)
+        source = registered_playlist(name, user_dir)
+        took = bake_live(source, name, user_dir)
+        if took:
+            note("info", took)
+        import bundle
+        own = user_profile_files(source, user_dir)
+        manifest = bundle.export(source, out, parks=True, profile_files=own, log=print)
+        missing = [p["file"] for p in manifest["parks"] if p["sha256"] is None]
+        shipped = len(manifest["parks"]) - len(missing)
+        note("ok", "Exported %d park%s%s to %s" % (
+            shipped, "s" if shipped != 1 else "",
+            " and %d profile%s" % (len(own), "s" if len(own) != 1 else "") if own else "", out))
+        if missing:
+            note("warn", "Unticked or missing, listed by name only: %s" % ", ".join(missing))
+        write(ok=True, finished=int(time.time() * 1000), profiles=len(own), parks=shipped)
+        print("exported %s to %s" % (source, out))
+        return 0
+    except Exception as e:  # anything: the game shows it
+        import traceback
+        traceback.print_exc()
+        error = str(e) or e.__class__.__name__
+        note("error", "Export failed: %s" % error)
+        write(ok=False, finished=int(time.time() * 1000), error=error)
+        return 1
+
+
+def live_import(bundle_path, user_dir):
+    """Import the playlist bundle the user picked in the game's Open dialog (screensaver.importPlaylist)
+    into the user's folder (playlists/, parks/ for profiles, bundles/<slug>/ for park files), register it
+    for builds from the game and build it as a live build; the plugin then has the game install and play
+    it (screensaver.applyBuild). Parks the bundle does not carry are looked for in the settings page's
+    park folder. The import's result goes to task-import.json in the live folder, the build's as for
+    --live-build. Returns the process exit code."""
+    note, write = task_runner("import", user_dir, path=bundle_path)
+    home = os.path.join(user_dir, "screensaver")
+    backups = os.path.join(home, "backups")
+
+    def backup(path):
+        if os.path.exists(path):
+            os.makedirs(backups, exist_ok=True)
+            base = os.path.basename(path)
+            shutil.copy2(path, os.path.join(backups, "%s.%s.bak" % (base, time.strftime("%Y%m%d-%H%M%S"))))
+            copies = sorted(f for f in os.listdir(backups) if f.startswith(base + ".") and f.endswith(".bak"))
+            for old in copies[:-BACKUPS_KEPT]:
+                os.remove(os.path.join(backups, old))
+    try:
+        write(ok=None)
+        import bundle
+        park_dir = None
+        try:
+            with open(os.path.join(home, "settings.json"), encoding="utf-8") as f:
+                park_dir = json.load(f).get("folder")
+        except (OSError, ValueError, AttributeError):
+            pass
+        imported = bundle.import_bundle(bundle_path, park_dir, os.path.join(home, "playlists"), os.path.join(home, "parks"),
+                                        os.path.join(home, "bundles"), None, backup, log=print)
+        playlist = imported["playlist"]
+        with open(playlist, "rb") as f:
+            data = tomllib.load(f)
+        name = data.get("name") or os.path.splitext(os.path.basename(playlist))[0]
+        # Edits the game kept for an earlier playlist of this name are not the imported playlist's
+        live = livefile.for_playlist(playlist, name, user_dir)
+        if live is not None:
+            livefile.mark_baked(live, user_dir)
+        register_generator(user_dir, name, playlist)
+        note("ok", "Imported \"%s\" (%d park%s) to %s" % (name, len(data.get("park", [])),
+                                                         "s" if len(data.get("park", [])) != 1 else "", playlist))
+        if imported["missing"]:
+            note("warn", "Not in the bundle or the park folder, left out: %s" % ", ".join(imported["missing"]))
+        write(ok=True, finished=int(time.time() * 1000), sequence=name, playlist=playlist, missing=imported["missing"])
+    except Exception as e:  # anything: the game shows it
+        import traceback
+        traceback.print_exc()
+        error = str(e) or e.__class__.__name__
+        note("error", "Import failed: %s" % error)
+        write(ok=False, finished=int(time.time() * 1000), error=error)
+        return 1
+    return live_build(name, user_dir)
 
 
 def install(result, user_dir, pulled=(), camera_log=False, props_pulled=False):
@@ -3394,6 +3568,14 @@ def main():
     ap.add_argument("--live-build", metavar="SEQUENCE",
                     help="build the installed playlist of that title sequence name for the running game (the game "
                          "starts this: screensaver.build); the result goes to <user dir>/screensaver/build/live")
+    ap.add_argument("--live-export", metavar="SEQUENCE",
+                    help="export the installed playlist of that title sequence name to a bundle (--to) for the running "
+                         "game (it starts this: screensaver.exportPlaylist); the result goes to task-export.json in "
+                         "<user dir>/screensaver/live")
+    ap.add_argument("--to", metavar="BUNDLE", help="with --live-export: the bundle to write")
+    ap.add_argument("--live-import", metavar="BUNDLE",
+                    help="import a playlist bundle and build it for the running game (it starts this: "
+                         "screensaver.importPlaylist); results in task-import.json and build-<sequence>.json")
     ap.add_argument("-o", "--out", default="build/sequence", help="output directory (default: build/sequence)")
     ap.add_argument("--seed", type=int, help="seed for order = 'shuffle'")
     ap.add_argument("--layout", choices=LAYOUTS, help="overrides the playlist's layout (default: plugin)")
@@ -3429,6 +3611,12 @@ def main():
         user_dir = args.user_dir or default_user_dir()
         if args.live_build:
             sys.exit(live_build(args.live_build, user_dir))
+        if args.live_export:
+            if not args.to:
+                ap.error("--live-export needs --to")
+            sys.exit(live_export(args.live_export, os.path.abspath(args.to), user_dir))
+        if args.live_import:
+            sys.exit(live_import(os.path.abspath(args.live_import), user_dir))
         if args.install_built:
             check_installable(user_dir, args.force)
             result = load_built(args.install_built)

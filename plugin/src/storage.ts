@@ -360,6 +360,20 @@ export function lastLiveSave(): number | undefined {
 }
 const liveProps: Record<string, PlaylistProps> = {};
 
+/** Another playlist was installed while the game runs (an import from the editor): the old one's edits
+ *  leave the storage, as an install takes them (they stay in its live file, which its next build or
+ *  install takes in), and the new one starts with none. */
+export function startPlaylistEdits(sequence: string): void {
+    context.sharedStorage.set(NAMESPACE + ".edits", {});
+    context.sharedStorage.set(NAMESPACE + ".builtEdits", {});
+    const all = context.sharedStorage.get<Record<string, PlaylistProps>>(NAMESPACE + ".playlistProps", {});
+    delete all[sequence];
+    context.sharedStorage.set(NAMESPACE + ".playlistProps", all);
+    delete liveProps[sequence];
+    liveEdits = undefined;
+    liveSaved = undefined;
+}
+
 export function writeLive(): boolean {
     const api = filesApi();
     const playlist = api ? loadPlaylist() : undefined;
