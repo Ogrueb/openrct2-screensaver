@@ -240,10 +240,11 @@ through its function only. Needs an engine build with patch 0016 and an install 
 - [ ] The settings page shows "Edits from the game's view editor" with Bake into playlist while edits
       wait, and the build is marked out of date after an edit in the game.
 - [x] A build without baking plays the edits too; `--ignore-live` leaves them out.
-- [ ] Copy views (or Ctrl+C) on one park, Paste views (Ctrl+V) on another: the views replace that park's,
+- [x] Copy views (or Ctrl+C) on one park, Paste views (Ctrl+V) on another: the views replace that park's,
       its event views stay, Undo returns; the button says "Copied n" / "Pasted n". A copy pastes into the
       settings page's drawing page (Paste there), and the drawing page's Copy pastes into the game; text that
-      is not views says "No views" and changes nothing.
+      is not views says "No views" and changes nothing. (owner's game test 2026-11-12: passed; the
+      round trip with the drawing page not tried)
 
 ## 5. Loose objects across imports (importparks.py)
 `object/rct-screensaver/installed.json` records which import (the downloads given, by path) uses
