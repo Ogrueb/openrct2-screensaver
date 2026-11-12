@@ -197,6 +197,37 @@ Passed on the owner's PC 2026-11-01 (run-19 engine, `playlists/example.toml`), e
 - [ ] With `title_music = "ride"` installed, ride music plays in the mode only; `config.ini` keeps
       its own `title_theme`.
 
+### Builds from the game (patch 0017, 2026-11-11)
+Needs an engine build with patch 0017 and an install from this version (it writes
+`Documents\OpenRCT2\screensaver\generator.json`).
+- [ ] The build pane sits bottom right under the top-right box (folds to its header on a short window);
+      the playlist's Save button is gone and a property change is kept after closing and reopening the editor.
+- [ ] In the mode's editor, **Build and play** (or Ctrl+B) shows "Park n of m · name" with a running time,
+      the squares fill in play order (a check per park; unchanged parks fill at once), no console window
+      opens, and the game keeps playing smoothly meanwhile. With the editor closed, the bar shows
+      "Building n/m".
+- [ ] Build and play is inactive (Ctrl+B too) while every edit is built; an edit makes it active. The pane
+      clears the exit button in the bottom right corner. Messages list newest first. Between builds the
+      pane shows no line over the squares (the header says "built · playing") and the squares are taller;
+      the park being built has diagonal stripes crawling across its square.
+- [ ] After moving a park in the order the squares follow at once, none dimmed (a Playlist property
+      change dims none either); a view edit dims only its park's square at once ("edited, needs a build"),
+      and after the build it is lit again; while a build runs, parks not reached yet keep last build's
+      colour, dimmed only when edited; square tooltips and "Park n of m" use the parks' own names; a warning park is
+      amber with "!", and its message opens the park on a click. A park file renamed away builds as a red
+      square with "file not found" while the rest builds.
+- [ ] After a build, the playlist's TOML and views file hold the game's edits (`.bak` beside the TOML), and
+      `python tools/bakelive.py --list` says nothing is waiting.
+- [ ] When it is done the park on screen dips through black and plays on from the new build; the line says
+      "Built at hh:mm, now playing". An edit made before the build (a reordered park, a changed hold) plays.
+- [ ] A change only the generator makes shows up: e.g. Use playlist views on a hand-set park, then Build and
+      play: generated views come back. After a park order change the next park follows the new order.
+- [ ] Cancel build stops it (no python process left in Task Manager); the playlist plays on unchanged.
+- [ ] After a restart of the game, the new build plays (the installed sequence and playlist match).
+- [ ] With the settings page open on the same playlist, a build from the game marks its renders old
+      (strip and contact sheet), and a build on the page leaves `screensaver\build\live` in place.
+- [ ] With `generator.json` removed, the line says why the build cannot start.
+
 ### Live file (patch 0016, 2026-11-10)
 Passed in the game on 2026-11-10 (example playlist, Windows), except the settings page's panel, checked
 through its function only. Needs an engine build with patch 0016 and an install from this version
@@ -209,7 +240,11 @@ through its function only. Needs an engine build with patch 0016 and an install 
 - [ ] The settings page shows "Edits from the game's view editor" with Bake into playlist while edits
       wait, and the build is marked out of date after an edit in the game.
 - [x] A build without baking plays the edits too; `--ignore-live` leaves them out.
-- [x] Copy and Paste stay inactive (the clipboard call is there for later).
+- [x] Copy views (or Ctrl+C) on one park, Paste views (Ctrl+V) on another: the views replace that park's,
+      its event views stay, Undo returns; the button says "Copied n" / "Pasted n". A copy pastes into the
+      settings page's drawing page (Paste there), and the drawing page's Copy pastes into the game; text that
+      is not views says "No views" and changes nothing. (owner's game test 2026-11-12: passed; the
+      round trip with the drawing page not tried)
 
 ## 5. Loose objects across imports (importparks.py)
 `object/rct-screensaver/installed.json` records which import (the downloads given, by path) uses

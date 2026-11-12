@@ -7,6 +7,7 @@
 
 import type { MouseEvent, ScreensaverApi } from "../mode";
 import { modeSettings } from "../mode";
+import { builder } from "../builder";
 import type { Player } from "../player";
 import { Settings, saveSettings, titlesOf } from "../storage";
 import { CaptionLook, STYLES, captionLook } from "./captions";
@@ -526,6 +527,16 @@ export class ControlsBar {
                 || (id === "time" && this.settings.timeOfDay === "cycle");
             const face = id === "speed" ? speedFace(this.settings.speed, hover === id) : undefined;
             button(scene, id, this.boxes.get(id)!, { ...state(id, this.isOn(id, held) || alt), alt, face }, content, overlay);
+        }
+        // A build from the game running with the editor closed: a chip over the bar's right end.
+        if (builder.running && !this.editorHooks?.editorOpen()) {
+            const count = builder.count;
+            const text = count ? `Building ${count.park}/${count.parks}` : "Building";
+            const m = measure(overlay, text, 13, true);
+            const chip = { x: this.strip.x + this.strip.width - Math.ceil(m.width) - 16, y: this.strip.y - 26, width: Math.ceil(m.width) + 16, height: 22 };
+            scene.set("build.chip", { type: "rect", ...chip, fill: THEME.faceOn, z: Z.face });
+            scene.set("build.chipt", { type: "text", text, size: 13, bold: true, colour: THEME.text, shadow: THEME.textShadow,
+                x: chip.x + 8, y: chip.y + (chip.height - m.height) / 2, z: Z.icon });
         }
         const quit = this.boxes.get("quit")!;
         button(scene, "quit", quit, state("quit"), {}, overlay);

@@ -326,6 +326,33 @@ class Session:
                 return path
         return None
 
+    def live_build(self):
+        """The game's last build of this playlist (mksequence.py --live-build: Build and play in the mode's
+        editor, <home>/build/live), or None."""
+        if not self.path:
+            return None
+        folder = os.path.join(SEQUENCE_OUT, userdata.LIVE_BUILD)
+        try:
+            names = [n for n in os.listdir(folder) if n.endswith(".result.json")]
+        except OSError:
+            return None
+        for n in names:
+            path = os.path.join(folder, n)
+            try:
+                with open(path, encoding="utf-8") as f:
+                    source = json.load(f).get("source")
+            except (OSError, ValueError):
+                continue
+            if source and os.path.normcase(os.path.abspath(source)) == os.path.normcase(os.path.abspath(self.path)):
+                return path
+        return None
+
+    def newest_build(self):
+        """The page's last build or the game's, whichever is newer: the renders are judged against what
+        was built last (owner, 2026-11-11: a build from the game makes the renders old, no render of it)."""
+        paths = [p for p in (self.last_build(), self.live_build()) if p]
+        return max(paths, key=os.path.getmtime) if paths else None
+
     def built(self):
         """The last build's result file when it is this playlist's and nothing it was built from changed
         since (the playlist, its views file; profile changes remove the build): Render, Install and Export
@@ -928,7 +955,7 @@ class App:
                 manifest = json.load(f)
         except (OSError, ValueError):
             return {}, False
-        result = self.session.last_build()
+        result = self.session.newest_build()
         playlist = result and result[:-len(".result.json")] + ".playlist.json"
         new, new_views = {}, {}  # park key: its file in the newer build, its views' digest
         if playlist and os.path.exists(playlist):
@@ -1277,7 +1304,7 @@ def make_handler(app, token, port):
                 used = [e.get("use", True) for e in session.data.get("park", [])]
                 if any(p.get("missing") and u for p, u in zip(parks, used)):
                     raise ValueError("some parks are missing; pick the folder that holds them, or untick them")
-                shutil.rmtree(SEQUENCE_OUT, ignore_errors=True)  # only the last build is kept
+                userdata.clear_build(SEQUENCE_OUT)  # only the last build is kept (the game's live builds stay)
                 args = [sys.executable, os.path.join(TOOLS, "mksequence.py"), session.path, "-o", SEQUENCE_OUT,
                         "--cache", PARK_CACHE]
                 if body.get("ignoreEdits"):
@@ -1324,7 +1351,8 @@ def make_handler(app, token, port):
                 app.config["bundles"] = os.path.dirname(src)
                 save_config(app.config)
                 # A bundle starts clean: no build or renders of what was open before (owner, 2026-10-31)
-                for folder in (SEQUENCE_OUT, RENDERS, RENDERS_PREVIOUS):
+                userdata.clear_build(SEQUENCE_OUT)
+                for folder in (RENDERS, RENDERS_PREVIOUS):
                     shutil.rmtree(folder, ignore_errors=True)
                 result = os.path.join(HOME, "import-result.json")
                 args = [sys.executable, os.path.join(TOOLS, "bundle.py"), "import", src, "--playlists", USER_PLAYLISTS,
@@ -1414,7 +1442,7 @@ def main():
         pass
     # The staging build is only for this session's Render, Install and Export: the game plays its own
     # installed copy (owner, 2026-10-31)
-    shutil.rmtree(SEQUENCE_OUT, ignore_errors=True)
+    userdata.clear_build(SEQUENCE_OUT)  # (not the game's live builds in it)
     print("stopped; removed the staging build", flush=True)
 
 

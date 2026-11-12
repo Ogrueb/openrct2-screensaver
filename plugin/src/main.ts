@@ -1,9 +1,10 @@
 // RCT Screensaver: plays an installed playlist on OpenRCT2's title screen.
 
+import { builder, buildApi, BuildResult, message } from "./builder";
 import { Editor } from "./editor";
 import { modeSettings, perfLogging, perfMark, screensaverApi } from "./mode";
 import { Player } from "./player";
-import { loadPlaylist, loadSettings, resolveSequence, saveSettings, TITLES } from "./storage";
+import { loadPlaylist, loadSettings, Playlist, resolveSequence, savePlaylist, saveSettings, TITLES } from "./storage";
 import { Captions } from "./ui/captions";
 import { ControlsBar } from "./ui/controls";
 import { EditorPanel } from "./ui/editor-panel";
@@ -82,7 +83,47 @@ function stopPlayer(release = false): void {
     player = undefined;
 }
 
+/** Takes a build the game started in (builder.ts): the engine copies the new sequence into place and
+ *  reloads its script, the new playlist is installed in the storage and the player swaps to it. */
+function takeBuild(result: BuildResult): string | undefined {
+    const api = buildApi();
+    if (!api || !player?.isRunning || !result.playlist) {
+        return "the screensaver is not playing";
+    }
+    if (result.playlist.sequence !== player.sequenceName) {
+        return `another playlist is playing ("${player.sequenceName}")`;
+    }
+    try {
+        api.applyBuild(result.sequence);
+    } catch (e) {
+        return message(e);
+    }
+    const old = loadPlaylist();
+    const playlist: Playlist = { ...result.playlist, installed: Date.now(), source: result.playlist.source ?? old?.source };
+    const check = resolveSequence(playlist);
+    if (typeof check === "string") {
+        return check;
+    }
+    savePlaylist(playlist);
+    // The playlist's title music, as an install sets it (applied by the mode on its next entry).
+    if (result.titleMusic) {
+        const settings = player.liveSettings;
+        settings.titleMusic = result.titleMusic;
+        saveSettings(settings);
+        player.noteInstalledMusic(result.titleMusic);
+    }
+    player.swapPlaylist(playlist);
+    return undefined;
+}
+builder.onReady = takeBuild;
+builder.nameOf = key => {
+    const park = player?.isRunning ? loadPlaylist()?.parks.find(p => (p.key ?? p.fileName) === key) : undefined;
+    return park?.name;
+};
+builder.orderOf = () => player?.isRunning ? player.playOrderKeys : [];
+
 function update(): void {
+    builder.update();
     if (context.mode !== "title") {
         if (onTitleScreen) {
             onTitleScreen = false;
@@ -141,6 +182,17 @@ function toggleEditor(): void {
     }
 }
 
+/** Build and play, or cancel the build: the editor's pane does it while open (and redraws). */
+function toggleBuild(p: Player): void {
+    if (editor?.isOpen && editorPanel?.isOpen) {
+        editorPanel.toggleBuild();
+    } else if (builder.running) {
+        builder.cancel();
+    } else if (builder.available && builder.pendingEdits(p.installedAt)) {
+        builder.start(p.sequenceName);
+    }
+}
+
 function registerShortcuts(): void {
     const shortcuts: [string, string, string[], (p: Player) => void][] = [
         ["next", "Next view", ["RIGHT"], either(p => p.next(), e => e.pan(1, 0))],
@@ -158,6 +210,8 @@ function registerShortcuts(): void {
         ["undo", "Undo (view editor)", ["CTRL+Z"], either(() => {}, e => e.undo())],
         ["map", "Map of the views on / off (view editor)", ["M"], either(() => {}, e => e.toggleMap())],
         ["redo", "Redo (view editor)", ["CTRL+Y", "CTRL+SHIFT+Z"], either(() => {}, e => e.redo())],
+        ["copyviews", "Copy the park's views (view editor)", ["CTRL+C"], either(() => {}, e => e.copyViews())],
+        ["pasteviews", "Paste views over the park's (view editor)", ["CTRL+V"], either(() => {}, e => e.pasteViews())],
         // The view editor's tools (owner, 2026-11-10; the toolbox's tooltips name them).
         ["addview", "Add a view (view editor)", ["INSERT"], either(() => {}, e => e.add())],
         ["setview", "Set the view to the camera (view editor)", ["C"], either(() => {}, e => { if (e.mapMode || !editorPanel) e.update(); })],
@@ -174,6 +228,8 @@ function registerShortcuts(): void {
         ["holdmore", "Longer hold (view editor)", ["]"], either(() => {}, e => e.changeHold(1))],
         ["panless", "Less of the hold panning (view editor)", ["SHIFT+["], either(() => {}, e => e.changePan(-0.1))],
         ["panmore", "More of the hold panning (view editor)", ["SHIFT+]"], either(() => {}, e => e.changePan(0.1))],
+        // The build pane's button (patched engine), also with the editor closed (owner, 2026-11-11).
+        ["build", "Build and play / cancel the build", ["CTRL+B"], p => toggleBuild(p)],
     ];
     for (const [id, text, bindings, action] of shortcuts) {
         ui.registerShortcut({

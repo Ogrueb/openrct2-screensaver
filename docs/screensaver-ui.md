@@ -264,7 +264,15 @@ The panel became three panes (round 8 of the mockups accepted, built the same da
   Fold marks (the box's header, Playlist, the park field) are icons, as the game's font has no triangles;
   the open park field and its list have a gold border, and held to jump, the park under the mouse is gold. On the map, the boxes clear while a park change is under way (the
   views are already the next park's) and come back once it shows; on another park the map steps out from the view shown, at its angle, and follows the viewport when a load turns it. Every Playlist button has a tooltip.
-  Copy and Paste views are inactive for now (no clipboard in the mode yet; left for the end, owner).
+  **Copy views** (Ctrl+C) puts the park's views on the clipboard as the settings page's drawing page writes them
+  (`{"format": "rct-screensaver-views", "version": 1, park, key, screen, views}`, `screen` the window), leaving out
+  its event views, as those come from the park's own data; **Paste views** (Ctrl+V) replaces the park's views
+  with the clipboard's (that text from here or the drawing page, or a bare view list): zooms move out by whole
+  levels from the copy's window as edits do (`scale.ts`), event views in the text are left out, the park's own
+  event views keep their places, and the views are hand-set (pinned at install). One change, so Undo returns.
+  The button says what happened for a moment ("Copied 7", "Pasted 7", "No views" in amber). Both need the
+  patched engine's clipboard (patch 0016; 2026-11-12). The drawing page's event settings in a copy are not
+  applied in the game: they are profile settings.
   Under it the foldable **Playlist** properties (the playlist's name at the right): Motion (Inertia
   Off/On; Angle and zoom change Off/Start/End, where Off makes every pan that would turn or zoom a cut,
   overviews excepted, and hides the two holds that no longer apply), Timing (change, arrival and return
@@ -278,6 +286,72 @@ The panel became three panes (round 8 of the mockups accepted, built the same da
   from the game's storage, as it does with view edits. The live editor on its own, without the generator,
   is a later stage (`docs/enhancements.md` section 2, item 6).
 - In map mode the panes take the mouse: a press on them never reaches the boxes underneath.
+
+### Builds from the game (engine patch 0017, 2026-11-11)
+
+The next stage of "the live editor on its own" (`docs/enhancements.md` section 2, item 6): the game builds
+the playlist itself and plays the new build without a restart, so installing no longer needs the game
+closed.
+
+- **The build pane** (bottom right, under the top-right box and above the mode's exit button; owner's draft 4,
+  2026-11-11): a "Build · saves live edits to the playlist" header with where things stand at its right ("edits not built" in amber when the game saved edits after the
+  build that plays or the install, "building 6/15", "built · playing", "failed"), folding to the header by
+  hand and on its own when the window is too short for it under the box; then "Park n of m · name" with the
+  time so far, a square per park, the big **Build and play** button (Cancel build while it runs; Ctrl+B,
+  also with the editor closed; inactive, and Ctrl+B does nothing, while every edit is built: owner's test,
+  2026-11-11), the MESSAGES list (3.5 rows, scrolls) and Import playlist / Export playlist
+  (inactive until there is a way to pick files). The playlist's Save button is gone: Playlist properties
+  save as they change, as the views do. With the editor closed, the controls bar carries a "Building 6/15"
+  chip while a build runs.
+- **Squares:** one per park in play order, as the generator lists them (`parkStates`, the playlist file's
+  order with the game's edits baked in), so a rebuild of one park keeps its square's place; between builds
+  they follow the playing order, so reordering parks moves the squares at once. The generator lists every
+  park first, and while a build runs a park not reached yet shows its state from the build before. Only a
+  park edited since the last build (or the install) is dimmed, with "edited, needs a build" in its tooltip,
+  and it dims as soon as the edit is saved; Playlist properties dim none, as no park needs building for
+  them (owner's test, 2026-11-11). The plugin keeps the edits each build took in (`RCTScreensaver.builtEdits`;
+  an install sets it to the edits it leaves in the storage). Names are the playing playlist's. Green with a check: built (or unchanged, from the cache); amber
+  with "!": built with warnings; red with a cross: failed, or its file is missing (the park is left out and
+  the rest builds); lit, with diagonal stripes crawling across it (20 px/s; owner, 2026-11-12): being
+  built; empty: still to come. The tooltip names the park and its state; a
+  click opens the park. Over 30 parks, a bar with "n / m parks" replaces them.
+- **Messages:** newest first: the plugin's own line about the outcome (built and playing, not taken in, cancelled,
+  could not start), then the generator's (`messages`: what it took in from the game's edits, each park's
+  warnings, missing parks, the count built and unchanged), each marked info, ok, warning or error. A message about a park opens that park on a click.
+- **Build and play** calls `screensaver.build(<sequence>)`. The engine runs the generator that `--install`
+  registered in `<user dir>/screensaver/generator.json` (this Python, this `mksequence.py`, and the playlist
+  file each installed sequence came from), `mksequence.py --live-build <sequence> --user-dir <user dir>`,
+  in the background with no console window (below normal priority, output in `screensaver/build.log`).
+  A plugin passes only the name: it cannot choose what runs, and its files API cannot write
+  `generator.json` (it reaches only `screensaver/live`). One build at a time.
+- The build is an ordinary build with the live file applied (`--cache` in `screensaver/park-cache`, so
+  only changed parks are rebuilt), written to `screensaver/build/live/<sequence>`. It never touches the
+  installed sequence or `plugin.store.json`, both the game's while it runs. Its progress (park n of m) and
+  result go to `screensaver/live/build-<sequence>.json` (no `version` key, so the live-file tools skip it):
+  the new playlist, the title music, `parkStates` and `messages`. A new plugin version or changed park
+  scripts are not reported: neither can change mid-run, and the next install brings them (owner, 2026-11-11).
+- **Taking it in:** once the build is done the plugin calls `screensaver.applyBuild(<sequence>)`: the
+  engine copies the parks (only changed ones; written beside their place and renamed over) and the script
+  into the playing sequence's folder, removes parks the new script no longer names, and reloads the
+  script (`ITitleSequencePlayer::Reload`; the park on screen keeps playing). The plugin then stores the new
+  playlist (`installed` now, so it is the editor's "Last install"), sets the title music as an install
+  does, and re-enters the park on screen from the new script at its place in the new order (a dip through
+  black, as a park change), or the first park when the build dropped it.
+- The line over the squares shows only while a build runs (the park and time), after a failure ("Build
+  failed: <reason>"; a missing `generator.json` means: install once with `mksequence.py --install`) or when
+  builds are unavailable; otherwise the header's state and the messages say it all (owner's test,
+  2026-11-11: the line repeated the header). With no line the squares grow into its space (owner, 2026-11-12).
+- **Every build bakes:** before it builds, `--live-build` writes the live file into the playlist's own files
+  (as `tools/bakelive.py` does: views into `<playlist>.views.json`, properties and park order into the TOML,
+  backups beside them) and marks it baked, so the playlist files always hold what plays (owner, 2026-11-11:
+  rebuild only changed parks, play at once, always bake; no settings in the pane).
+- A build still running when the game quits finishes on its own and is not taken in.
+- **Parks and the settings page** (owner, 2026-11-11): a park whose file is missing is left out of the build
+  with a red square and a message; ticking parks on and off stays a settings-page matter, with adding parks.
+  The game's park cache (`screensaver/park-cache`) stays apart from the settings page's, so the first build
+  from the game redoes every park. The settings page judges its renders against whichever build is newer,
+  its own or the game's (`build/live/<sequence>.result.json`), so a build from the game marks them old; the
+  page's own builds and bundle imports clear `build/` but keep `build/live`.
 
 ### Live file (2026-11-10, owner's go-ahead in "Explore saving playlists without the Generator")
 

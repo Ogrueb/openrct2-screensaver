@@ -37,3 +37,25 @@ def playlists():
 
 def parks():
     return os.path.join(home(), "parks")
+
+
+LIVE_BUILD = "live"  # <home>/build/live: builds the game starts (mksequence.py --live-build), the game's own
+
+
+def clear_build(folder):
+    """Empty a build folder (the settings page's staging build, a bundle's build) but keep the game's live
+    builds under it (<folder>/live), which a running game may be writing or about to take in."""
+    import shutil
+    if not os.path.isdir(folder):
+        return
+    for name in os.listdir(folder):
+        if name == LIVE_BUILD:
+            continue
+        path = os.path.join(folder, name)
+        if os.path.isdir(path) and not os.path.islink(path):
+            shutil.rmtree(path, ignore_errors=True)
+        else:
+            try:
+                os.remove(path)
+            except OSError:
+                pass

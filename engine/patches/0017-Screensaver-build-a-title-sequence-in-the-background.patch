@@ -1,0 +1,780 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: RCT Screensaver <noreply@example.invalid>
+Date: Wed, 11 Nov 2026 21:00:00 +0000
+Subject: [PATCH] Screensaver: build a title sequence in the background and
+ take it in
+
+screensaver.build(sequence) runs the generator that its installer named in
+<user directory>/screensaver/generator.json (a Python interpreter and a
+script called mksequence.py) for that title sequence, in the background and
+without a console window, its output in <user directory>/screensaver/build.log.
+A plugin passes only the sequence's name, so it cannot choose what runs.
+screensaver.buildStatus reports the build (idle, running, done, failed,
+cancelled) and cancelBuild() stops it.
+
+The generator writes the new sequence to
+<user directory>/screensaver/build/live/<name>. screensaver.applyBuild(name)
+copies it into the installed title sequence of that name, which must be the
+one playing and a folder (new files written beside their place and renamed
+over it, parks the new script no longer names removed), and reloads the
+playing sequence's script: the park on screen keeps playing, and the
+plugin's next seek loads from the new script, in the background as before.
+ITitleSequencePlayer gains Reload() for that.
+---
+ src/openrct2-ui/libopenrct2ui.vcxproj         |   2 +
+ src/openrct2-ui/screensaver/Build.cpp         | 502 ++++++++++++++++++
+ src/openrct2-ui/screensaver/Build.h           |  62 +++
+ src/openrct2-ui/scripting/ScScreensaver.hpp   |  64 ++-
+ src/openrct2-ui/title/TitleSequencePlayer.cpp |  18 +
+ .../scenes/title/TitleSequencePlayer.h        |   7 +
+ 6 files changed, 654 insertions(+), 1 deletion(-)
+ create mode 100644 src/openrct2-ui/screensaver/Build.cpp
+ create mode 100644 src/openrct2-ui/screensaver/Build.h
+
+diff --git a/src/openrct2-ui/libopenrct2ui.vcxproj b/src/openrct2-ui/libopenrct2ui.vcxproj
+index 8902cc3..6dc2b14 100644
+--- a/src/openrct2-ui/libopenrct2ui.vcxproj
++++ b/src/openrct2-ui/libopenrct2ui.vcxproj
+@@ -92,6 +92,7 @@
+     <ClInclude Include="scripting\ScTileSelection.hpp" />
+     <ClInclude Include="scripting\ScTitleSequence.hpp" />
+     <ClInclude Include="scripting\ScScreensaver.hpp" />
++    <ClInclude Include="screensaver\Build.h" />
+     <ClInclude Include="screensaver\Overlay.h" />
+     <ClInclude Include="screensaver\OverlayCompositor.h" />
+     <ClInclude Include="screensaver\Screensaver.h" />
+@@ -163,6 +164,7 @@
+     <ClCompile Include="scripting\CustomWindow.cpp" />
+     <ClCompile Include="scripting\ScWindow.cpp" />
+     <ClCompile Include="scripting\UiExtensions.cpp" />
++    <ClCompile Include="screensaver\Build.cpp" />
+     <ClCompile Include="screensaver\Overlay.cpp" />
+     <ClCompile Include="screensaver\OverlayCompositor.cpp" />
+     <ClCompile Include="screensaver\Screensaver.cpp" />
+diff --git a/src/openrct2-ui/screensaver/Build.cpp b/src/openrct2-ui/screensaver/Build.cpp
+new file mode 100644
+index 0000000..31818b8
+--- /dev/null
++++ b/src/openrct2-ui/screensaver/Build.cpp
+@@ -0,0 +1,502 @@
++/*****************************************************************************
++ * Copyright (c) 2014-2026 OpenRCT2 developers
++ *
++ * For a complete list of all authors, please refer to contributors.md
++ * Interested in contributing? Visit https://github.com/OpenRCT2/OpenRCT2
++ *
++ * OpenRCT2 is licensed under the GNU General Public License version 3.
++ *****************************************************************************/
++
++#ifdef _WIN32
++// clang-format off
++    // windows.h needs to be included first
++    #ifndef WIN32_LEAN_AND_MEAN
++        #define WIN32_LEAN_AND_MEAN
++    #endif
++    #ifndef NOMINMAX
++        #define NOMINMAX
++    #endif
++    #include <windows.h>
++// clang-format on
++#else
++    #include <cerrno>
++    #include <csignal>
++    #include <cstdlib>
++    #include <fcntl.h>
++    #include <sys/types.h>
++    #include <sys/wait.h>
++    #include <unistd.h>
++#endif
++
++#include "Build.h"
++
++#include <openrct2/Context.h>
++#include <openrct2/Diagnostic.h>
++#include <openrct2/OpenRCT2.h>
++#include <openrct2/PlatformEnvironment.h>
++#include <openrct2/core/File.h>
++#include <openrct2/core/FileSystem.hpp>
++#include <openrct2/core/Json.hpp>
++#include <openrct2/core/Path.hpp>
++#include <openrct2/core/String.hpp>
++#include <openrct2/scenes/title/TitleScene.h>
++#include <openrct2/scenes/title/TitleSequenceManager.h>
++#include <openrct2/scenes/title/TitleSequencePlayer.h>
++
++#include <chrono>
++#include <mutex>
++#include <optional>
++#include <set>
++#include <thread>
++#include <vector>
++
++namespace OpenRCT2::Ui::Screensaver::Build
++{
++    namespace
++    {
++        // Shared with the thread that waits for the generator. Never destroyed: the thread may still
++        // be waiting when the game exits (the generator then finishes on its own; it only ever
++        // writes its own build folder).
++        struct Shared
++        {
++            std::mutex mutex;
++            Status status;
++#ifdef _WIN32
++            HANDLE process = nullptr;
++#else
++            pid_t pid = 0;
++#endif
++            bool cancelled = false;
++        };
++
++        Shared& GetShared()
++        {
++            static auto* shared = new Shared();
++            return *shared;
++        }
++
++        int64_t Now()
++        {
++            return std::chrono::duration_cast<std::chrono::milliseconds>(
++                       std::chrono::system_clock::now().time_since_epoch())
++                .count();
++        }
++
++        u8string ScreensaverFolder()
++        {
++            auto user = GetContext()->GetPlatformEnvironment().GetDirectoryPath(DirBase::user);
++            return Path::Combine(user, "screensaver");
++        }
++
++        // A sequence name as the generator writes it: a playlist's name, used as a folder name.
++        bool IsSequenceName(const std::string& name)
++        {
++            if (name.empty() || name.size() > 128 || name == "." || name == ".." || name[0] == '-')
++                return false;
++            for (unsigned char c : name)
++            {
++                if (c < 0x20 || c == 0x7F || c == '/' || c == '\\' || c == '"' || c == ':' || c == '*' || c == '?'
++                    || c == '<' || c == '>' || c == '|')
++                    return false;
++            }
++            return true;
++        }
++
++        struct Generator
++        {
++            std::string python;
++            std::string script;
++        };
++
++        // The generator registered by its installer, or nullopt with the reason.
++        std::optional<Generator> ReadGenerator(std::string& error)
++        {
++            auto path = Path::Combine(ScreensaverFolder(), "generator.json");
++            std::error_code ec;
++            if (!fs::is_regular_file(fs::u8path(path), ec))
++            {
++                error = "No generator registered (" + path + "): install the playlist once with mksequence.py --install";
++                return std::nullopt;
++            }
++            Generator generator;
++            try
++            {
++                auto json = Json::ReadFromFile(path, 64 * 1024);
++                if (!json.is_object() || !json["python"].is_string() || !json["script"].is_string())
++                {
++                    error = path + " names no python and script";
++                    return std::nullopt;
++                }
++                generator.python = json["python"].get<std::string>();
++                generator.script = json["script"].get<std::string>();
++            }
++            catch (const std::exception& e)
++            {
++                error = path + ": " + e.what();
++                return std::nullopt;
++            }
++            auto python = fs::u8path(generator.python);
++            auto script = fs::u8path(generator.script);
++            // Not is_regular_file: the Microsoft Store's python.exe is an app execution alias.
++            if (!python.is_absolute() || !fs::exists(python, ec) || fs::is_directory(python, ec))
++            {
++                error = "Python not found: " + generator.python;
++                return std::nullopt;
++            }
++            if (!script.is_absolute() || !fs::is_regular_file(script, ec) || script.filename() != fs::u8path("mksequence.py"))
++            {
++                error = "Generator not found: " + generator.script;
++                return std::nullopt;
++            }
++            return generator;
++        }
++
++        void Finish(int32_t exitCode, const std::string& error)
++        {
++            auto& shared = GetShared();
++            std::lock_guard lock(shared.mutex);
++            shared.status.exitCode = exitCode;
++            shared.status.finished = Now();
++            shared.status.error = error;
++            shared.status.state = shared.cancelled ? State::cancelled : exitCode == 0 ? State::done : State::failed;
++#ifdef _WIN32
++            if (shared.process != nullptr)
++            {
++                CloseHandle(shared.process);
++                shared.process = nullptr;
++            }
++#else
++            shared.pid = 0;
++#endif
++            LOG_INFO("Screensaver build of \"%s\": %s (exit code %d)", shared.status.sequence.c_str(),
++                StateName(shared.status.state), exitCode);
++        }
++
++#ifdef _WIN32
++        // One argument as CommandLineToArgvW reads it back.
++        std::wstring Quote(const std::wstring& arg)
++        {
++            std::wstring out = L"\"";
++            size_t backslashes = 0;
++            for (wchar_t c : arg)
++            {
++                if (c == L'\\')
++                {
++                    backslashes++;
++                    continue;
++                }
++                if (c == L'"')
++                    out.append(backslashes * 2 + 1, L'\\');
++                else
++                    out.append(backslashes, L'\\');
++                backslashes = 0;
++                out.push_back(c);
++            }
++            out.append(backslashes * 2, L'\\');
++            out.push_back(L'"');
++            return out;
++        }
++
++        bool Launch(const std::vector<std::string>& args, const std::string& cwd, const std::string& log, std::string& error)
++        {
++            std::wstring commandLine;
++            for (const auto& arg : args)
++            {
++                if (!commandLine.empty())
++                    commandLine.push_back(L' ');
++                commandLine += Quote(String::toWideChar(arg));
++            }
++            SECURITY_ATTRIBUTES sa{ static_cast<DWORD>(sizeof(SECURITY_ATTRIBUTES)), nullptr, TRUE };
++            auto wlog = String::toWideChar(log);
++            HANDLE output = CreateFileW(
++                wlog.c_str(), GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_DELETE, &sa, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL,
++                nullptr);
++            if (output == INVALID_HANDLE_VALUE)
++            {
++                error = "Cannot write " + log;
++                return false;
++            }
++            HANDLE input = CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, OPEN_EXISTING, 0, nullptr);
++            STARTUPINFOW si{};
++            si.cb = sizeof(si);
++            si.dwFlags = STARTF_USESTDHANDLES;
++            si.hStdInput = input;
++            si.hStdOutput = output;
++            si.hStdError = output;
++            PROCESS_INFORMATION pi{};
++            // UTF-8 output whatever the console code page (park names), and no console window.
++            SetEnvironmentVariableW(L"PYTHONUTF8", L"1");
++            SetEnvironmentVariableW(L"PYTHONIOENCODING", L"utf-8");
++            auto app = String::toWideChar(args[0]);
++            auto wcwd = String::toWideChar(cwd);
++            BOOL ok = CreateProcessW(
++                app.c_str(), commandLine.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS,
++                nullptr, wcwd.c_str(), &si, &pi);
++            CloseHandle(output);
++            if (input != INVALID_HANDLE_VALUE)
++                CloseHandle(input);
++            if (!ok)
++            {
++                error = "Cannot start " + args[0] + " (error " + std::to_string(GetLastError()) + ")";
++                return false;
++            }
++            CloseHandle(pi.hThread);
++            {
++                auto& shared = GetShared();
++                std::lock_guard lock(shared.mutex);
++                shared.process = pi.hProcess;
++            }
++            std::thread([process = pi.hProcess]() {
++                WaitForSingleObject(process, INFINITE);
++                DWORD code = 1;
++                GetExitCodeProcess(process, &code);
++                Finish(static_cast<int32_t>(code), code == 0 ? "" : "The generator failed (exit code " + std::to_string(code) + ")");
++            }).detach();
++            return true;
++        }
++#else
++        bool Launch(const std::vector<std::string>& args, const std::string& cwd, const std::string& log, std::string& error)
++        {
++            // Everything the child needs is prepared before fork: it only calls async-signal-safe functions.
++            std::vector<char*> argv;
++            for (const auto& arg : args)
++                argv.push_back(const_cast<char*>(arg.c_str()));
++            argv.push_back(nullptr);
++            int output = open(log.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
++            if (output < 0)
++            {
++                error = "Cannot write " + log;
++                return false;
++            }
++            int input = open("/dev/null", O_RDONLY | O_CLOEXEC);
++            setenv("PYTHONUTF8", "1", 1);
++            setenv("PYTHONIOENCODING", "utf-8", 1);
++            pid_t pid = fork();
++            if (pid == 0)
++            {
++                setpgid(0, 0); // its own group: Cancel() stops anything it starts too
++                if (input >= 0)
++                    dup2(input, STDIN_FILENO);
++                dup2(output, STDOUT_FILENO);
++                dup2(output, STDERR_FILENO);
++                if (chdir(cwd.c_str()) != 0)
++                    _exit(126);
++                execv(argv[0], argv.data());
++                _exit(127);
++            }
++            close(output);
++            if (input >= 0)
++                close(input);
++            if (pid < 0)
++            {
++                error = "Cannot start " + args[0];
++                return false;
++            }
++            {
++                auto& shared = GetShared();
++                std::lock_guard lock(shared.mutex);
++                shared.pid = pid;
++            }
++            std::thread([pid]() {
++                int status = 0;
++                while (waitpid(pid, &status, 0) < 0 && errno == EINTR)
++                {
++                }
++                int32_t code = WIFEXITED(status) ? WEXITSTATUS(status) : 128 + (WIFSIGNALED(status) ? WTERMSIG(status) : 0);
++                Finish(code, code == 0 ? "" : "The generator failed (exit code " + std::to_string(code) + ")");
++            }).detach();
++            return true;
++        }
++#endif
++    } // namespace
++
++    const char* StateName(State state)
++    {
++        switch (state)
++        {
++            case State::running:
++                return "running";
++            case State::done:
++                return "done";
++            case State::failed:
++                return "failed";
++            case State::cancelled:
++                return "cancelled";
++            default:
++                return "idle";
++        }
++    }
++
++    bool Start(const std::string& sequence, std::string& error)
++    {
++        if (!IsSequenceName(sequence))
++        {
++            error = "Not a title sequence name: " + sequence;
++            return false;
++        }
++        auto& shared = GetShared();
++        {
++            std::lock_guard lock(shared.mutex);
++            if (shared.status.state == State::running)
++            {
++                error = "A build is running already (" + shared.status.sequence + ")";
++                return false;
++            }
++        }
++        auto generator = ReadGenerator(error);
++        if (!generator)
++            return false;
++        auto folder = ScreensaverFolder();
++        std::error_code ec;
++        fs::create_directories(fs::u8path(folder), ec);
++        auto user = GetContext()->GetPlatformEnvironment().GetDirectoryPath(DirBase::user);
++        // The repository's root: the generator's folder's parent (tools/mksequence.py).
++        auto cwd = fs::u8path(generator->script).parent_path().parent_path().u8string();
++        std::vector<std::string> args = {
++            generator->python, generator->script, "--live-build", sequence, "--user-dir", user,
++        };
++        {
++            std::lock_guard lock(shared.mutex);
++            shared.status = Status{ State::running, sequence, 0, Now(), 0, "" };
++            shared.cancelled = false;
++        }
++        if (!Launch(args, std::string(cwd.begin(), cwd.end()), Path::Combine(folder, "build.log"), error))
++        {
++            std::lock_guard lock(shared.mutex);
++            shared.status.state = State::failed;
++            shared.status.finished = Now();
++            shared.status.error = error;
++            return false;
++        }
++        LOG_INFO("Screensaver build of \"%s\" started", sequence.c_str());
++        return true;
++    }
++
++    Status GetStatus()
++    {
++        auto& shared = GetShared();
++        std::lock_guard lock(shared.mutex);
++        return shared.status;
++    }
++
++    bool Cancel()
++    {
++        auto& shared = GetShared();
++        std::lock_guard lock(shared.mutex);
++        if (shared.status.state != State::running)
++            return false;
++        shared.cancelled = true;
++#ifdef _WIN32
++        if (shared.process != nullptr)
++            TerminateProcess(shared.process, 1);
++#else
++        if (shared.pid > 0)
++            kill(-shared.pid, SIGTERM);
++#endif
++        return true;
++    }
++
++    bool Apply(const std::string& sequence, std::string& error)
++    {
++        if (!IsSequenceName(sequence))
++        {
++            error = "Not a title sequence name: " + sequence;
++            return false;
++        }
++        if (GetStatus().state == State::running)
++        {
++            error = "A build is running";
++            return false;
++        }
++        if (!TitleIsPreviewingSequence() && gLegacyScene != LegacyScene::titleSequence)
++        {
++            error = "No title sequence is playing";
++            return false;
++        }
++        auto* item = TitleSequenceManager::GetItem(TitleGetCurrentSequence());
++        if (item == nullptr || item->Name != sequence)
++        {
++            error = "The title sequence \"" + sequence + "\" is not the one playing";
++            return false;
++        }
++        if (item->IsZip)
++        {
++            error = "The title sequence \"" + sequence + "\" is a .parkseq file; install it with mksequence.py --install";
++            return false;
++        }
++        auto built = fs::u8path(Path::Combine(ScreensaverFolder(), "build", "live", sequence));
++        auto target = fs::u8path(item->Path);
++        std::error_code ec;
++        if (!fs::is_regular_file(built / "script.txt", ec))
++        {
++            error = "No build of \"" + sequence + "\" to apply";
++            return false;
++        }
++        // The new files first (each written beside its place and renamed over it), the script last.
++        std::set<fs::path> names;
++        std::vector<fs::path> parks;
++        for (fs::directory_iterator it(built, ec), end; !ec && it != end; it.increment(ec))
++        {
++            auto name = it->path().filename();
++            auto ext = String::toUpper(name.extension().u8string());
++            if (it->is_regular_file(ec) && (ext == ".PARK" || ext == ".SV6" || ext == ".SC6" || ext == ".SV4" || ext == ".SC4"))
++            {
++                parks.push_back(name);
++                names.insert(name);
++            }
++        }
++        if (ec)
++        {
++            error = "Cannot read the build: " + ec.message();
++            return false;
++        }
++        auto copy = [&](const fs::path& name) {
++            auto temp = target / fs::u8path(name.u8string() + ".tmp");
++            fs::copy_file(built / name, temp, fs::copy_options::overwrite_existing, ec);
++            if (!ec)
++                fs::rename(temp, target / name, ec);
++            if (ec)
++            {
++                std::error_code ignored;
++                fs::remove(temp, ignored);
++                error = "Cannot write " + (target / name).u8string() + ": " + ec.message();
++                return false;
++            }
++            return true;
++        };
++        for (const auto& name : parks)
++        {
++            // Unchanged files stay as they are.
++            if (fs::exists(target / name, ec) && fs::file_size(target / name, ec) == fs::file_size(built / name, ec))
++            {
++                auto a = File::ReadAllBytes((target / name).u8string());
++                auto b = File::ReadAllBytes((built / name).u8string());
++                if (a == b)
++                    continue;
++            }
++            if (!copy(name))
++                return false;
++        }
++        if (!copy(fs::u8path("script.txt")))
++            return false;
++        // Parks the new script no longer names; one that cannot be removed now is left behind.
++        for (fs::directory_iterator it(target, ec), end; !ec && it != end; it.increment(ec))
++        {
++            auto name = it->path().filename();
++            auto ext = String::toUpper(name.extension().u8string());
++            if ((ext == ".PARK" || ext == ".SV6" || ext == ".SC6" || ext == ".SV4" || ext == ".SC4") && !names.count(name))
++            {
++                std::error_code ignored;
++                fs::remove(it->path(), ignored);
++            }
++        }
++        auto* player = static_cast<ITitleSequencePlayer*>(TitleGetSequencePlayer());
++        if (player == nullptr || !player->Reload())
++        {
++            error = "The new title sequence was copied but could not be reloaded";
++            return false;
++        }
++        LOG_INFO("Screensaver build of \"%s\" applied", sequence.c_str());
++        return true;
++    }
++} // namespace OpenRCT2::Ui::Screensaver::Build
+diff --git a/src/openrct2-ui/screensaver/Build.h b/src/openrct2-ui/screensaver/Build.h
+new file mode 100644
+index 0000000..7410de7
+--- /dev/null
++++ b/src/openrct2-ui/screensaver/Build.h
+@@ -0,0 +1,62 @@
++/*****************************************************************************
++ * Copyright (c) 2014-2026 OpenRCT2 developers
++ *
++ * For a complete list of all authors, please refer to contributors.md
++ * Interested in contributing? Visit https://github.com/OpenRCT2/OpenRCT2
++ *
++ * OpenRCT2 is licensed under the GNU General Public License version 3.
++ *****************************************************************************/
++
++// Building a title sequence with an external generator while the game runs, and taking the result
++// into the title sequence that plays.
++//
++// The generator is named in <user directory>/screensaver/generator.json ({"python": ..., "script":
++// ...}), which only the generator's own installer writes: a plugin passes just the sequence's name
++// and cannot choose what runs. The build runs in the background with no console window, its output
++// in <user directory>/screensaver/build.log; it writes the new sequence to
++// <user directory>/screensaver/build/live/<name> and never touches the installed one. Apply() then
++// copies that into the installed sequence folder and reloads the playing sequence's script, at a
++// moment the plugin chooses (no park is being read then).
++
++#pragma once
++
++#include <cstdint>
++#include <string>
++
++namespace OpenRCT2::Ui::Screensaver::Build
++{
++    enum class State : uint8_t
++    {
++        idle,
++        running,
++        done,      // the generator exited with code 0
++        failed,    // it could not start, or exited with another code
++        cancelled, // Cancel() stopped it
++    };
++
++    struct Status
++    {
++        State state = State::idle;
++        std::string sequence;
++        int32_t exitCode = 0;
++        int64_t started = 0;  // ms since 1970
++        int64_t finished = 0; // ms since 1970
++        std::string error;
++    };
++
++    const char* StateName(State state);
++
++    // Starts the generator for the title sequence of that name. False (with the reason in `error`)
++    // when no generator is registered, the name is not acceptable or a build is running already.
++    bool Start(const std::string& sequence, std::string& error);
++
++    Status GetStatus();
++
++    // Stops a running build; false when none runs.
++    bool Cancel();
++
++    // Copies the built sequence of that name into the installed title sequence of the same name,
++    // which must be the one playing and a folder, and reloads its script; the park on screen keeps
++    // playing until the next seek. False with the reason in `error`.
++    bool Apply(const std::string& sequence, std::string& error);
++} // namespace OpenRCT2::Ui::Screensaver::Build
+diff --git a/src/openrct2-ui/scripting/ScScreensaver.hpp b/src/openrct2-ui/scripting/ScScreensaver.hpp
+index f12549e..acef79e 100644
+--- a/src/openrct2-ui/scripting/ScScreensaver.hpp
++++ b/src/openrct2-ui/scripting/ScScreensaver.hpp
+@@ -7,12 +7,13 @@
+  * OpenRCT2 is licensed under the GNU General Public License version 3.
+  *****************************************************************************/
+ 
+-// The `screensaver` global (mode, settings, mouse, overlay, files, clipboard).
++// The `screensaver` global (mode, settings, mouse, overlay, files, clipboard, builds).
+ 
+ #pragma once
+ 
+ #ifdef ENABLE_SCRIPTING
+ 
++    #include "../screensaver/Build.h"
+     #include "../screensaver/Overlay.h"
+     #include "../screensaver/Screensaver.h"
+ 
+@@ -535,6 +536,10 @@ namespace OpenRCT2::Scripting
+                 JS_CFUNC_DEF("writeFile", 2, ScScreensaver::writeFile),
+                 JS_CFUNC_DEF("listFiles", 0, ScScreensaver::listFiles),
+                 JS_CGETSET_DEF("clipboard", ScScreensaver::clipboard_get, ScScreensaver::clipboard_set),
++                JS_CFUNC_DEF("build", 1, ScScreensaver::build),
++                JS_CGETSET_DEF("buildStatus", ScScreensaver::buildStatus_get, nullptr),
++                JS_CFUNC_DEF("cancelBuild", 0, ScScreensaver::cancelBuild),
++                JS_CFUNC_DEF("applyBuild", 1, ScScreensaver::applyBuild),
+             };
+             RegisterBase(ctx, "Screensaver", nullptr, funcs);
+             ScreensaverJS::InstallListeners();
+@@ -657,6 +662,63 @@ namespace OpenRCT2::Scripting
+                 SDL_SetClipboardText(JSToStdString(ctx, value).c_str());
+             return JS_UNDEFINED;
+         }
++
++        // build(sequence) starts the registered generator for that title sequence in the background;
++        // throws with the reason when it cannot start.
++        static JSValue build(JSContext* ctx, JSValue, int argc, JSValue* argv)
++        {
++            if (argc < 1 || !JS_IsString(argv[0]))
++            {
++                JS_ThrowTypeError(ctx, "build(sequence): sequence must be a string");
++                return JS_EXCEPTION;
++            }
++            std::string error;
++            if (!Ui::Screensaver::Build::Start(JSToStdString(ctx, argv[0]), error))
++            {
++                JS_ThrowPlainError(ctx, "%s", error.c_str());
++                return JS_EXCEPTION;
++            }
++            return JS_UNDEFINED;
++        }
++
++        // { state: "idle" | "running" | "done" | "failed" | "cancelled", sequence, exitCode, started,
++        //   finished (ms since 1970), error }
++        static JSValue buildStatus_get(JSContext* ctx, JSValue)
++        {
++            auto status = Ui::Screensaver::Build::GetStatus();
++            JSValue obj = JS_NewObject(ctx);
++            JS_SetPropertyStr(ctx, obj, "state", JSFromStdString(ctx, Ui::Screensaver::Build::StateName(status.state)));
++            JS_SetPropertyStr(ctx, obj, "sequence", JSFromStdString(ctx, status.sequence));
++            JS_SetPropertyStr(ctx, obj, "exitCode", JS_NewInt32(ctx, status.exitCode));
++            JS_SetPropertyStr(ctx, obj, "started", JS_NewFloat64(ctx, static_cast<double>(status.started)));
++            JS_SetPropertyStr(ctx, obj, "finished", JS_NewFloat64(ctx, static_cast<double>(status.finished)));
++            JS_SetPropertyStr(ctx, obj, "error", JSFromStdString(ctx, status.error));
++            return obj;
++        }
++
++        // Whether a running build was stopped.
++        static JSValue cancelBuild(JSContext* ctx, JSValue, int, JSValue*)
++        {
++            return JS_NewBool(ctx, Ui::Screensaver::Build::Cancel());
++        }
++
++        // applyBuild(sequence) puts the finished build into the playing title sequence of that name
++        // and reloads its script; the plugin seeks next. Throws with the reason when it cannot.
++        static JSValue applyBuild(JSContext* ctx, JSValue, int argc, JSValue* argv)
++        {
++            if (argc < 1 || !JS_IsString(argv[0]))
++            {
++                JS_ThrowTypeError(ctx, "applyBuild(sequence): sequence must be a string");
++                return JS_EXCEPTION;
++            }
++            std::string error;
++            if (!Ui::Screensaver::Build::Apply(JSToStdString(ctx, argv[0]), error))
++            {
++                JS_ThrowPlainError(ctx, "%s", error.c_str());
++                return JS_EXCEPTION;
++            }
++            return JS_UNDEFINED;
++        }
+     };
+ 
+     inline JSValue ScScreensaver::overlay_get(JSContext* ctx, JSValue)
+diff --git a/src/openrct2-ui/title/TitleSequencePlayer.cpp b/src/openrct2-ui/title/TitleSequencePlayer.cpp
+index 19560b2..712febc 100644
+--- a/src/openrct2-ui/title/TitleSequencePlayer.cpp
++++ b/src/openrct2-ui/title/TitleSequencePlayer.cpp
+@@ -55,6 +55,7 @@ namespace OpenRCT2::Title
+     {
+     private:
+         std::unique_ptr<TitleSequence> _sequence;
++        std::string _sequencePath; // where _sequence was loaded from, for Reload()
+         int32_t _position = 0;
+         int32_t _waitCounter = 0;
+         bool _initialLoadCommand = true;
+@@ -155,11 +156,28 @@ namespace OpenRCT2::Title
+ 
+             Eject();
+             _sequence = std::move(sequence);
++            _sequencePath = seqItem->Path;
+ 
+             Reset();
+             return true;
+         }
+ 
++        bool Reload() override
++        {
++            if (_sequence == nullptr || _sequencePath.empty())
++                return false;
++            auto sequence = LoadTitleSequence(_sequencePath);
++            if (sequence == nullptr || sequence->Commands.empty())
++                return false;
++            // A park still being read belongs to the old script: dropped.
++            Eject();
++            _sequence = std::move(sequence);
++            // Not Reset(): the next load is no first load, so it stays in the background.
++            _position = 0;
++            _waitCounter = 0;
++            return true;
++        }
++
+         bool Update() override
+         {
+             RestoreViewLocationIfResized();
+diff --git a/src/openrct2/scenes/title/TitleSequencePlayer.h b/src/openrct2/scenes/title/TitleSequencePlayer.h
+index 509e4c8..ac8c913 100644
+--- a/src/openrct2/scenes/title/TitleSequencePlayer.h
++++ b/src/openrct2/scenes/title/TitleSequencePlayer.h
+@@ -37,4 +37,11 @@ struct ITitleSequencePlayer
+     virtual void SetHoldSwitch(bool)
+     {
+     }
++
++    // Reads the playing sequence's script and park list from disk again, after its files were
++    // replaced. The park on screen keeps playing; the next Seek() loads from the new script.
++    virtual bool Reload()
++    {
++        return false;
++    }
+ };

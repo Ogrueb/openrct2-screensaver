@@ -340,7 +340,13 @@ ICONS = {
     "copy": copy_icon(),
     "paste": paste_icon(),
     "save": floppy(),
+    # Build the playlist from the game (a hammer)
+    "build": [("line", [(14.5, 9), (4.5, 19)], 3.0), ("poly", [(11.9, 3.2), (20.3, 11.6), (17.1, 14.8), (8.7, 6.4)])],
     "import": tray(False),
+    # The build pane: a park built (its square), and its messages' marks
+    "check": [("line", [(4.5, 12.5), (9.5, 17.5), (19.5, 6.5)], 3.2)],
+    "alert": [("line", [(12, 4), (12, 14.5)], 3.2), ("poly", circle(12, 19, 2.0))],
+    "info": [("line", [(12, 10.5), (12, 20)], 3.0), ("poly", circle(12, 5.5, 2.0))],
     # Fold marks (the game's font has no triangles): a list or section open, or folded.
     "fold-open": [("poly", [(6.5, 9), (17.5, 9), (12, 15.5)])],
     "fold-closed": [("poly", [(9, 6.5), (15.5, 12), (9, 17.5)])],

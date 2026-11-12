@@ -89,6 +89,19 @@ class PlaylistProps(unittest.TestCase):
         self.assertNotIn("Mine", ours["playlistProps"])
         self.assertIsInstance(ours["playlist"]["installed"], int)
 
+    def test_install_takes_every_edit_in(self):
+        """The build pane dims parks edited since the last build: after an install, none."""
+        with open(self.store, "w", encoding="utf-8") as f:
+            json.dump({"RCTScreensaver": {"edits": {"a.park": {"views": [{"x": 1}], "arranged": True},
+                                                    "b.park": {"views": [{"x": 2}]}},
+                                          "builtEdits": {"c.park": {"views": []}}}}, f)
+        result = {"name": "Mine", "playlist": {"version": 1, "sequence": "Mine", "parks": []}, "titleMusic": "keep"}
+        mksequence.update_plugin_store(self.store, result, [("a.park", False)], False)
+        with open(self.store, encoding="utf-8") as f:
+            ours = json.load(f)["RCTScreensaver"]
+        self.assertEqual(ours["edits"], {"b.park": {"views": [{"x": 2}]}}, "the pinned edit moved to the views file")
+        self.assertEqual(ours["builtEdits"], ours["edits"], "what stays counts as built")
+
     def test_off_accepted(self):
         self.assertIn("off", mksequence.PAN_CHANGES)
 

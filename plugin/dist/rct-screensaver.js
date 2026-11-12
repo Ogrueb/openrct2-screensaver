@@ -1,5 +1,417 @@
 "use strict";
 (() => {
+  // src/storage.ts
+  var NAMESPACE = "RCTScreensaver";
+  function isPinned(view) {
+    return view.animation !== void 0 && !view.fixed || view.show !== void 0 || view.cue !== void 0;
+  }
+  function isCut(view) {
+    return !!view.cue?.cut && typeof view.cue.tick === "number";
+  }
+  function placeCuts(views) {
+    const due = (v) => v.cue.tick / 40 - (v.cue.lead ?? 0);
+    const cuts = views.filter(isCut).sort((a, b) => due(a) - due(b));
+    if (cuts.length === 0) {
+      return views;
+    }
+    const rest = views.filter((v) => !isCut(v));
+    const starts = [];
+    let t = 0;
+    rest.forEach((v, i) => {
+      if (!isPinned(v)) {
+        starts.push([i, t]);
+        t += v.hold;
+      }
+    });
+    const after = /* @__PURE__ */ new Map();
+    for (const c of cuts) {
+      let k = starts.length > 0 ? starts[0][0] : rest.length - 1;
+      for (const [i, start] of starts) {
+        if (start <= due(c)) {
+          k = i;
+        }
+      }
+      after.set(k, [...after.get(k) ?? [], c]);
+    }
+    return [...rest.flatMap((v, i) => [v, ...after.get(i) ?? []]), ...after.get(-1) ?? []];
+  }
+  function loadPlaylistProps(sequence) {
+    const all = context.sharedStorage.get(NAMESPACE + ".playlistProps", {});
+    return { ...all[sequence] ?? {} };
+  }
+  function savePlaylistProps(sequence, props) {
+    const all = context.sharedStorage.get(NAMESPACE + ".playlistProps", {});
+    all[sequence] = props;
+    context.sharedStorage.set(NAMESPACE + ".playlistProps", all);
+    liveProps[sequence] = props;
+    writeLive();
+  }
+  var CHECKPOINTS_PER_PARK = 10;
+  function loadCheckpoints() {
+    return context.sharedStorage.get(NAMESPACE + ".checkpoints", {});
+  }
+  function saveCheckpoints(all) {
+    context.sharedStorage.set(NAMESPACE + ".checkpoints", all);
+  }
+  var TITLES = ["overview", "on", "off"];
+  function titlesOf(settings) {
+    return settings.titlesOverride ?? settings.titles;
+  }
+  var DEFAULT_SETTINGS = {
+    autostart: true,
+    shuffle: false,
+    debug: false,
+    speed: 1,
+    fadeMs: 600,
+    panTolerance: 500,
+    panToleranceStep: 100,
+    panChanges: "end",
+    inertia: false,
+    changeHold: 2,
+    arriveHold: 1,
+    returnHold: 2,
+    cameraLog: false,
+    scaleToWindow: true,
+    window: "borderless",
+    titleMusic: "keep",
+    titles: "overview",
+    captionPlace: "topLeft",
+    captionFrame: "gold",
+    captionBand: "green",
+    lightEffects: false,
+    weatherGloom: false,
+    weather: false,
+    timeOfDay: "day",
+    masterVolume: null,
+    soundVolume: null,
+    musicVolume: null,
+    drawingEngine: null,
+    multiThreading: null,
+    editorPinned: true,
+    bench: false,
+    profilerExport: ""
+  };
+  function loadSettings() {
+    const stored = context.sharedStorage.get(NAMESPACE + ".settings", {});
+    return { ...DEFAULT_SETTINGS, ...stored };
+  }
+  function saveSettings(settings) {
+    const { titlesOverride: _, ...saved } = settings;
+    context.sharedStorage.set(NAMESPACE + ".settings", saved);
+  }
+  function loadBuiltEdits() {
+    return context.sharedStorage.get(NAMESPACE + ".builtEdits", {});
+  }
+  function saveBuiltEdits(edits) {
+    context.sharedStorage.set(NAMESPACE + ".builtEdits", edits);
+  }
+  function editsChanged(a, b) {
+    return new Set([...Object.keys(a), ...Object.keys(b)].filter((k) => JSON.stringify(a[k]) !== JSON.stringify(b[k])));
+  }
+  function loadEdits() {
+    return context.sharedStorage.get(NAMESPACE + ".edits", {});
+  }
+  function saveEdits(edits) {
+    context.sharedStorage.set(NAMESPACE + ".edits", edits);
+    liveEdits = edits;
+    writeLive();
+  }
+  function filesApi() {
+    return typeof screensaver !== "undefined" && screensaver !== null && typeof screensaver.writeFile === "function" ? screensaver : void 0;
+  }
+  function liveFileName(sequence) {
+    const base = sequence.replace(/[^A-Za-z0-9._-]/g, "_").replace(/^\.+/, "").slice(0, 100) || "playlist";
+    return base + ".json";
+  }
+  var liveEdits;
+  var liveSaved;
+  var liveSaves = 0;
+  function liveSaveCount() {
+    return liveSaves;
+  }
+  function lastLiveSave() {
+    if (liveSaved === void 0) {
+      const api = filesApi();
+      const playlist = api ? loadPlaylist() : void 0;
+      if (!api || !playlist) {
+        return void 0;
+      }
+      try {
+        const file = JSON.parse(api.readFile(liveFileName(playlist.sequence)) || "null");
+        liveSaved = file && file.sequence === playlist.sequence && typeof file.saved === "number" ? file.saved : 0;
+      } catch {
+        liveSaved = 0;
+      }
+    }
+    return liveSaved || void 0;
+  }
+  var liveProps = {};
+  function writeLive() {
+    const api = filesApi();
+    const playlist = api ? loadPlaylist() : void 0;
+    if (!api || !playlist) {
+      return false;
+    }
+    const all = liveEdits ?? loadEdits();
+    const keys = new Set(playlist.parks.map((p) => p.key ?? p.fileName));
+    const edits = {};
+    for (const key of Object.keys(all)) {
+      if (keys.has(key)) {
+        edits[key] = all[key];
+      }
+    }
+    const props = liveProps[playlist.sequence] ?? loadPlaylistProps(playlist.sequence);
+    const file = {
+      version: 1,
+      sequence: playlist.sequence,
+      source: playlist.source,
+      installed: playlist.installed,
+      saved: Date.now(),
+      edits,
+      props
+    };
+    const ok = api.writeFile(liveFileName(playlist.sequence), JSON.stringify(file, null, 1));
+    if (ok) {
+      liveSaved = file.saved;
+      liveSaves++;
+    }
+    if (!ok) {
+      console.log(`[rct-screensaver] could not write ${liveFileName(playlist.sequence)} in ${api.filesFolder}`);
+    }
+    return ok;
+  }
+  function loadVisits() {
+    return context.sharedStorage.get(NAMESPACE + ".visits", {});
+  }
+  function saveVisits(visits) {
+    context.sharedStorage.set(NAMESPACE + ".visits", visits);
+  }
+  function loadPlaylist() {
+    return context.sharedStorage.get(NAMESPACE + ".playlist");
+  }
+  function savePlaylist(playlist) {
+    context.sharedStorage.set(NAMESPACE + ".playlist", playlist);
+  }
+  function resolveSequence(playlist) {
+    if (playlist.version !== 1) {
+      return `unsupported playlist version ${playlist.version}`;
+    }
+    const sequence = titleSequenceManager.titleSequences.find((s) => s.name === playlist.sequence);
+    if (!sequence) {
+      return `title sequence "${playlist.sequence}" not found`;
+    }
+    const commands = sequence.commands;
+    const parks = sequence.parks;
+    for (const park of playlist.parks) {
+      const command = commands[park.load];
+      if (!command || command.type !== "load" || parks[command.index]?.fileName !== park.fileName) {
+        return `title sequence "${playlist.sequence}" does not match the installed playlist (${park.fileName}); re-run tools/mksequence.py --install`;
+      }
+    }
+    return sequence;
+  }
+
+  // src/builder.ts
+  function buildApi() {
+    return typeof screensaver !== "undefined" && screensaver !== null && typeof screensaver.build === "function" && typeof screensaver.applyBuild === "function" ? screensaver : void 0;
+  }
+  function buildFileName(sequence) {
+    return "build-" + liveFileName(sequence);
+  }
+  function readBuildResult(sequence) {
+    const text = filesApi()?.readFile(buildFileName(sequence));
+    if (!text) {
+      return void 0;
+    }
+    try {
+      const result = JSON.parse(text);
+      return result && result.buildVersion === 1 && result.sequence === sequence ? result : void 0;
+    } catch {
+      return void 0;
+    }
+  }
+  var POLL_MS = 500;
+  var STALE_MS = 5e3;
+  function log(message2) {
+    console.log(`[RCT Screensaver] ${message2}`);
+  }
+  function clock(ms) {
+    const s = Math.max(0, Math.round(ms / 1e3));
+    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+  }
+  function timeOfDay(ms) {
+    const d = new Date(ms);
+    return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  }
+  var Builder = class {
+    constructor(api = buildApi()) {
+      this.api = api;
+      // the build this plugin started
+      this.started = 0;
+      this.lastPoll = 0;
+      // the last build's result (its squares and messages stay shown)
+      this.notes = [];
+      this.builtFrom = 0;
+      // when the build that plays started: edits saved since are not built
+      this.startEdits = {};
+      this.dirtyStamp = "";
+      this.dirtySet = /* @__PURE__ */ new Set();
+    }
+    get available() {
+      return this.api !== void 0 && filesApi() !== void 0;
+    }
+    get running() {
+      return this.sequence !== void 0;
+    }
+    start(sequence) {
+      if (!this.api || this.running) {
+        return;
+      }
+      try {
+        this.api.build(sequence);
+      } catch (e) {
+        this.outcome = { phase: "failed", text: `Build failed: ${message(e)}`, warning: true };
+        this.last = void 0;
+        this.notes = [{ level: "error", text: `The build did not start: ${message(e)}` }];
+        log(`build of "${sequence}" did not start: ${message(e)}`);
+        return;
+      }
+      this.last = this.last ?? readBuildResult(sequence);
+      this.sequence = sequence;
+      this.started = Date.now();
+      this.startEdits = JSON.parse(JSON.stringify(loadEdits()));
+      this.progress = void 0;
+      this.outcome = void 0;
+      this.notes = [];
+      log(`building "${sequence}"`);
+    }
+    cancel() {
+      if (this.api && this.running && this.api.cancelBuild()) {
+        log("build cancelled");
+      }
+    }
+    /** Called on the plugin's update: follows a running build and takes it in when it is done. */
+    update() {
+      if (!this.api || !this.sequence || Date.now() - this.lastPoll < POLL_MS) {
+        return;
+      }
+      this.lastPoll = Date.now();
+      const sequence = this.sequence;
+      const status = this.api.buildStatus;
+      const result = readBuildResult(sequence);
+      const current = result && result.started >= this.started - STALE_MS ? result : void 0;
+      if (status.state === "running") {
+        this.progress = current ?? this.progress;
+        return;
+      }
+      this.sequence = void 0;
+      this.progress = void 0;
+      this.last = current;
+      const took = Date.now() - this.started;
+      if (status.state === "cancelled") {
+        this.outcome = { phase: "idle", text: "Build cancelled" };
+        this.notes = [{ level: "info", text: "Build cancelled; the playlist plays on as it was" }];
+        return;
+      }
+      if (status.state !== "done" || !current?.ok || !current.playlist) {
+        const why = current?.ok === false && current.error ? current.error : status.error || "the generator failed";
+        this.outcome = { phase: "failed", text: `Build failed: ${why}`, warning: true };
+        this.notes = current?.messages?.some((m) => m.level === "error") ? [] : [{ level: "error", text: `Build failed: ${why} (log: screensaver/build.log in the user folder)` }];
+        log(`build of "${sequence}" failed: ${why} (log: screensaver/build.log in the user folder)`);
+        return;
+      }
+      const error = this.onReady ? this.onReady(current) : "nothing to play it";
+      if (error) {
+        this.outcome = { phase: "failed", text: `Built, but not taken in: ${error}`, warning: true };
+        this.notes = [{ level: "error", text: `Built, but not taken in: ${error}` }];
+        log(`build of "${sequence}" not taken in: ${error}`);
+        return;
+      }
+      this.builtFrom = current.started;
+      saveBuiltEdits(this.startEdits);
+      const warnings = current.warnings?.length ?? 0;
+      const at = timeOfDay(current.finished ?? Date.now());
+      this.outcome = {
+        phase: "done",
+        text: `Built at ${at}, now playing${warnings ? `; ${warnings} warning${warnings > 1 ? "s" : ""}` : ""}`
+      };
+      this.notes = [{ level: "ok", text: `Built ${at} in ${clock(took)}, now playing` }];
+      for (const w of current.warnings ?? []) {
+        log(`build warning: ${w}`);
+      }
+      log(`build of "${sequence}" now playing`);
+    }
+    /** The line the editor shows (the controls bar's chip and the pane's header take theirs from it). */
+    get line() {
+      if (!this.available) {
+        return { phase: "unavailable", text: "Building from the game needs the patched engine" };
+      }
+      if (this.running) {
+        const p = this.progress;
+        const name = p?.parkKey && this.nameOf?.(p.parkKey) || p?.parkName;
+        const where = p?.parks ? `Park ${p.park} of ${p.parks}${name ? " \xB7 " + name : ""}` : "Starting";
+        return { phase: "running", text: where };
+      }
+      return this.outcome ?? { phase: "idle", text: "" };
+    }
+    /** The running build's time so far, ms. */
+    get elapsed() {
+      return this.running ? Date.now() - this.started : 0;
+    }
+    /** The running build's park and count, for the controls bar's chip. */
+    get count() {
+      const p = this.progress;
+      return this.running && p?.parks ? { park: p.park ?? 0, parks: p.parks } : void 0;
+    }
+    /** The parks whose edits changed since the game's last build took them in (or since the install). */
+    dirty() {
+      const stamp = `${liveSaveCount()}|${this.builtFrom}`;
+      if (stamp !== this.dirtyStamp) {
+        this.dirtySet = editsChanged(loadEdits(), loadBuiltEdits());
+        this.dirtyStamp = stamp;
+      }
+      return this.dirtySet;
+    }
+    /** A square per park in play order. Between builds: the last build's states (each park "built" when
+     *  there is none yet), in the playing order (a reorder moves them at once), a park with edits since
+     *  marked `stale` (drawn dimmed: it needs a build). While a build runs: the generator's states, a park
+     *  not reached yet keeping its state from before, dimmed only when it needs a build (owner,
+     *  2026-11-11). */
+    get parks() {
+      const dirty = this.dirty();
+      const before = new Map((this.last?.parkStates ?? []).filter((p) => p.key).map((p) => [p.key, p]));
+      const carried = (key, p) => {
+        const old = before.get(key);
+        const base = old && old.state !== "pending" && old.state !== "building" ? old : { key, name: p?.name, state: "built" };
+        return { ...base, stale: dirty.has(key) };
+      };
+      if (this.running) {
+        return (this.progress?.parkStates ?? []).map((p) => p.state === "pending" && p.key ? carried(p.key, p) : p);
+      }
+      const order = this.orderOf?.() ?? [];
+      if (!order.length) {
+        return this.last?.parkStates ?? [];
+      }
+      const shown = new Set(order);
+      return [...order.map((key) => carried(key)), ...(this.last?.parkStates ?? []).filter((p) => p.key && !shown.has(p.key))];
+    }
+    /** The messages of the running build, else of the last one, newest first. */
+    get messages() {
+      const r = this.running ? this.progress : this.last;
+      return [...this.notes, ...[...r?.messages ?? []].reverse()];
+    }
+    /** Edits saved in the game since the playing build started (or since the install). */
+    pendingEdits(installed) {
+      const saved = lastLiveSave();
+      return saved !== void 0 && saved > Math.max(this.builtFrom, installed ?? 0);
+    }
+  };
+  function message(e) {
+    const m = e?.message;
+    return typeof m === "string" ? m : String(e);
+  }
+  var builder = new Builder();
+
   // src/fit.ts
   var TILE = 32;
   var MIN_SEPARATION = 0.25;
@@ -136,178 +548,32 @@
     return result;
   }
 
-  // src/storage.ts
-  var NAMESPACE = "RCTScreensaver";
-  function isPinned(view) {
-    return view.animation !== void 0 && !view.fixed || view.show !== void 0 || view.cue !== void 0;
+  // src/scale.ts
+  var DESIGN_SCREEN = { width: 1920, height: 1080 };
+  var ZOOM_SLACK = 0.25;
+  var MIN_ZOOM2 = -2;
+  var MAX_ZOOM2 = 3;
+  var NO_SCALING = { offset: 0, scale: 1 };
+  function scalingFor(design, window) {
+    if (!design || design.width <= 0 || design.height <= 0 || window.width <= 0 || window.height <= 0) {
+      return NO_SCALING;
+    }
+    const scale = Math.min(window.width / design.width, window.height / design.height);
+    const offset = Math.ceil(Math.log2(1 / scale) - ZOOM_SLACK);
+    return { offset: Object.is(offset, -0) ? 0 : offset, scale };
   }
-  function isCut(view) {
-    return !!view.cue?.cut && typeof view.cue.tick === "number";
-  }
-  function placeCuts(views) {
-    const due = (v) => v.cue.tick / 40 - (v.cue.lead ?? 0);
-    const cuts = views.filter(isCut).sort((a, b) => due(a) - due(b));
-    if (cuts.length === 0) {
+  function scaleViews(views, scaling) {
+    if (scaling.offset === 0) {
       return views;
     }
-    const rest = views.filter((v) => !isCut(v));
-    const starts = [];
-    let t = 0;
-    rest.forEach((v, i) => {
-      if (!isPinned(v)) {
-        starts.push([i, t]);
-        t += v.hold;
-      }
-    });
-    const after = /* @__PURE__ */ new Map();
-    for (const c of cuts) {
-      let k = starts.length > 0 ? starts[0][0] : rest.length - 1;
-      for (const [i, start] of starts) {
-        if (start <= due(c)) {
-          k = i;
-        }
-      }
-      after.set(k, [...after.get(k) ?? [], c]);
-    }
-    return [...rest.flatMap((v, i) => [v, ...after.get(i) ?? []]), ...after.get(-1) ?? []];
+    return views.map((v) => ({ ...v, zoom: Math.min(MAX_ZOOM2, Math.max(MIN_ZOOM2, v.zoom + scaling.offset)) }));
   }
-  function loadPlaylistProps(sequence) {
-    const all = context.sharedStorage.get(NAMESPACE + ".playlistProps", {});
-    return { ...all[sequence] ?? {} };
+  function scaleTolerance(tolerance, scaling) {
+    const factor = Math.min(1, scaling.scale);
+    return (zoom) => tolerance(zoom - scaling.offset) * factor;
   }
-  function savePlaylistProps(sequence, props) {
-    const all = context.sharedStorage.get(NAMESPACE + ".playlistProps", {});
-    all[sequence] = props;
-    context.sharedStorage.set(NAMESPACE + ".playlistProps", all);
-    liveProps[sequence] = props;
-    writeLive();
-  }
-  var CHECKPOINTS_PER_PARK = 10;
-  function loadCheckpoints() {
-    return context.sharedStorage.get(NAMESPACE + ".checkpoints", {});
-  }
-  function saveCheckpoints(all) {
-    context.sharedStorage.set(NAMESPACE + ".checkpoints", all);
-  }
-  var TITLES = ["overview", "on", "off"];
-  function titlesOf(settings) {
-    return settings.titlesOverride ?? settings.titles;
-  }
-  var DEFAULT_SETTINGS = {
-    autostart: true,
-    shuffle: false,
-    debug: false,
-    speed: 1,
-    fadeMs: 600,
-    panTolerance: 500,
-    panToleranceStep: 100,
-    panChanges: "end",
-    inertia: false,
-    changeHold: 2,
-    arriveHold: 1,
-    returnHold: 2,
-    cameraLog: false,
-    scaleToWindow: true,
-    window: "borderless",
-    titleMusic: "keep",
-    titles: "overview",
-    captionPlace: "topLeft",
-    captionFrame: "gold",
-    captionBand: "green",
-    lightEffects: false,
-    weatherGloom: false,
-    weather: false,
-    timeOfDay: "day",
-    masterVolume: null,
-    soundVolume: null,
-    musicVolume: null,
-    drawingEngine: null,
-    multiThreading: null,
-    editorPinned: true,
-    bench: false,
-    profilerExport: ""
-  };
-  function loadSettings() {
-    const stored = context.sharedStorage.get(NAMESPACE + ".settings", {});
-    return { ...DEFAULT_SETTINGS, ...stored };
-  }
-  function saveSettings(settings) {
-    const { titlesOverride: _, ...saved } = settings;
-    context.sharedStorage.set(NAMESPACE + ".settings", saved);
-  }
-  function loadEdits() {
-    return context.sharedStorage.get(NAMESPACE + ".edits", {});
-  }
-  function saveEdits(edits) {
-    context.sharedStorage.set(NAMESPACE + ".edits", edits);
-    liveEdits = edits;
-    writeLive();
-  }
-  function filesApi() {
-    return typeof screensaver !== "undefined" && screensaver !== null && typeof screensaver.writeFile === "function" ? screensaver : void 0;
-  }
-  function liveFileName(sequence) {
-    const base = sequence.replace(/[^A-Za-z0-9._-]/g, "_").replace(/^\.+/, "").slice(0, 100) || "playlist";
-    return base + ".json";
-  }
-  var liveEdits;
-  var liveProps = {};
-  function writeLive() {
-    const api = filesApi();
-    const playlist = api ? loadPlaylist() : void 0;
-    if (!api || !playlist) {
-      return false;
-    }
-    const all = liveEdits ?? loadEdits();
-    const keys = new Set(playlist.parks.map((p) => p.key ?? p.fileName));
-    const edits = {};
-    for (const key of Object.keys(all)) {
-      if (keys.has(key)) {
-        edits[key] = all[key];
-      }
-    }
-    const props = liveProps[playlist.sequence] ?? loadPlaylistProps(playlist.sequence);
-    const file = {
-      version: 1,
-      sequence: playlist.sequence,
-      source: playlist.source,
-      installed: playlist.installed,
-      saved: Date.now(),
-      edits,
-      props
-    };
-    const ok = api.writeFile(liveFileName(playlist.sequence), JSON.stringify(file, null, 1));
-    if (!ok) {
-      console.log(`[rct-screensaver] could not write ${liveFileName(playlist.sequence)} in ${api.filesFolder}`);
-    }
-    return ok;
-  }
-  function loadVisits() {
-    return context.sharedStorage.get(NAMESPACE + ".visits", {});
-  }
-  function saveVisits(visits) {
-    context.sharedStorage.set(NAMESPACE + ".visits", visits);
-  }
-  function loadPlaylist() {
-    return context.sharedStorage.get(NAMESPACE + ".playlist");
-  }
-  function resolveSequence(playlist) {
-    if (playlist.version !== 1) {
-      return `unsupported playlist version ${playlist.version}`;
-    }
-    const sequence = titleSequenceManager.titleSequences.find((s) => s.name === playlist.sequence);
-    if (!sequence) {
-      return `title sequence "${playlist.sequence}" not found`;
-    }
-    const commands = sequence.commands;
-    const parks = sequence.parks;
-    for (const park of playlist.parks) {
-      const command = commands[park.load];
-      if (!command || command.type !== "load" || parks[command.index]?.fileName !== park.fileName) {
-        return `title sequence "${playlist.sequence}" does not match the installed playlist (${park.fileName}); re-run tools/mksequence.py --install`;
-      }
-    }
-    return sequence;
+  function screenOf(pair) {
+    return pair && pair.length === 2 ? { width: pair[0], height: pair[1] } : void 0;
   }
 
   // src/editor.ts
@@ -317,8 +583,8 @@
   var TILE2 = 32;
   var PAN_STEP = 64;
   var PAN_FAST = 4;
-  var MIN_ZOOM2 = -2;
-  var MAX_ZOOM2 = 3;
+  var MIN_ZOOM3 = -2;
+  var MAX_ZOOM3 = 3;
   var MIN_HOLD = 1;
   var MAX_HOLD = 600;
   var DEFAULT_HOLD = 10;
@@ -330,7 +596,9 @@
   var EDITOR_COLUMNS = ["#", "Tile", "Angle", "Zoom", "Hold", "Pan", "Set by"];
   var EVENT_COLUMNS = ["#", "Kind", "Name", "Trigger", "Hold", "Plays"];
   var TICKS_PER_SECOND = 40;
-  function clock(ticks) {
+  var CLIP_FORMAT = "rct-screensaver-views";
+  var CLIP_NOTE_MS = 2500;
+  function clock2(ticks) {
     const s = Math.max(0, Math.round(ticks / TICKS_PER_SECOND));
     return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
   }
@@ -581,7 +849,7 @@
     }
     zoom(delta) {
       this.stopPreview();
-      this.camera.zoom = Math.min(MAX_ZOOM2, Math.max(MIN_ZOOM2, this.camera.zoom + delta));
+      this.camera.zoom = Math.min(MAX_ZOOM3, Math.max(MIN_ZOOM3, this.camera.zoom + delta));
       this.applyCamera();
     }
     /** Play on or off: the park's views play with their pans while the editor stays open. */
@@ -646,7 +914,7 @@
       this.map = !this.map;
       if (this.map) {
         const view = this.player.currentViews[this.selected];
-        this.camera.zoom = Math.min(MAX_ZOOM2, (view?.zoom ?? this.camera.zoom) + MAP_OUT);
+        this.camera.zoom = Math.min(MAX_ZOOM3, (view?.zoom ?? this.camera.zoom) + MAP_OUT);
         this.mapPark = this.player.parkIndex;
         this.applyCamera();
       } else if (this.selectedIndex >= 0) {
@@ -705,7 +973,7 @@
     }
     /** Changes a view's zoom: a box's corner dragged on the map. */
     zoomView(index, zoom) {
-      this.mapEdit(index, () => ({ zoom: Math.min(MAX_ZOOM2, Math.max(MIN_ZOOM2, Math.round(zoom))) }));
+      this.mapEdit(index, () => ({ zoom: Math.min(MAX_ZOOM3, Math.max(MIN_ZOOM3, Math.round(zoom))) }));
     }
     mapEdit(index, edit) {
       const target = this.player.currentViews[index];
@@ -737,7 +1005,7 @@
           y: round2((y - TILE2 / 2) / TILE2),
           z: Math.round(z),
           rotation: this.camera.rotation,
-          zoom: near?.zoom ?? Math.max(MIN_ZOOM2, this.camera.zoom - MAP_OUT),
+          zoom: near?.zoom ?? Math.max(MIN_ZOOM3, this.camera.zoom - MAP_OUT),
           hold: near?.hold ?? DEFAULT_HOLD,
           manual: true
         });
@@ -1003,6 +1271,68 @@
         this.refresh();
       });
     }
+    /** Copy and Paste views work: the patched engine's clipboard (patch 0016). */
+    get canClip() {
+      return filesApi() !== void 0;
+    }
+    /** What the last Copy or Paste did, for a moment (the panel shows it on the button). */
+    get clipNote() {
+      return this.clip && Date.now() - this.clip.at < CLIP_NOTE_MS ? this.clip : void 0;
+    }
+    noteClip(id, text, warning = false) {
+      this.clip = { id, text, warning, at: Date.now() };
+      this.refresh();
+    }
+    /** Copies the park's views to the clipboard as text (the settings page's format; event views stay,
+     *  as they belong to the park: its clock, trains and shows). */
+    copyViews() {
+      const api = filesApi();
+      if (!api || this.player.isLoading) {
+        return;
+      }
+      const views = this.player.currentViews.filter((v) => !this.isEvent(v)).map((v) => {
+        const { origin: _origin, ...rest } = v;
+        return rest;
+      });
+      const name = this.player.parkNames[this.player.parkIndex];
+      api.clipboard = JSON.stringify({
+        format: CLIP_FORMAT,
+        version: 1,
+        park: name,
+        key: this.player.parkKey,
+        screen: [ui.width, ui.height],
+        views
+      }, null, 1);
+      this.noteClip("copy", `Copied ${views.length}`);
+    }
+    /** Replaces the park's views with views from the clipboard (Copy's text, from here or the settings
+     *  page, or a bare view list): zooms scaled from the window they were set in, the park's own event
+     *  views kept where they were. One change, so Undo returns. */
+    pasteViews() {
+      const api = filesApi();
+      if (!api || this.player.isLoading || !this.player.canEdit) {
+        return;
+      }
+      const pasted = parseClip(api.clipboard);
+      if (typeof pasted === "string") {
+        this.noteClip("paste", pasted, true);
+        return;
+      }
+      const scaling = scalingFor(pasted.screen, { width: ui.width, height: ui.height });
+      const views = scaleViews(pasted.views, scaling);
+      this.change(() => {
+        const current = this.views();
+        const result = views.map((v) => ({ ...v }));
+        current.forEach((v, i) => {
+          if (this.isEvent(v)) {
+            result.splice(Math.min(i, result.length), 0, v);
+          }
+        });
+        const show = result.findIndex((v) => !this.isEvent(v));
+        this.save(result, Math.max(0, show), true);
+      });
+      this.noteClip("paste", `Pasted ${views.length}`);
+    }
     /** The panes stay shown (the pin); off, they hide with the cursor like the controls bar. */
     get pinned() {
       return this.player.liveSettings.editorPinned !== false;
@@ -1076,7 +1406,7 @@
         this.selected = this.player.viewIndex;
         if (this.mapPark !== this.player.parkIndex && view) {
           this.cameraFromView(view);
-          this.camera.zoom = Math.min(MAX_ZOOM2, view.zoom + MAP_OUT);
+          this.camera.zoom = Math.min(MAX_ZOOM3, view.zoom + MAP_OUT);
           this.mapPark = this.player.parkIndex;
         }
         this.applyCamera();
@@ -1187,14 +1517,14 @@
         let plays = after;
         if (cue && cue.tick !== void 0) {
           kind = "clock";
-          trigger = `at ${clock(cue.tick)}` + (cue.every ? `, every ${clock(cue.every)}` : "");
+          trigger = `at ${clock2(cue.tick)}` + (cue.every ? `, every ${clock2(cue.every)}` : "");
           if (cue.cut) {
             const start = cue.tick - (cue.lead ?? 0) * TICKS_PER_SECOND;
             let next = start;
             if (cue.every && next < now) {
               next += Math.ceil((now - next) / cue.every) * cue.every;
             }
-            plays = this.player.cutPlayed(i) && !cue.every ? "played" : next <= now ? "now" : `in ${clock(next - now)}`;
+            plays = this.player.cutPlayed(i) && !cue.every ? "played" : next <= now ? "now" : `in ${clock2(next - now)}`;
           }
         } else if (cue) {
           kind = "train";
@@ -1435,6 +1765,36 @@
       w.findWidget("status").text = (status.warning ? "{RED}" : "") + status.text;
     }
   };
+  function parseClip(text) {
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      return "No views";
+    }
+    const obj = data;
+    const list = Array.isArray(data) ? data : obj?.views;
+    if (!Array.isArray(list) || !list.length || !list.every((v) => v && Number.isFinite(v.x) && Number.isFinite(v.y))) {
+      return "No views";
+    }
+    const views = list.filter((v) => !isPinned(v) && v.animation === void 0).map((v) => {
+      const { origin: _origin, ...rest } = v;
+      return {
+        ...rest,
+        x: +v.x,
+        y: +v.y,
+        z: Math.max(0, Math.min(MAX_Z, Math.round(+v.z || 0))),
+        rotation: Math.round(+v.rotation || 0) & 3,
+        zoom: Math.max(MIN_ZOOM3, Math.min(MAX_ZOOM3, Math.round(+v.zoom || 0))),
+        hold: +v.hold > 0 ? Math.min(MAX_HOLD, Math.max(MIN_HOLD, Math.round(+v.hold))) : DEFAULT_HOLD,
+        manual: true
+      };
+    });
+    if (!views.length) {
+      return "Only events";
+    }
+    return { views, screen: Array.isArray(data) ? void 0 : screenOf(obj?.screen) };
+  }
 
   // src/mode.ts
   function screensaverApi() {
@@ -1531,6 +1891,22 @@
     // key hints, section labels, times
     textGood: "#8fd6a0",
     // the editor's "edited · saved in the game"
+    // The build pane (owner, 2026-11-11): its parks' squares, message marks and header states
+    buildFace: "#3d7a50d0",
+    // Build and play
+    buildDone: "#3d9a5c",
+    // a park built
+    buildCurrent: "#6fcf8a",
+    // the park being built
+    buildCrawl: "#ffffff59",
+    // its stripes crawling across it
+    buildWarn: "#c8962a",
+    // built with warnings
+    buildFail: "#b8403a",
+    // failed, or its file is missing
+    buildInfo: "#4a6a8a",
+    pending: "#ffb000",
+    // edits not built yet
     dragLine: "#ff6a1a",
     // where a dragged row goes (the mockups' orange)
     rowDimmed: "#00000099",
@@ -1651,8 +2027,17 @@
     stepValueBox: 56,
     holdStep: 0.5,
     // seconds per - or + of the Playlist timing holds
-    holdMax: 10
+    holdMax: 10,
+    // The build pane, bottom right
+    buildButton: 40,
+    buildBottom: 72,
+    // the pane's distance from the window's bottom: over the mode's exit button (64 tall)
+    square: 22,
+    // a park's square of the build's progress (fewer than squaresMax parks)
+    squaresMax: 30
+    // above, a bar with the count
   };
+  var CRAWL = { period: 12, stripe: 6, row: 2, step: 2, fps: 10 };
   var TIMING = {
     hideAfter: 2500,
     // without mouse movement (never while the mouse is over the bar)
@@ -1930,7 +2315,7 @@
   }
 
   // src/pan.ts
-  var MAX_ZOOM3 = 3;
+  var MAX_ZOOM4 = 3;
   var MIN_PAN_MS = 500;
   function panTolerance(zoom, base = 500, step = 100) {
     return Math.max(step, base - step * (zoom + 2));
@@ -1980,7 +2365,7 @@
       const b = toScreen(to.x, to.y, to.z, rotation);
       const distance = Math.hypot(b.x - a.x, b.y - a.y);
       const speedAt = (z) => distance / 2 ** z * 1e3 / Math.max(1, moveMs);
-      const widest = dz === 0 ? Math.min(MAX_ZOOM3, from.zoom + 1) : Math.max(from.zoom, to.zoom);
+      const widest = dz === 0 ? Math.min(MAX_ZOOM4, from.zoom + 1) : Math.max(from.zoom, to.zoom);
       while (zoom < widest && speedAt(zoom) > tolerance(zoom)) {
         zoom++;
       }
@@ -2040,34 +2425,6 @@
     return t < 0.5 ? 4 * t * t * t : 1 - 4 * (1 - t) * (1 - t) * (1 - t);
   }
 
-  // src/scale.ts
-  var DESIGN_SCREEN = { width: 1920, height: 1080 };
-  var ZOOM_SLACK = 0.25;
-  var MIN_ZOOM3 = -2;
-  var MAX_ZOOM4 = 3;
-  var NO_SCALING = { offset: 0, scale: 1 };
-  function scalingFor(design, window) {
-    if (!design || design.width <= 0 || design.height <= 0 || window.width <= 0 || window.height <= 0) {
-      return NO_SCALING;
-    }
-    const scale = Math.min(window.width / design.width, window.height / design.height);
-    const offset = Math.ceil(Math.log2(1 / scale) - ZOOM_SLACK);
-    return { offset: Object.is(offset, -0) ? 0 : offset, scale };
-  }
-  function scaleViews(views, scaling) {
-    if (scaling.offset === 0) {
-      return views;
-    }
-    return views.map((v) => ({ ...v, zoom: Math.min(MAX_ZOOM4, Math.max(MIN_ZOOM3, v.zoom + scaling.offset)) }));
-  }
-  function scaleTolerance(tolerance, scaling) {
-    const factor = Math.min(1, scaling.scale);
-    return (zoom) => tolerance(zoom - scaling.offset) * factor;
-  }
-  function screenOf(pair) {
-    return pair && pair.length === 2 ? { width: pair[0], height: pair[1] } : void 0;
-  }
-
   // src/player.ts
   var MIN_SPEED = 1;
   var MAX_SPEED = 4;
@@ -2087,8 +2444,8 @@
   var CUT_STAY_S = 4;
   var LATE_MIN_TICKS = 160;
   var CHAIN_S = 4;
-  function log(message) {
-    console.log(`[RCT Screensaver] ${message}`);
+  function log2(message2) {
+    console.log(`[RCT Screensaver] ${message2}`);
   }
   function range2(n) {
     return Array.from({ length: n }, (_, i) => i);
@@ -2204,7 +2561,7 @@
     }
     start() {
       if (this.playlist.parks.length === 0) {
-        log("playlist has no parks");
+        log2("playlist has no parks");
         return;
       }
       this.running = true;
@@ -2216,7 +2573,7 @@
       if (!this.sequence.isPlaying) {
         this.sequence.play();
       }
-      log(`playing "${this.playlist.sequence}" (${this.playlist.parks.length} parks)`);
+      log2(`playing "${this.playlist.sequence}" (${this.playlist.parks.length} parks)`);
       this.enterPark(this.settings.shuffle ? context.getRandom(0, this.parkOrder.length) : 0, false);
     }
     stop() {
@@ -2226,6 +2583,28 @@
       this.cover.close();
       this.releaseSwitch();
       this.clearPan();
+    }
+    /** Plays a new build of the playlist (the engine has put its sequence in place and reloaded the
+     *  script): the park on screen is entered again from the new sequence (it dips through black as a
+     *  park change does), at its place in the new order, or the first park when the build dropped it. */
+    swapPlaylist(playlist) {
+      const keyOf = (p) => p.key ?? p.fileName;
+      const current = this.running && this.parkOrder.length ? keyOf(this.currentPark()) : void 0;
+      this.playlist = playlist;
+      if (!this.running) {
+        return;
+      }
+      this.parkOrder = this.orderFromProps();
+      this.unplayed.clear();
+      this.history = [];
+      this.upNext = void 0;
+      this.loadingPark = false;
+      this.dipping = false;
+      const at = this.parkOrder.findIndex((i) => keyOf(playlist.parks[i]) === current);
+      log2(`playing the new build of "${playlist.sequence}" (${playlist.parks.length} parks)`);
+      if (this.parkOrder.length) {
+        this.enterPark(Math.max(0, at), false);
+      }
     }
     /** Stops, and hands the title screen back to the user's own title sequence. */
     release() {
@@ -2292,7 +2671,7 @@
       }
       this.cover.update();
       if (!this.sequence.isPlaying) {
-        log("title sequence stopped playing; restarting");
+        log2("title sequence stopped playing; restarting");
         this.sequence.play();
         this.enterPark(this.parkPos, false);
         return;
@@ -2300,7 +2679,7 @@
       if (this.loadingPark) {
         const timeout = backgroundLoading(this.sequence) ? BACKGROUND_LOAD_TIMEOUT_MS : LOAD_TIMEOUT_MS;
         if (!this.parkIsLoaded() && (Date.now() - this.seeked > timeout || this.loadSkipped())) {
-          log(`"${this.currentPark().name}" did not load; skipping it`);
+          log2(`"${this.currentPark().name}" did not load; skipping it`);
           this.skipFailedPark();
           return;
         }
@@ -2418,7 +2797,7 @@
       } else {
         this.viewStarted = Date.now();
       }
-      log(this.holding ? "holding view" : "released view");
+      log2(this.holding ? "holding view" : "released view");
     }
     toggleShuffle() {
       this.settings.shuffle = !this.settings.shuffle;
@@ -2426,7 +2805,7 @@
       this.unplayed.clear();
       this.history = [];
       this.pickNext();
-      log(`shuffle ${this.settings.shuffle ? "on" : "off"}`);
+      log2(`shuffle ${this.settings.shuffle ? "on" : "off"}`);
     }
     changeSpeed(delta) {
       const speed = Math.min(MAX_SPEED, Math.max(MIN_SPEED, this.settings.speed + delta));
@@ -2435,7 +2814,7 @@
         saveSettings(this.settings);
       }
       this.applySpeed();
-      log(`speed ${speed}`);
+      log2(`speed ${speed}`);
     }
     setEditing(on) {
       this.editing = on;
@@ -2490,6 +2869,14 @@
     }
     get parkNames() {
       return this.playlist.parks.map((p) => p.name);
+    }
+    /** The parks' keys in play order. */
+    get playOrderKeys() {
+      return this.parkOrder.map((i) => this.playlist.parks[i].key ?? this.playlist.parks[i].fileName);
+    }
+    /** The playlist index of the park with this key, or -1. */
+    parkIndexOf(key) {
+      return this.playlist.parks.findIndex((p) => (p.key ?? p.fileName) === key);
     }
     /** Playlist indices of the parks in play order (the view editor's Playlist order). */
     get playOrder() {
@@ -2785,7 +3172,7 @@
      * values, read by tools/cameralog.py. */
     camLog(event, values) {
       if (this.settings.cameraLog) {
-        log(`camera ${Date.now() - this.camEpoch} ${event} ${values}`);
+        log2(`camera ${Date.now() - this.camEpoch} ${event} ${values}`);
       }
       perfMark(`${event} ${values}`);
     }
@@ -3181,7 +3568,7 @@
       }
       context.executeAction("gamesetspeed", { speed }, (result) => {
         if (result.error) {
-          log(`could not set speed ${speed}: ${result.errorMessage ?? result.error}`);
+          log2(`could not set speed ${speed}: ${result.errorMessage ?? result.error}`);
         }
       });
     }
@@ -3217,7 +3604,7 @@
       if (view?.show?.name !== name) {
         return;
       }
-      log(`show "${name}" finished`);
+      log2(`show "${name}" finished`);
       if (view.path && this.pathStarted && this.pathTicks < pathArrival(view)) {
         this.showOver = true;
         return;
@@ -3311,7 +3698,7 @@
         this.showView(false, "reenter");
         return;
       }
-      log(`park ${pos + 1}/${this.parkOrder.length}: ${park.name}`);
+      log2(`park ${pos + 1}/${this.parkOrder.length}: ${park.name}`);
       perfMark(`park ${pos + 1}/${this.parkOrder.length} ${park.name}`);
       this.loadingPark = true;
       if (!this.soundsFaded) {
@@ -3330,7 +3717,7 @@
       try {
         this.sequence.seek(park.load);
       } catch (e) {
-        log(`failed to load "${park.name}": ${e}`);
+        log2(`failed to load "${park.name}": ${e}`);
         this.skipFailedPark();
       }
     }
@@ -3403,7 +3790,7 @@
         const name = view.show.name;
         context.executeAction(view.show.action, { show: name }, (result) => {
           if (result.error) {
-            log(`show "${name}" not started: ${result.errorMessage ?? result.error}`);
+            log2(`show "${name}" not started: ${result.errorMessage ?? result.error}`);
           }
         });
       }
@@ -4221,6 +4608,24 @@
         const alt = id === "titles" && titlesOf(this.settings) === "on" || id === "time" && this.settings.timeOfDay === "cycle";
         const face = id === "speed" ? speedFace(this.settings.speed, hover === id) : void 0;
         button(scene, id, this.boxes.get(id), { ...state(id, this.isOn(id, held) || alt), alt, face }, content, overlay);
+      }
+      if (builder.running && !this.editorHooks?.editorOpen()) {
+        const count = builder.count;
+        const text = count ? `Building ${count.park}/${count.parks}` : "Building";
+        const m = measure(overlay, text, 13, true);
+        const chip = { x: this.strip.x + this.strip.width - Math.ceil(m.width) - 16, y: this.strip.y - 26, width: Math.ceil(m.width) + 16, height: 22 };
+        scene.set("build.chip", { type: "rect", ...chip, fill: THEME.faceOn, z: Z.face });
+        scene.set("build.chipt", {
+          type: "text",
+          text,
+          size: 13,
+          bold: true,
+          colour: THEME.text,
+          shadow: THEME.textShadow,
+          x: chip.x + 8,
+          y: chip.y + (chip.height - m.height) / 2,
+          z: Z.icon
+        });
       }
       const quit = this.boxes.get("quit");
       button(scene, "quit", quit, state("quit"), {}, overlay);
@@ -5166,7 +5571,7 @@
       this.clockShown = -1;
       // the park clock's second the event list last showed
       this.loadingShown = false;
-      // the restore points' rows
+      // the build's messages
       this.views = new Scroll();
       this.parks = new Scroll();
       this.events = new Scroll();
@@ -5174,6 +5579,14 @@
       this.followed = -1;
       // the restore point highlighted
       this.propsOpen = true;
+      // the Playlist properties unfolded
+      this.clipShown = false;
+      // a Copy/Paste note is on its button (it goes after a moment)
+      this.buildShown = "";
+      // the build pane unfolded by hand (undefined: when there is room)
+      this.boxBottom = 0;
+      // where the top-right box ends, for the build pane under it
+      this.messages = new Scroll();
       // the top-right box unfolded by hand (undefined: by the window's width)
       this.lastMove = 0;
       // the pin off: the panes hide this long after the mouse last moved
@@ -5213,7 +5626,8 @@
       const e = this.editor;
       e?.syncMap();
       const second = e && this.eventsRect && !this.hidden ? Math.floor(e.playback.parkClock / 40) : -1;
-      if (second >= 0 && second !== this.clockShown && !this.busy || e && e.playback.isLoading !== this.loadingShown) {
+      const build = e && !this.hidden ? this.buildSignature(e) : this.buildShown;
+      if (second >= 0 && second !== this.clockShown && !this.busy || e && e.playback.isLoading !== this.loadingShown || build !== this.buildShown && !this.busy || !!e?.clipNote !== this.clipShown && !this.busy) {
         this.render();
       }
       if (!e || e.pinned || this.hidden || this.busy || this.over(this.mouse.x, this.mouse.y)) {
@@ -5272,6 +5686,8 @@
           this.events.by(step, ed.eventIndices().length, EDITOR.eventRows);
         } else if (this.pointsRect && contains(this.pointsRect, this.mouse.x, this.mouse.y)) {
           this.points.by(step, ed.restorePoints().length, EDITOR.boxRows);
+        } else if (this.messagesRect && contains(this.messagesRect, this.mouse.x, this.mouse.y)) {
+          this.messages.by(step, builder.messages.length, EDITOR.boxRows);
         }
       }
       this.render();
@@ -5329,14 +5745,14 @@
       } else if (hit?.endsWith(".thumb")) {
         const which = hit.slice(0, -6);
         const scroll = this.scrollOf(which);
-        const count = which === "parks" ? () => ed.parkNames.length : which === "points" ? () => ed.restorePoints().length : which === "events" ? () => ed.eventIndices().length : () => ed.routeIndices().length;
-        const visible = which === "parks" ? this.parkRows() : which === "points" ? EDITOR.boxRows : which === "events" ? EDITOR.eventRows : EDITOR.visibleRows;
+        const count = which === "parks" ? () => ed.parkNames.length : which === "points" ? () => ed.restorePoints().length : which === "messages" ? () => builder.messages.length : which === "events" ? () => ed.eventIndices().length : () => ed.routeIndices().length;
+        const visible = which === "parks" ? this.parkRows() : which === "points" || which === "messages" ? EDITOR.boxRows : which === "events" ? EDITOR.eventRows : EDITOR.visibleRows;
         this.thumbDrag = { scroll, y0: this.mouse.y, first0: scroll.first, count, visible };
       } else if (hit?.endsWith(".track")) {
         const which = hit.slice(0, -6);
         const scroll = this.scrollOf(which);
-        const page = which === "parks" ? this.parkRows() : which === "points" ? 3 : which === "events" ? EDITOR.eventRows : EDITOR.visibleRows;
-        const count = which === "parks" ? ed.parkNames.length : which === "points" ? ed.restorePoints().length : which === "events" ? ed.eventIndices().length : ed.routeIndices().length;
+        const page = which === "parks" ? this.parkRows() : which === "points" || which === "messages" ? 3 : which === "events" ? EDITOR.eventRows : EDITOR.visibleRows;
+        const count = which === "parks" ? ed.parkNames.length : which === "points" ? ed.restorePoints().length : which === "messages" ? builder.messages.length : which === "events" ? ed.eventIndices().length : ed.routeIndices().length;
         scroll.by(this.mouse.y < (scroll.thumb?.y ?? 0) ? -page : page, count, page);
       }
       return true;
@@ -5376,7 +5792,7 @@
       return down !== void 0;
     }
     scrollOf(which) {
-      return which === "parks" ? this.parks : which === "points" ? this.points : which === "events" ? this.events : this.views;
+      return which === "parks" ? this.parks : which === "points" ? this.points : which === "messages" ? this.messages : which === "events" ? this.events : this.views;
     }
     /** Where a dragged row lands: the gap nearest the mouse, as an index after the row leaves its place.
      *  A route view lands among the route views: the event views listed between them stay put. */
@@ -5473,6 +5889,14 @@
         this.goToPark(Number(id.slice(5)));
         return;
       }
+      if (id.startsWith("msg.") || id.startsWith("sq.")) {
+        const key = id.startsWith("msg.") ? builder.messages[Number(id.slice(4))]?.park : builder.parks[Number(id.slice(3))]?.key;
+        const index = key ? e.playback.parkIndexOf(key) : -1;
+        if (index >= 0 && index !== e.parkIndex) {
+          e.goToPark(index);
+        }
+        return;
+      }
       if (id.startsWith("point.")) {
         this.picked = e.restorePoints()[Number(id.slice(6))]?.id;
         return;
@@ -5566,20 +5990,43 @@
         case "restore":
           if (this.picked) e.restoreTo(this.picked);
           break;
+        case "copy":
+          e.copyViews();
+          break;
+        case "paste":
+          e.pasteViews();
+          break;
         case "boxHead":
           this.boxOpen = this.boxFolded();
           break;
         case "propsHead":
           this.propsOpen = !this.propsOpen;
           break;
-        case "save":
-          e.playback.savePlaylistProps();
+        case "buildHead":
+          this.buildOpen = this.buildFolded();
+          break;
+        case "build":
+          this.toggleBuild();
           break;
       }
     }
+    /** Build and play, or Cancel build (also Ctrl+B). */
+    toggleBuild() {
+      const e = this.editor;
+      if (builder.running) {
+        builder.cancel();
+      } else if (e && builder.available && builder.pendingEdits(e.playback.installedAt)) {
+        e.playback.savePlaylistProps();
+        this.messages.first = 0;
+        builder.start(e.playback.sequenceName);
+      }
+      this.render();
+    }
+    /** A Playlist property changed: in force at once and saved, like the views (owner, 2026-11-11). */
     setProp(key, value) {
       const p = this.editor.playback;
       p.setPlaylistProp(key, value);
+      p.savePlaylistProps();
       if (key === "titleMusic") {
         this.mode.configure(modeSettings(p.liveSettings));
       }
@@ -5621,6 +6068,7 @@
       this.viewsPane(e, scene);
       this.toolbox(e, scene);
       this.topRight(e, scene);
+      this.buildPane(e, scene);
       const hover = this.hit();
       const tip = hover && !this.busy ? this.tips.get(hover) : void 0;
       if (tip) {
@@ -6104,6 +6552,7 @@
         const frame2 = { x: x0 - s.pad, y: top, width, height: y - top + s.pad - 2 };
         this.frames.push(frame2);
         backing(scene, "box", frame2, THEME.editorBacking);
+        this.boxBottom = frame2.y + frame2.height;
         return;
       }
       const points = e.restorePoints();
@@ -6150,8 +6599,34 @@
         !editable || !this.picked
       );
       y += s.boxButton + 4;
-      btn("copy", "copy", "Copy views", x0, halfW, "Copy views (coming later)", true);
-      btn("paste", "paste", "Paste views", x0 + inner - halfW, halfW, "Paste views (coming later)", true);
+      const note = e.clipNote;
+      this.clipShown = !!note;
+      const clipText = (id, text) => note?.id === id ? note.text : text;
+      const noClip = "Needs the patched engine (its clipboard)";
+      btn(
+        "copy",
+        "copy",
+        clipText("copy", "Copy views"),
+        x0,
+        halfW,
+        e.canClip ? "Copy this park's views as text, for another park or the settings page (Ctrl+C)" : noClip,
+        !e.canClip || e.playback.isLoading
+      );
+      btn(
+        "paste",
+        "paste",
+        clipText("paste", "Paste views"),
+        x0 + inner - halfW,
+        halfW,
+        e.canClip ? "Replace this park's views with copied ones; its event views stay (Ctrl+V)" : noClip,
+        !e.canClip || !editable
+      );
+      if (note) {
+        const t = scene.get(`${note.id}.text`);
+        if (t) {
+          scene.set(`${note.id}.text`, { ...t, colour: note.warning ? THEME.warning : THEME.textGood });
+        }
+      }
       y += s.boxButton + 10;
       const ph = this.place("propsHead", { x: x0, y, width: inner, height: s.propHeader }, this.propsOpen ? "Fold" : "Unfold");
       scene.set("propsHead", { type: "rect", ...ph, fill: this.hit() === "propsHead" ? THEME.faceHover : "#00000000", z: Z.face });
@@ -6169,15 +6644,217 @@
       if (this.propsOpen) {
         y = this.properties(e, scene, x0, y, inner);
       }
-      const third = Math.floor((inner - 8) / 3);
-      const unsaved = e.playback.playlistPropsUnsaved;
-      btn("save", "save", "Save", x0, third, unsaved ? "Save (written to the playlist at install)" : "Nothing to save", !unsaved);
-      btn("import", "import", "Import", x0 + third + 4, third, "Import playlist (coming later)", true);
-      btn("export", "export", "Export", x0 + inner - third, third, "Export playlist (coming later)", true);
-      y += s.boxButton;
-      const frame = { x: x0 - s.pad, y: top, width, height: y - top + s.pad };
+      const frame = { x: x0 - s.pad, y: top, width, height: y - top + s.pad - 6 };
       this.frames.push(frame);
       backing(scene, "box", frame, THEME.editorBacking);
+      this.boxBottom = frame.y + frame.height;
+    }
+    /** The build pane's state, to redraw it when it changes. */
+    buildSignature(e) {
+      const line = builder.line;
+      return [
+        line.phase,
+        line.text,
+        builder.running ? Math.floor(builder.elapsed / 1e3) : "",
+        builder.parks.map((p) => p.state + (p.warnings ?? 0) + (p.stale ? "*" : "")).join(","),
+        builder.messages.length,
+        builder.pendingEdits(e.playback.installedAt),
+        this.crawlPhase()
+      ].join("|");
+    }
+    /** The step of the building square's crawling stripes (redrawn at CRAWL.fps while a park builds). */
+    crawlPhase() {
+      return builder.running && builder.parks.some((p) => p.state === "building") ? Math.floor(this.now() * CRAWL.fps / 1e3) % (CRAWL.period / CRAWL.step) : -1;
+    }
+    /** Diagonal stripes crawling across a rect (rows of rects, as the overlay draws no clipped shapes). */
+    crawl(scene, id, r) {
+      const phase = Math.max(0, this.crawlPhase()) * CRAWL.step;
+      let n = 0;
+      for (let row = 0; row < r.height; row += CRAWL.row) {
+        const h = Math.min(CRAWL.row, r.height - row);
+        const shift = (phase - row) % CRAWL.period;
+        for (let x = shift - CRAWL.period; x < r.width; x += CRAWL.period) {
+          const a = Math.max(0, x), b = Math.min(r.width, x + CRAWL.stripe);
+          if (b > a) {
+            scene.set(`${id}.${n++}`, { type: "rect", x: r.x + a, y: r.y + row, width: b - a, height: h, fill: THEME.buildCrawl, z: Z.face + 1 });
+          }
+        }
+      }
+    }
+    /** The build pane shows only its header: by hand, else when it would run into the top-right box. */
+    buildFolded() {
+      if (this.buildOpen !== void 0) {
+        return !this.buildOpen;
+      }
+      return ui.height - EDITOR.buildBottom - this.buildHeight(false) < this.boxBottom + EDITOR.gap * 2;
+    }
+    buildHeight(folded) {
+      const s = EDITOR;
+      const head = s.propHeader;
+      if (folded) {
+        return s.pad + head + s.pad;
+      }
+      return s.pad + head + 6 + 18 + 4 + s.square + 8 + s.buildButton + 10 + s.labelHeight + 3 + Math.round(s.boxRow * s.boxRows) + 8 + s.boxButton + s.pad;
+    }
+    /** The bottom-right pane: building the playlist from the game (builder.ts; patched engine). */
+    buildPane(e, scene) {
+      const s = EDITOR;
+      const overlay = this.mode.overlay;
+      const width = s.boxWidth;
+      const folded = this.buildFolded();
+      const height = this.buildHeight(folded);
+      const frame = { x: ui.width - s.x - width, y: ui.height - s.buildBottom - height, width, height };
+      const x0 = frame.x + s.pad;
+      const inner = width - 2 * s.pad;
+      let y = frame.y + s.pad;
+      const line = builder.line;
+      this.buildShown = this.buildSignature(e);
+      this.frames.push(frame);
+      backing(scene, "build.frame", frame, THEME.editorBacking);
+      const head = this.place("buildHead", { x: x0, y, width: inner, height: s.propHeader }, folded ? "Unfold" : "Fold");
+      scene.set("buildHead", { type: "rect", ...head, fill: this.hit() === "buildHead" ? THEME.faceHover : "#00000000", z: Z.face });
+      bevel(scene, "buildHead", head, THEME.backingLight, THEME.backingDark, THEME.bevel, Z.bevel);
+      foldMark(scene, "build.mark", !folded, x0 + 4, y + s.propHeader / 2, overlay);
+      label(scene, "build.title", "Build", { x: x0 + 24, y, width: 0, height: s.propHeader }, 16, overlay, true);
+      const tw = measure(overlay, "Build", 16, true).width;
+      label(scene, "build.sub", "saves live edits to the playlist", { x: x0 + 24 + tw + 8, y: y + 1, width: 0, height: s.propHeader }, 13, overlay);
+      scene.set("build.sub", { ...scene.get("build.sub"), colour: THEME.textDim });
+      const count = builder.count;
+      const [stateText, stateColour] = line.phase === "unavailable" ? ["needs the patched engine", THEME.textDim] : line.phase === "running" ? [count ? `building ${count.park}/${count.parks}` : "building", THEME.textGood] : line.phase === "failed" ? ["failed", THEME.warning] : builder.pendingEdits(e.playback.installedAt) ? ["edits not built", THEME.pending] : ["built \xB7 playing", THEME.textGood];
+      const stw = measure(overlay, stateText, 13).width;
+      label(scene, "build.state", stateText, { x: x0 + inner - 8 - stw, y, width: 0, height: s.propHeader }, 13, overlay);
+      scene.set("build.state", { ...scene.get("build.state"), colour: stateColour });
+      y += s.propHeader + 6;
+      if (folded) {
+        this.messagesRect = void 0;
+        return;
+      }
+      const running = line.phase === "running";
+      const time = running ? clock(builder.elapsed) : "";
+      const timeW = time ? measure(overlay, time, 13).width : 0;
+      const shownLine = running || line.phase === "failed" || line.phase === "unavailable" ? line.text : "";
+      let squareH = s.square + 18 + 4;
+      if (shownLine) {
+        label(scene, "build.line", fit(overlay, shownLine, 13, inner - timeW - 12), { x: x0, y, width: 0, height: 18 }, 13, overlay);
+        scene.set("build.line", { ...scene.get("build.line"), colour: line.warning ? THEME.warning : line.phase === "done" ? THEME.textGood : THEME.text });
+        if (time) {
+          label(scene, "build.time", time, { x: x0 + inner - timeW, y, width: 0, height: 18 }, 13, overlay);
+          scene.set("build.time", { ...scene.get("build.time"), colour: THEME.textDim });
+        }
+        y += 18 + 4;
+        squareH = s.square;
+      }
+      this.squares(scene, builder.parks, x0, y, inner, squareH);
+      y += squareH + 8;
+      const unavailable = line.phase === "unavailable";
+      const nothing = !running && !unavailable && !builder.pendingEdits(e.playback.installedAt);
+      const build = this.place(
+        "build",
+        { x: x0, y, width: inner, height: s.buildButton },
+        unavailable ? line.text : running ? "Stop the build; the playlist plays on as it was (Ctrl+B)" : nothing ? "Nothing to build: the playlist files hold every edit" : "Save your live edits to the playlist and build it in the background, then play it (Ctrl+B)",
+        unavailable || nothing
+      );
+      const st = this.state("build");
+      button(
+        scene,
+        "build",
+        build,
+        { ...st, face: running || unavailable || nothing || st.hover || st.down ? void 0 : THEME.buildFace },
+        { icon: running ? "close" : "build", iconSize: s.toolIcon, text: running ? "Cancel build" : "Build and play", textSize: 16, hint: "Ctrl+B" },
+        overlay
+      );
+      y += s.buildButton + 10;
+      this.sectionLabel(scene, "build.msgs", "MESSAGES", x0, y);
+      y += s.labelHeight + 3;
+      const shown = builder.messages;
+      const messages = shown.length ? shown : [{ level: "info", text: line.text || "No build from the game yet", park: void 0 }];
+      const listH = Math.round(s.boxRow * s.boxRows);
+      const bar2 = messages.length > s.boxRows ? s.scrollBar + 2 : 0;
+      this.messagesRect = { x: x0, y, width: inner, height: listH };
+      this.messages.layout({ x: x0 + inner - s.scrollBar, y, width: s.scrollBar, height: listH }, messages.length, s.boxRows);
+      scene.set("build.list", { type: "rect", ...this.messagesRect, fill: THEME.editorList, z: Z.face });
+      const first = Math.floor(this.messages.first);
+      const marks = { info: ["info", THEME.buildInfo], ok: ["check", THEME.buildDone], warn: ["alert", THEME.buildWarn], error: ["alert", THEME.buildFail] };
+      for (let i = 0; first + i < messages.length && i * s.boxRow < listH; i++) {
+        const m = messages[first + i];
+        const h = Math.min(s.boxRow, listH - i * s.boxRow);
+        const id = `msg.${first + i}`;
+        const opens = m.park !== void 0 && shown.length > 0 && e.playback.parkIndexOf(m.park) >= 0;
+        const row = this.place(
+          id,
+          { x: x0, y: y + i * s.boxRow, width: inner - bar2, height: h },
+          opens ? `${m.text} (click: open the park)` : m.text
+        );
+        const fill = opens && this.hovered === id ? THEME.faceHover : i % 2 ? void 0 : THEME.face;
+        scene.set(`msgr.${i}`, { type: "rect", ...row, fill: fill ?? "#00000000", z: Z.face });
+        if (h < s.boxRow) {
+          continue;
+        }
+        const [icon, colour] = marks[m.level] ?? marks.info;
+        const px = iconPixels(20, overlay.scale);
+        const side = px / overlay.scale;
+        const mark = { x: row.x + 6, y: row.y + (s.boxRow - side) / 2, width: side, height: side };
+        scene.set(`msgm.${i}`, { type: "rect", ...mark, fill: colour, z: Z.face + 1 });
+        scene.set(`msgi.${i}`, { type: "image", src: iconPath(icon, px), x: mark.x, y: mark.y, z: Z.icon });
+        label(scene, `msgt.${i}`, fit(overlay, m.text, s.textSize - 1, row.width - 40), { x: row.x + 32, y: row.y, width: 0, height: s.boxRow }, s.textSize - 1, overlay);
+      }
+      this.messages.draw(scene, "messages");
+      if (this.messages.track) {
+        this.place("messages.track", this.messages.track);
+        this.place("messages.thumb", this.messages.thumb);
+      }
+      y += listH + 8;
+      const halfW = Math.floor((inner - 4) / 2);
+      for (const [id, icon, text, bx] of [["import", "import", "Import playlist", x0], ["export", "export", "Export playlist", x0 + inner - halfW]]) {
+        const r = this.place(id, { x: bx, y, width: halfW, height: s.boxButton }, `${text} (coming later)`, true);
+        button(scene, id, r, this.state(id), { icon, iconSize: s.toolIcon, text, textSize: 14, left: true }, overlay);
+      }
+    }
+    /** A square per park of the build, in play order: built (a check), with warnings (!), failed or
+     *  missing (red), the one being built (lit), still to come (empty); a bar past squaresMax parks. */
+    squares(scene, parks, x0, y, inner, height) {
+      const s = EDITOR;
+      const overlay = this.mode.overlay;
+      if (!parks.length) {
+        return;
+      }
+      const colourOf = (p) => p.state === "failed" || p.state === "missing" ? THEME.buildFail : p.state === "building" ? THEME.buildCurrent : p.state === "built" || p.state === "cached" ? p.warnings ? THEME.buildWarn : THEME.buildDone : THEME.editorList;
+      if (parks.length > s.squaresMax) {
+        const done = parks.filter((p) => p.state !== "pending" && p.state !== "building").length;
+        const bad = parks.some((p) => p.state === "failed" || p.state === "missing");
+        const track = { x: x0, y, width: inner, height };
+        scene.set("sq.track", { type: "rect", ...track, fill: THEME.editorList, z: Z.face });
+        bevel(scene, "sq.track", track, THEME.bevelDark, THEME.bevelLight, THEME.bevel, Z.bevel);
+        scene.set("sq.fill", { type: "rect", x: x0, y, width: Math.round(inner * done / parks.length), height, fill: bad ? THEME.buildFail : THEME.buildDone, z: Z.face + 1 });
+        if (parks.some((p) => p.state === "building")) {
+          const slot = Math.max(4, Math.round(inner / parks.length));
+          const at = Math.round(inner * done / parks.length);
+          this.crawl(scene, "sq.crawl", { x: x0 + at, y, width: Math.min(slot, inner - at), height });
+        }
+        const text = `${done} / ${parks.length} parks`;
+        label(scene, "sq.count", text, { x: x0 + inner / 2, y, width: 0, height }, 12, overlay, true);
+        scene.set("sq.count", { ...scene.get("sq.count"), align: "center" });
+        return;
+      }
+      const gap = 2;
+      const w = (inner - gap * (parks.length - 1)) / parks.length;
+      const px = iconPixels(20, overlay.scale);
+      const side = px / overlay.scale;
+      parks.forEach((p, i) => {
+        const r = { x: Math.round(x0 + i * (w + gap)), y, width: Math.max(1, Math.round(w)), height };
+        const what = p.state === "missing" ? "file missing" : p.state === "failed" ? "failed" : p.state === "building" ? "building" : p.state === "pending" ? "waiting" : `${p.state === "cached" ? "unchanged" : "built"}${p.warnings ? `, ${p.warnings} warning${p.warnings > 1 ? "s" : ""}` : ""}`;
+        const name = p.key && builder.nameOf?.(p.key) || p.name || `Park ${i + 1}`;
+        this.place(`sq.${i}`, r, `${name}: ${p.stale ? "edited, needs a build" : what}`);
+        scene.set(`sq.${i}`, { type: "rect", ...r, fill: colourOf(p), z: Z.face, ...p.stale ? { opacity: 0.35 } : {} });
+        bevel(scene, `sq.${i}`, r, THEME.bevelDark, THEME.bevelDark, THEME.bevel, Z.bevel);
+        if (p.state === "building") {
+          this.crawl(scene, `sqc.${i}`, r);
+        }
+        const icon = p.state === "failed" || p.state === "missing" ? "close" : p.state === "built" || p.state === "cached" ? p.warnings ? "alert" : "check" : void 0;
+        if (icon && r.width >= side && !p.stale) {
+          scene.set(`sqi.${i}`, { type: "image", src: iconPath(icon, px), x: r.x + (r.width - side) / 2, y: r.y + (r.height - side) / 2, z: Z.icon });
+        }
+      });
     }
     pointRow(scene, i, p, box) {
       const overlay = this.mode.overlay;
@@ -6311,14 +6988,14 @@
   var lastInputMark = 0;
   var profilerTimer;
   var PROFILER_EXPORT_MS = 6e4;
-  function log2(message) {
-    console.log(`[RCT Screensaver] ${message}`);
+  function log3(message2) {
+    console.log(`[RCT Screensaver] ${message2}`);
   }
   function startPlayer() {
     const settings = loadSettings();
     const playlist = loadPlaylist();
     if (!playlist) {
-      log2("no playlist installed; run tools/mksequence.py --install");
+      log3("no playlist installed; run tools/mksequence.py --install");
       return;
     }
     if (playlist.titles && TITLES.includes(playlist.titles)) {
@@ -6326,7 +7003,7 @@
     }
     const sequence = resolveSequence(playlist);
     if (typeof sequence === "string") {
-      log2(sequence);
+      log3(sequence);
       return;
     }
     player = new Player(playlist, sequence, settings, mode?.active ? mode.overlay : void 0);
@@ -6360,7 +7037,43 @@
     }
     player = void 0;
   }
+  function takeBuild(result) {
+    const api = buildApi();
+    if (!api || !player?.isRunning || !result.playlist) {
+      return "the screensaver is not playing";
+    }
+    if (result.playlist.sequence !== player.sequenceName) {
+      return `another playlist is playing ("${player.sequenceName}")`;
+    }
+    try {
+      api.applyBuild(result.sequence);
+    } catch (e) {
+      return message(e);
+    }
+    const old = loadPlaylist();
+    const playlist = { ...result.playlist, installed: Date.now(), source: result.playlist.source ?? old?.source };
+    const check = resolveSequence(playlist);
+    if (typeof check === "string") {
+      return check;
+    }
+    savePlaylist(playlist);
+    if (result.titleMusic) {
+      const settings = player.liveSettings;
+      settings.titleMusic = result.titleMusic;
+      saveSettings(settings);
+      player.noteInstalledMusic(result.titleMusic);
+    }
+    player.swapPlaylist(playlist);
+    return void 0;
+  }
+  builder.onReady = takeBuild;
+  builder.nameOf = (key) => {
+    const park = player?.isRunning ? loadPlaylist()?.parks.find((p) => (p.key ?? p.fileName) === key) : void 0;
+    return park?.name;
+  };
+  builder.orderOf = () => player?.isRunning ? player.playOrderKeys : [];
   function update() {
+    builder.update();
     if (context.mode !== "title") {
       if (onTitleScreen) {
         onTitleScreen = false;
@@ -6387,7 +7100,7 @@
     editorPanel?.update();
     if (player.debug && Date.now() - lastDebug >= DEBUG_INTERVAL_MS) {
       lastDebug = Date.now();
-      log2(player.describe());
+      log3(player.describe());
     }
   }
   function onTitle(action) {
@@ -6413,6 +7126,15 @@
       editor?.open();
     }
   }
+  function toggleBuild(p) {
+    if (editor?.isOpen && editorPanel?.isOpen) {
+      editorPanel.toggleBuild();
+    } else if (builder.running) {
+      builder.cancel();
+    } else if (builder.available && builder.pendingEdits(p.installedAt)) {
+      builder.start(p.sequenceName);
+    }
+  }
   function registerShortcuts() {
     const shortcuts = [
       ["next", "Next view", ["RIGHT"], either((p) => p.next(), (e) => e.pan(1, 0))],
@@ -6435,6 +7157,10 @@
       }, (e) => e.toggleMap())],
       ["redo", "Redo (view editor)", ["CTRL+Y", "CTRL+SHIFT+Z"], either(() => {
       }, (e) => e.redo())],
+      ["copyviews", "Copy the park's views (view editor)", ["CTRL+C"], either(() => {
+      }, (e) => e.copyViews())],
+      ["pasteviews", "Paste views over the park's (view editor)", ["CTRL+V"], either(() => {
+      }, (e) => e.pasteViews())],
       // The view editor's tools (owner, 2026-11-10; the toolbox's tooltips name them).
       ["addview", "Add a view (view editor)", ["INSERT"], either(() => {
       }, (e) => e.add())],
@@ -6473,7 +7199,9 @@
       ["panless", "Less of the hold panning (view editor)", ["SHIFT+["], either(() => {
       }, (e) => e.changePan(-0.1))],
       ["panmore", "More of the hold panning (view editor)", ["SHIFT+]"], either(() => {
-      }, (e) => e.changePan(0.1))]
+      }, (e) => e.changePan(0.1))],
+      // The build pane's button (patched engine), also with the editor closed (owner, 2026-11-11).
+      ["build", "Build and play / cancel the build", ["CTRL+B"], (p) => toggleBuild(p)]
     ];
     for (const [id, text, bindings, action] of shortcuts) {
       ui.registerShortcut({
@@ -6495,7 +7223,7 @@
       settings.debug = !settings.debug;
       saveSettings(settings);
       player?.setDebug(settings.debug);
-      log2(`debug log ${settings.debug ? "on" : "off"}`);
+      log3(`debug log ${settings.debug ? "on" : "off"}`);
     });
   }
   function startProfiler(path) {
@@ -6503,7 +7231,7 @@
       return;
     }
     console.executeLegacy("profiler_start");
-    log2(`profiler on, exporting to ${path}`);
+    log3(`profiler on, exporting to ${path}`);
     profilerTimer = context.setInterval(() => console.executeLegacy(`profiler_export "${path}"`), PROFILER_EXPORT_MS);
   }
   function main() {
@@ -6514,11 +7242,11 @@
     if (mode) {
       mode.configure(modeSettings(loadSettings()));
       if (perfLogging()) {
-        log2("the engine writes a perf log");
+        log3("the engine writes a perf log");
         perfMark("plugin started");
       }
       mode.onChange((active) => {
-        log2(`screensaver mode ${active ? "on" : "off"}`);
+        log3(`screensaver mode ${active ? "on" : "off"}`);
         if (!active) {
           modeStarted = false;
           stopPlayer(true);

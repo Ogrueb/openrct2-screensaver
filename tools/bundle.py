@@ -26,7 +26,7 @@ import argparse, datetime, hashlib, json, os, re, shutil, sys, tomllib, zipfile
 
 TOOLS = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, TOOLS)
-import mksequence, tomlwrite  # noqa: E402
+import mksequence, tomlwrite, userdata  # noqa: E402
 
 FORMAT = 1
 HEADER = "Imported from a playlist bundle by tools/bundle.py; comments are not kept."
@@ -190,7 +190,7 @@ def import_bundle(bundle_path, park_dir=None, playlists_dir=None, profiles_dir=N
                 f.write(z.read("profiles/" + os.path.basename(profile)))
         built = False
         if manifest.get("includesBuild") and build_to:
-            shutil.rmtree(build_to, ignore_errors=True)
+            userdata.clear_build(build_to)  # (the game's live builds in it stay)
             for n in z.namelist():
                 if n.startswith("build/") and not n.endswith("/"):
                     dest = os.path.join(build_to, *n[len("build/"):].split("/"))

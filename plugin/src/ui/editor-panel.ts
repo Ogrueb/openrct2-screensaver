@@ -10,13 +10,14 @@
 //   presentation), folded to its header when the window is too narrow for it beside the views pane.
 // Live editing (docs/screensaver-ui.md): a drag on the park moves the selected view, the wheel zooms it.
 
+import { builder, clock, ParkState } from "../builder";
 import type { Editor, EditorView, RestorePoint } from "../editor";
 import { EDITOR_COLUMNS, EVENT_COLUMNS } from "../editor";
 import { modeSettings } from "../mode";
 import type { MouseEvent, Overlay, ScreensaverApi } from "../mode";
 import type { PlaylistProps } from "../storage";
 import { Layer, Rect, Scene, backing, bevel, button, contains, iconPath, iconPixels, label, measure, tooltip } from "./kit";
-import { EDITOR, THEME, TIMING, Z } from "./theme";
+import { CRAWL, EDITOR, THEME, TIMING, Z } from "./theme";
 import { ViewMap } from "./view-map";
 
 const PAN_SHARE_STEP = 0.1;
@@ -111,6 +112,7 @@ export class EditorPanel implements EditorView {
     private hovered: string | undefined; // the element under the mouse, from the last layout
     private parksRect: Rect | undefined; // the park list, while open
     private pointsRect: Rect | undefined; // the restore points' rows
+    private messagesRect: Rect | undefined; // the build's messages
     private readonly views = new Scroll();
     private readonly parks = new Scroll();
     private readonly events = new Scroll();
@@ -122,6 +124,11 @@ export class EditorPanel implements EditorView {
     private dropdown: { persistent: boolean; downAt: number } | undefined; // the park list
     private picked: string | undefined; // the restore point highlighted
     private propsOpen = true; // the Playlist properties unfolded
+    private clipShown = false; // a Copy/Paste note is on its button (it goes after a moment)
+    private buildShown = ""; // the build pane's state as last drawn (buildSignature)
+    private buildOpen: boolean | undefined; // the build pane unfolded by hand (undefined: when there is room)
+    private boxBottom = 0; // where the top-right box ends, for the build pane under it
+    private readonly messages = new Scroll();
     private boxOpen: boolean | undefined; // the top-right box unfolded by hand (undefined: by the window's width)
     private lastMove = 0; // the pin off: the panes hide this long after the mouse last moved
     private hidden = false;
@@ -168,7 +175,10 @@ export class EditorPanel implements EditorView {
         e?.syncMap();
         // The event list's "in m:ss" counts down with the park's clock.
         const second = e && this.eventsRect && !this.hidden ? Math.floor(e.playback.parkClock / 40) : -1;
-        if ((second >= 0 && second !== this.clockShown && !this.busy) || (e && e.playback.isLoading !== this.loadingShown)) {
+        // A build's progress and outcome (the build pane).
+        const build = e && !this.hidden ? this.buildSignature(e) : this.buildShown;
+        if ((second >= 0 && second !== this.clockShown && !this.busy) || (e && e.playback.isLoading !== this.loadingShown)
+            || (build !== this.buildShown && !this.busy) || (!!e?.clipNote !== this.clipShown && !this.busy)) {
             this.render();
         }
         if (!e || e.pinned || this.hidden || this.busy || this.over(this.mouse.x, this.mouse.y)) {
@@ -231,6 +241,8 @@ export class EditorPanel implements EditorView {
                 this.events.by(step, ed.eventIndices().length, EDITOR.eventRows);
             } else if (this.pointsRect && contains(this.pointsRect, this.mouse.x, this.mouse.y)) {
                 this.points.by(step, ed.restorePoints().length, EDITOR.boxRows);
+            } else if (this.messagesRect && contains(this.messagesRect, this.mouse.x, this.mouse.y)) {
+                this.messages.by(step, builder.messages.length, EDITOR.boxRows);
             }
         }
         this.render();
@@ -293,14 +305,18 @@ export class EditorPanel implements EditorView {
             const which = hit.slice(0, -6);
             const scroll = this.scrollOf(which);
             const count = which === "parks" ? () => ed.parkNames.length : which === "points" ? () => ed.restorePoints().length
+                : which === "messages" ? () => builder.messages.length
                 : which === "events" ? () => ed.eventIndices().length : () => ed.routeIndices().length;
-            const visible = which === "parks" ? this.parkRows() : which === "points" ? EDITOR.boxRows : which === "events" ? EDITOR.eventRows : EDITOR.visibleRows;
+            const visible = which === "parks" ? this.parkRows() : which === "points" || which === "messages" ? EDITOR.boxRows
+                : which === "events" ? EDITOR.eventRows : EDITOR.visibleRows;
             this.thumbDrag = { scroll, y0: this.mouse.y, first0: scroll.first, count, visible };
         } else if (hit?.endsWith(".track")) {
             const which = hit.slice(0, -6);
             const scroll = this.scrollOf(which);
-            const page = which === "parks" ? this.parkRows() : which === "points" ? 3 : which === "events" ? EDITOR.eventRows : EDITOR.visibleRows;
+            const page = which === "parks" ? this.parkRows() : which === "points" || which === "messages" ? 3
+                : which === "events" ? EDITOR.eventRows : EDITOR.visibleRows;
             const count = which === "parks" ? ed.parkNames.length : which === "points" ? ed.restorePoints().length
+                : which === "messages" ? builder.messages.length
                 : which === "events" ? ed.eventIndices().length : ed.routeIndices().length;
             scroll.by(this.mouse.y < (scroll.thumb?.y ?? 0) ? -page : page, count, page);
         }
@@ -344,7 +360,8 @@ export class EditorPanel implements EditorView {
     }
 
     private scrollOf(which: string): Scroll {
-        return which === "parks" ? this.parks : which === "points" ? this.points : which === "events" ? this.events : this.views;
+        return which === "parks" ? this.parks : which === "points" ? this.points : which === "messages" ? this.messages
+            : which === "events" ? this.events : this.views;
     }
 
     /** Where a dragged row lands: the gap nearest the mouse, as an index after the row leaves its place.
@@ -448,6 +465,15 @@ export class EditorPanel implements EditorView {
             this.goToPark(Number(id.slice(5))); // a click in the open list: the list stays
             return;
         }
+        if (id.startsWith("msg.") || id.startsWith("sq.")) {
+            // A message or a square about a park opens that park
+            const key = id.startsWith("msg.") ? builder.messages[Number(id.slice(4))]?.park : builder.parks[Number(id.slice(3))]?.key;
+            const index = key ? e.playback.parkIndexOf(key) : -1;
+            if (index >= 0 && index !== e.parkIndex) {
+                e.goToPark(index);
+            }
+            return;
+        }
         if (id.startsWith("point.")) {
             this.picked = e.restorePoints()[Number(id.slice(6))]?.id;
             return;
@@ -493,15 +519,33 @@ export class EditorPanel implements EditorView {
             case "play": e.togglePreview(); break;
             case "checkpoint": e.saveCheckpoint(); break;
             case "restore": if (this.picked) e.restoreTo(this.picked); break;
+            case "copy": e.copyViews(); break;
+            case "paste": e.pasteViews(); break;
             case "boxHead": this.boxOpen = this.boxFolded(); break;
             case "propsHead": this.propsOpen = !this.propsOpen; break;
-            case "save": e.playback.savePlaylistProps(); break;
+            case "buildHead": this.buildOpen = this.buildFolded(); break;
+            case "build": this.toggleBuild(); break;
         }
     }
 
+    /** Build and play, or Cancel build (also Ctrl+B). */
+    toggleBuild(): void {
+        const e = this.editor;
+        if (builder.running) {
+            builder.cancel();
+        } else if (e && builder.available && builder.pendingEdits(e.playback.installedAt)) {
+            e.playback.savePlaylistProps(); // saved already; the build takes the live file
+            this.messages.first = 0;
+            builder.start(e.playback.sequenceName);
+        }
+        this.render();
+    }
+
+    /** A Playlist property changed: in force at once and saved, like the views (owner, 2026-11-11). */
     private setProp<K extends keyof PlaylistProps>(key: K, value: unknown): void {
         const p = this.editor!.playback;
         p.setPlaylistProp(key, value as PlaylistProps[K]);
+        p.savePlaylistProps();
         if (key === "titleMusic") {
             this.mode.configure(modeSettings(p.liveSettings)); // the music changes at once
         }
@@ -550,6 +594,7 @@ export class EditorPanel implements EditorView {
         this.viewsPane(e, scene);
         this.toolbox(e, scene);
         this.topRight(e, scene);
+        this.buildPane(e, scene);
         // The tooltip of the button under the mouse: above it, or below near the window's top.
         const hover = this.hit();
         const tip = hover && !this.busy ? this.tips.get(hover) : undefined;
@@ -973,6 +1018,7 @@ export class EditorPanel implements EditorView {
             const frame = { x: x0 - s.pad, y: top, width, height: y - top + s.pad - 2 };
             this.frames.push(frame);
             backing(scene, "box", frame, THEME.editorBacking);
+            this.boxBottom = frame.y + frame.height;
             return;
         }
         // The restore points, 3.5 rows: a half row says there are more.
@@ -1013,8 +1059,21 @@ export class EditorPanel implements EditorView {
         btn("restore", "restore", "Restore selected", x0 + inner - halfW, halfW,
             this.picked ? "Restore highlighted point" : "Highlight a point first", !editable || !this.picked);
         y += s.boxButton + 4;
-        btn("copy", "copy", "Copy views", x0, halfW, "Copy views (coming later)", true);
-        btn("paste", "paste", "Paste views", x0 + inner - halfW, halfW, "Paste views (coming later)", true);
+        // Copy and Paste views: the clipboard, in the settings page's text format (patched engine).
+        const note = e.clipNote;
+        this.clipShown = !!note;
+        const clipText = (id: "copy" | "paste", text: string) => note?.id === id ? note.text : text;
+        const noClip = "Needs the patched engine (its clipboard)";
+        btn("copy", "copy", clipText("copy", "Copy views"), x0, halfW,
+            e.canClip ? "Copy this park's views as text, for another park or the settings page (Ctrl+C)" : noClip, !e.canClip || e.playback.isLoading);
+        btn("paste", "paste", clipText("paste", "Paste views"), x0 + inner - halfW, halfW,
+            e.canClip ? "Replace this park's views with copied ones; its event views stay (Ctrl+V)" : noClip, !e.canClip || !editable);
+        if (note) {
+            const t = scene.get(`${note.id}.text`);
+            if (t) {
+                scene.set(`${note.id}.text`, { ...t, colour: note.warning ? THEME.warning : THEME.textGood });
+            }
+        }
         y += s.boxButton + 10;
         // Playlist properties, folded under their header.
         const ph = this.place("propsHead", { x: x0, y, width: inner, height: s.propHeader }, this.propsOpen ? "Fold" : "Unfold");
@@ -1033,16 +1092,227 @@ export class EditorPanel implements EditorView {
         if (this.propsOpen) {
             y = this.properties(e, scene, x0, y, inner);
         }
-        // Save; Import and Export wait for a way to pick files.
-        const third = Math.floor((inner - 8) / 3);
-        const unsaved = e.playback.playlistPropsUnsaved;
-        btn("save", "save", "Save", x0, third, unsaved ? "Save (written to the playlist at install)" : "Nothing to save", !unsaved);
-        btn("import", "import", "Import", x0 + third + 4, third, "Import playlist (coming later)", true);
-        btn("export", "export", "Export", x0 + inner - third, third, "Export playlist (coming later)", true);
-        y += s.boxButton;
-        const frame = { x: x0 - s.pad, y: top, width, height: y - top + s.pad };
+        const frame = { x: x0 - s.pad, y: top, width, height: y - top + s.pad - 6 };
         this.frames.push(frame);
         backing(scene, "box", frame, THEME.editorBacking);
+        this.boxBottom = frame.y + frame.height;
+    }
+
+    /** The build pane's state, to redraw it when it changes. */
+    private buildSignature(e: Editor): string {
+        const line = builder.line;
+        return [line.phase, line.text, builder.running ? Math.floor(builder.elapsed / 1000) : "",
+            builder.parks.map(p => p.state + (p.warnings ?? 0) + (p.stale ? "*" : "")).join(","), builder.messages.length,
+            builder.pendingEdits(e.playback.installedAt), this.crawlPhase()].join("|");
+    }
+
+    /** The step of the building square's crawling stripes (redrawn at CRAWL.fps while a park builds). */
+    private crawlPhase(): number {
+        return builder.running && builder.parks.some(p => p.state === "building")
+            ? Math.floor(this.now() * CRAWL.fps / 1000) % (CRAWL.period / CRAWL.step) : -1;
+    }
+
+    /** Diagonal stripes crawling across a rect (rows of rects, as the overlay draws no clipped shapes). */
+    private crawl(scene: Scene, id: string, r: Rect): void {
+        const phase = Math.max(0, this.crawlPhase()) * CRAWL.step;
+        let n = 0;
+        for (let row = 0; row < r.height; row += CRAWL.row) {
+            const h = Math.min(CRAWL.row, r.height - row);
+            // (each row shifted by its height, so the stripes lean; the phase moves them right)
+            const shift = (phase - row) % CRAWL.period;
+            for (let x = shift - CRAWL.period; x < r.width; x += CRAWL.period) {
+                const a = Math.max(0, x), b = Math.min(r.width, x + CRAWL.stripe);
+                if (b > a) {
+                    scene.set(`${id}.${n++}`, { type: "rect", x: r.x + a, y: r.y + row, width: b - a, height: h, fill: THEME.buildCrawl, z: Z.face + 1 });
+                }
+            }
+        }
+    }
+
+    /** The build pane shows only its header: by hand, else when it would run into the top-right box. */
+    private buildFolded(): boolean {
+        if (this.buildOpen !== undefined) {
+            return !this.buildOpen;
+        }
+        return ui.height - EDITOR.buildBottom - this.buildHeight(false) < this.boxBottom + EDITOR.gap * 2;
+    }
+
+    private buildHeight(folded: boolean): number {
+        const s = EDITOR;
+        const head = s.propHeader;
+        if (folded) {
+            return s.pad + head + s.pad;
+        }
+        return s.pad + head + 6 + 18 + 4 + s.square + 8 + s.buildButton + 10 + s.labelHeight + 3
+            + Math.round(s.boxRow * s.boxRows) + 8 + s.boxButton + s.pad;
+    }
+
+    /** The bottom-right pane: building the playlist from the game (builder.ts; patched engine). */
+    private buildPane(e: Editor, scene: Scene): void {
+        const s = EDITOR;
+        const overlay = this.mode.overlay;
+        const width = s.boxWidth;
+        const folded = this.buildFolded();
+        const height = this.buildHeight(folded);
+        // (above the mode's exit button in the bottom right corner)
+        const frame = { x: ui.width - s.x - width, y: ui.height - s.buildBottom - height, width, height };
+        const x0 = frame.x + s.pad;
+        const inner = width - 2 * s.pad;
+        let y = frame.y + s.pad;
+        const line = builder.line;
+        this.buildShown = this.buildSignature(e);
+        this.frames.push(frame);
+        backing(scene, "build.frame", frame, THEME.editorBacking);
+        // Header: Build · playlist, where the build is at the right.
+        const head = this.place("buildHead", { x: x0, y, width: inner, height: s.propHeader }, folded ? "Unfold" : "Fold");
+        scene.set("buildHead", { type: "rect", ...head, fill: this.hit() === "buildHead" ? THEME.faceHover : "#00000000", z: Z.face });
+        bevel(scene, "buildHead", head, THEME.backingLight, THEME.backingDark, THEME.bevel, Z.bevel);
+        foldMark(scene, "build.mark", !folded, x0 + 4, y + s.propHeader / 2, overlay);
+        label(scene, "build.title", "Build", { x: x0 + 24, y, width: 0, height: s.propHeader }, 16, overlay, true);
+        const tw = measure(overlay, "Build", 16, true).width;
+        label(scene, "build.sub", "saves live edits to the playlist", { x: x0 + 24 + tw + 8, y: y + 1, width: 0, height: s.propHeader }, 13, overlay);
+        scene.set("build.sub", { ...scene.get("build.sub")!, colour: THEME.textDim });
+        const count = builder.count;
+        const [stateText, stateColour] = line.phase === "unavailable" ? ["needs the patched engine", THEME.textDim]
+            : line.phase === "running" ? [count ? `building ${count.park}/${count.parks}` : "building", THEME.textGood]
+            : line.phase === "failed" ? ["failed", THEME.warning]
+            : builder.pendingEdits(e.playback.installedAt) ? ["edits not built", THEME.pending]
+            : ["built · playing", THEME.textGood];
+        const stw = measure(overlay, stateText, 13).width;
+        label(scene, "build.state", stateText, { x: x0 + inner - 8 - stw, y, width: 0, height: s.propHeader }, 13, overlay);
+        scene.set("build.state", { ...scene.get("build.state")!, colour: stateColour });
+        y += s.propHeader + 6;
+        if (folded) {
+            this.messagesRect = undefined;
+            return;
+        }
+        // Where the build is (the park and the time so far), then a square per park in play order.
+        const running = line.phase === "running";
+        const time = running ? clock(builder.elapsed) : "";
+        const timeW = time ? measure(overlay, time, 13).width : 0;
+        // Only while it runs or when it failed: the header and the messages say the rest (owner, 2026-11-11)
+        const shownLine = running || line.phase === "failed" || line.phase === "unavailable" ? line.text : "";
+        // (with no line the squares take its space: owner, 2026-11-12)
+        let squareH = s.square + 18 + 4;
+        if (shownLine) {
+            label(scene, "build.line", fit(overlay, shownLine, 13, inner - timeW - 12), { x: x0, y, width: 0, height: 18 }, 13, overlay);
+            scene.set("build.line", { ...scene.get("build.line")!, colour: line.warning ? THEME.warning : line.phase === "done" ? THEME.textGood : THEME.text });
+            if (time) {
+                label(scene, "build.time", time, { x: x0 + inner - timeW, y, width: 0, height: 18 }, 13, overlay);
+                scene.set("build.time", { ...scene.get("build.time")!, colour: THEME.textDim });
+            }
+            y += 18 + 4;
+            squareH = s.square;
+        }
+        this.squares(scene, builder.parks, x0, y, inner, squareH);
+        y += squareH + 8;
+        // Build and play, or Cancel build while one runs.
+        const unavailable = line.phase === "unavailable";
+        const nothing = !running && !unavailable && !builder.pendingEdits(e.playback.installedAt);
+        const build = this.place("build", { x: x0, y, width: inner, height: s.buildButton },
+            unavailable ? line.text : running ? "Stop the build; the playlist plays on as it was (Ctrl+B)"
+                : nothing ? "Nothing to build: the playlist files hold every edit"
+                : "Save your live edits to the playlist and build it in the background, then play it (Ctrl+B)", unavailable || nothing);
+        const st = this.state("build");
+        button(scene, "build", build, { ...st, face: running || unavailable || nothing || st.hover || st.down ? undefined : THEME.buildFace },
+            { icon: running ? "close" : "build", iconSize: s.toolIcon, text: running ? "Cancel build" : "Build and play", textSize: 16, hint: "Ctrl+B" }, overlay);
+        y += s.buildButton + 10;
+        // The messages: what the build took in, built, warned about; one about a park opens it.
+        this.sectionLabel(scene, "build.msgs", "MESSAGES", x0, y);
+        y += s.labelHeight + 3;
+        const shown = builder.messages;
+        const messages = shown.length ? shown : [{ level: "info" as const, text: line.text || "No build from the game yet", park: undefined }];
+        const listH = Math.round(s.boxRow * s.boxRows);
+        const bar = messages.length > s.boxRows ? s.scrollBar + 2 : 0;
+        this.messagesRect = { x: x0, y, width: inner, height: listH };
+        this.messages.layout({ x: x0 + inner - s.scrollBar, y, width: s.scrollBar, height: listH }, messages.length, s.boxRows);
+        scene.set("build.list", { type: "rect", ...this.messagesRect, fill: THEME.editorList, z: Z.face });
+        const first = Math.floor(this.messages.first);
+        const marks = { info: ["info", THEME.buildInfo], ok: ["check", THEME.buildDone], warn: ["alert", THEME.buildWarn], error: ["alert", THEME.buildFail] };
+        for (let i = 0; first + i < messages.length && i * s.boxRow < listH; i++) {
+            const m = messages[first + i];
+            const h = Math.min(s.boxRow, listH - i * s.boxRow);
+            const id = `msg.${first + i}`;
+            const opens = m.park !== undefined && shown.length > 0 && e.playback.parkIndexOf(m.park) >= 0;
+            const row = this.place(id, { x: x0, y: y + i * s.boxRow, width: inner - bar, height: h },
+                opens ? `${m.text} (click: open the park)` : m.text);
+            const fill = opens && this.hovered === id ? THEME.faceHover : i % 2 ? undefined : THEME.face;
+            scene.set(`msgr.${i}`, { type: "rect", ...row, fill: fill ?? "#00000000", z: Z.face });
+            if (h < s.boxRow) {
+                continue;
+            }
+            const [icon, colour] = marks[m.level] ?? marks.info;
+            const px = iconPixels(20, overlay.scale);
+            const side = px / overlay.scale;
+            const mark = { x: row.x + 6, y: row.y + (s.boxRow - side) / 2, width: side, height: side };
+            scene.set(`msgm.${i}`, { type: "rect", ...mark, fill: colour, z: Z.face + 1 });
+            scene.set(`msgi.${i}`, { type: "image", src: iconPath(icon, px), x: mark.x, y: mark.y, z: Z.icon });
+            label(scene, `msgt.${i}`, fit(overlay, m.text, s.textSize - 1, row.width - 40), { x: row.x + 32, y: row.y, width: 0, height: s.boxRow }, s.textSize - 1, overlay);
+        }
+        this.messages.draw(scene, "messages");
+        if (this.messages.track) {
+            this.place("messages.track", this.messages.track);
+            this.place("messages.thumb", this.messages.thumb!);
+        }
+        y += listH + 8;
+        // Import and Export wait for a way to pick files.
+        const halfW = Math.floor((inner - 4) / 2);
+        for (const [id, icon, text, bx] of [["import", "import", "Import playlist", x0], ["export", "export", "Export playlist", x0 + inner - halfW]] as const) {
+            const r = this.place(id, { x: bx, y, width: halfW, height: s.boxButton }, `${text} (coming later)`, true);
+            button(scene, id, r, this.state(id), { icon, iconSize: s.toolIcon, text, textSize: 14, left: true }, overlay);
+        }
+    }
+
+    /** A square per park of the build, in play order: built (a check), with warnings (!), failed or
+     *  missing (red), the one being built (lit), still to come (empty); a bar past squaresMax parks. */
+    private squares(scene: Scene, parks: (ParkState & { stale?: boolean })[], x0: number, y: number, inner: number, height: number): void {
+        const s = EDITOR;
+        const overlay = this.mode.overlay;
+        if (!parks.length) {
+            return;
+        }
+        const colourOf = (p: ParkState) => p.state === "failed" || p.state === "missing" ? THEME.buildFail
+            : p.state === "building" ? THEME.buildCurrent
+            : p.state === "built" || p.state === "cached" ? (p.warnings ? THEME.buildWarn : THEME.buildDone) : THEME.editorList;
+        if (parks.length > s.squaresMax) {
+            const done = parks.filter(p => p.state !== "pending" && p.state !== "building").length;
+            const bad = parks.some(p => p.state === "failed" || p.state === "missing");
+            const track = { x: x0, y, width: inner, height };
+            scene.set("sq.track", { type: "rect", ...track, fill: THEME.editorList, z: Z.face });
+            bevel(scene, "sq.track", track, THEME.bevelDark, THEME.bevelLight, THEME.bevel, Z.bevel);
+            scene.set("sq.fill", { type: "rect", x: x0, y, width: Math.round(inner * done / parks.length), height, fill: bad ? THEME.buildFail : THEME.buildDone, z: Z.face + 1 });
+            if (parks.some(p => p.state === "building")) {
+                // (the slot of the park being built crawls, as its square would)
+                const slot = Math.max(4, Math.round(inner / parks.length));
+                const at = Math.round(inner * done / parks.length);
+                this.crawl(scene, "sq.crawl", { x: x0 + at, y, width: Math.min(slot, inner - at), height });
+            }
+            const text = `${done} / ${parks.length} parks`;
+            label(scene, "sq.count", text, { x: x0 + inner / 2, y, width: 0, height }, 12, overlay, true);
+            scene.set("sq.count", { ...scene.get("sq.count")!, align: "center" });
+            return;
+        }
+        const gap = 2;
+        const w = (inner - gap * (parks.length - 1)) / parks.length;
+        const px = iconPixels(20, overlay.scale);
+        const side = px / overlay.scale;
+        parks.forEach((p, i) => {
+            const r = { x: Math.round(x0 + i * (w + gap)), y, width: Math.max(1, Math.round(w)), height };
+            const what = p.state === "missing" ? "file missing" : p.state === "failed" ? "failed" : p.state === "building" ? "building"
+                : p.state === "pending" ? "waiting" : `${p.state === "cached" ? "unchanged" : "built"}${p.warnings ? `, ${p.warnings} warning${p.warnings > 1 ? "s" : ""}` : ""}`;
+            const name = (p.key && builder.nameOf?.(p.key)) || p.name || `Park ${i + 1}`;
+            this.place(`sq.${i}`, r, `${name}: ${p.stale ? "edited, needs a build" : what}`);
+            // A park with edits since the last build: its colour dimmed until the build reaches it
+            scene.set(`sq.${i}`, { type: "rect", ...r, fill: colourOf(p), z: Z.face, ...(p.stale ? { opacity: 0.35 } : {}) });
+            bevel(scene, `sq.${i}`, r, THEME.bevelDark, THEME.bevelDark, THEME.bevel, Z.bevel);
+            if (p.state === "building") {
+                this.crawl(scene, `sqc.${i}`, r);
+            }
+            const icon = p.state === "failed" || p.state === "missing" ? "close" : p.state === "built" || p.state === "cached" ? (p.warnings ? "alert" : "check") : undefined;
+            if (icon && r.width >= side && !p.stale) {
+                scene.set(`sqi.${i}`, { type: "image", src: iconPath(icon, px), x: r.x + (r.width - side) / 2, y: r.y + (r.height - side) / 2, z: Z.icon });
+            }
+        });
     }
 
     private pointRow(scene: Scene, i: number, p: RestorePoint, box: Rect): void {
