@@ -3301,10 +3301,16 @@ def live_build(name, user_dir, imported=False):
             # An imported playlist's park scripts (companion plugins) go in now, but the game loads plugins only
             # as it starts (owner, 2026-11-12: say so in the build pane)
             _, changed = install_companions(result, user_dir)
+            # (one per park, flagging its square like the park's own warnings: owner, 2026-11-12)
             for file_name, meta, park_names in result["companions"]:
-                if file_name in changed:
-                    w = "Park script %s (%s) starts after a restart of the game" % (meta["name"], ", ".join(park_names))
-                    note("warn", w)
+                if file_name not in changed:
+                    continue
+                for park_name in park_names:
+                    w = "%s: park script %s starts after a restart of the game" % (park_name, meta["name"])
+                    st = next((st for st in states if st.get("name") == park_name), None)
+                    if st is not None:
+                        st["warnings"] = st.get("warnings", 0) + 1
+                    note("warn", w, st.get("key") if st else None)
                     warnings.append(w)
         rebuilt = sum(1 for st in states if st["state"] == "built")
         cached = sum(1 for st in states if st["state"] == "cached")

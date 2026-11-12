@@ -241,8 +241,8 @@ playlist's file).
       imported playlist's first park, the editor stays open on it, and the messages say "Imported "<name>" ...
       now playing". The playlist is in `Documents\OpenRCT2\screensaver\playlists`, its parks under `bundles`.
 - [ ] After a restart of the game, the imported playlist plays. Build and play then builds it (not the old one).
-- [ ] Importing a playlist whose parks have scripts that are not installed yet (or differ) lists an amber "Park
-      script ... starts after a restart of the game" per such script; after a restart the scripts run on their
+- [ ] Importing a playlist whose parks have scripts that are not installed yet (or differ) lists an amber "<park>:
+      park script ... starts after a restart of the game" per park using such a script, its square amber too; after a restart the scripts run on their
       parks. Scripts already installed with the same code give no warning.
 - [ ] Importing a bundle of the playlist that is playing replaces it, in the bundle's park order at once (reorder
       the parks in the editor before the import to see it).
