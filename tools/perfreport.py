@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Numbers from engine perf logs (`openrct2 --perf-log`, engine patch 0018), for performance tests.
+"""Numbers from engine perf logs (`openrct2 --perf-log`, engine patch 0019), for performance tests.
 
 Reads one perf log, or a run folder written by tools/perfrun.py (one sub-folder per cell and
 repeat, each with `perf.log` and `cell.json`), and writes `report.md` and `report.json` next to

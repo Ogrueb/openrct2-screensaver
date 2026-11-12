@@ -529,9 +529,8 @@ export class ControlsBar {
             button(scene, id, this.boxes.get(id)!, { ...state(id, this.isOn(id, held) || alt), alt, face }, content, overlay);
         }
         // A build from the game running with the editor closed: a chip over the bar's right end.
-        if (builder.running && !this.editorHooks?.editorOpen()) {
-            const count = builder.count;
-            const text = count ? `Building ${count.park}/${count.parks}` : "Building";
+        const text = builder.chip;
+        if (text && !this.editorHooks?.editorOpen()) {
             const m = measure(overlay, text, 13, true);
             const chip = { x: this.strip.x + this.strip.width - Math.ceil(m.width) - 16, y: this.strip.y - 26, width: Math.ceil(m.width) + 16, height: 22 };
             scene.set("build.chip", { type: "rect", ...chip, fill: THEME.faceOn, z: Z.face });

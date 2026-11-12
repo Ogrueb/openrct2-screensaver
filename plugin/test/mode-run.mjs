@@ -919,7 +919,7 @@ console.log("ok: park changes dip through black in the mode (patch 0010)");
     assert.ok(ed("import") && ed("export"), "Import and Export in the build pane");
     mode.buildFails = "No generator registered";
     edClick("build"); tick(6);
-    assert.ok(ed("build.line").text.startsWith("Build failed: No generator"), "a build that cannot start says why");
+    assert.ok(!ed("build.line"), "no line over the messages for a failure: the message says it once");
     assert.equal(ed("build.state").text, "failed");
     assert.match(ed("msgt.0").text, /did not start: No generator/, "and its message");
     mode.buildFails = undefined;
@@ -1014,7 +1014,139 @@ console.log("ok: park changes dip through black in the mode (patch 0010)");
 }
 console.log("ok: builds from the game (Build and play, progress, the live swap)");
 
-// Performance runs (engine patch 0018, tools/perfrun.py): the plugin's events go into the engine's
+// Import and Export (engine patch "export and import playlist bundles through the system's file
+// dialog"): the engine shows the dialog and runs the generator; the pane follows it as a build, and an
+// imported playlist's build replaces the playing playlist (the engine installs and plays its sequence).
+{
+    const ed = id => scene.get("rcts.ed." + id);
+    const edClick = id => { const e = ed(id); const x = e.x + e.width / 2, y = e.y + e.height / 2; mouse("move", x, y); mouse("down", x, y); mouse("up", x, y); };
+    const gray = "#2a2e2c80";
+    mode.buildStatus = { ...mode.buildStatus, state: "idle" };
+    tick(10);
+    shortcuts["rctscreensaver.edit"]();
+    tick(2);
+    assert.equal(ed("export").fill, gray, "Export is inactive on an engine without the file dialogs");
+    assert.equal(ed("import").fill, gray, "and so is Import");
+    edClick("export"); tick(2);
+    // The engine's side: the dialog's answer, then the generator running in the background.
+    Object.assign(mode, {
+        exports: [], imports: 0, dialogClosed: true,
+        exportPlaylist(name) { this.exports.push(name); if (this.dialogClosed) return false; this.buildStatus = { ...this.buildStatus, state: "running", task: "export", sequence: name, started: now }; return true; },
+        importPlaylist() { this.imports++; if (this.dialogClosed) return false; this.buildStatus = { ...this.buildStatus, state: "running", task: "import", sequence: "", started: now }; return true; },
+    });
+    tick(2);
+    assert.notEqual(ed("export").fill, gray, "with them, Export is active");
+    edClick("export"); tick(2);
+    assert.deepEqual(mode.exports, [playlist.sequence], "Export asks the engine for the playing playlist");
+    assert.notEqual(ed("build.state").text, "exporting", "closing the dialog starts nothing");
+    mode.dialogClosed = false;
+    edClick("export"); tick(2);
+    assert.equal(ed("build.state").text, "exporting", "the header says what runs");
+    assert.equal(scene.get("rcts.ed.build.text")?.text, "Cancel export");
+    assert.equal(ed("import").fill, gray, "one task at a time");
+    mode.files.set("task-export.json", JSON.stringify({ taskVersion: 1, task: "export", started: now, ok: true, finished: now,
+        sequence: playlist.sequence, path: "D:/My List.zip",
+        messages: [{ level: "info", text: "Took in your edits" }, { level: "ok", text: "Exported 3 parks to D:/My List.zip" }] }));
+    mode.buildStatus = { ...mode.buildStatus, state: "done", finished: now };
+    tick(6);
+    assert.equal(ed("msgt.0").text, "Exported 3 parks to D:/My List.zip", "the export's messages, newest first");
+    assert.equal(ed("msgt.1").text, "Took in your edits");
+    assert.equal(scene.get("rcts.ed.build.text")?.text, "Build and play", "and the pane is back to building");
+    // A failed export says why.
+    edClick("export"); tick(2);
+    mode.files.set("task-export.json", JSON.stringify({ taskVersion: 1, task: "export", started: now, ok: false, finished: now,
+        error: "b.park is missing", messages: [{ level: "error", text: "Export failed: b.park is missing" }] }));
+    mode.buildStatus = { ...mode.buildStatus, state: "failed", finished: now };
+    tick(6);
+    assert.equal(ed("build.state").text, "failed");
+    assert.equal(ed("msgt.0").text, "Export failed: b.park is missing");
+    // Import: the bundle is unpacked, then built, then installed and played instead.
+    const imported = JSON.parse(JSON.stringify(playlist));
+    imported.sequence = "Imported";
+    imported.parks = imported.parks.slice(0, 2);
+    imported.parks.forEach((p, i) => { p.load = 2 * i; });
+    const seq2Commands = [];
+    imported.parks.forEach((p, i) => { seq2Commands[p.load] = { type: "load", index: i }; seq2Commands[p.load + 1] = { type: "wait" }; });
+    const seq2 = { ...sequence, name: "Imported", parks: imported.parks.map(p => ({ fileName: p.fileName })), commands: seq2Commands,
+        isPlaying: false, position: null, stops: 0, backgroundLoading: false, lastSeek: undefined };
+    edClick("import"); tick(2);
+    assert.equal(mode.imports, 1);
+    assert.equal(ed("build.state").text, "importing");
+    assert.equal(scene.get("rcts.ed.build.text")?.text, "Cancel import");
+    mode.files.set("task-import.json", JSON.stringify({ taskVersion: 1, task: "import", started: now, ok: true, finished: now,
+        sequence: "Imported", playlist: "C:/x/imported.toml", missing: [],
+        messages: [{ level: "ok", text: "Imported \"Imported\" (2 parks)" }] }));
+    mode.files.set("build-Imported.json", JSON.stringify({ buildVersion: 1, sequence: "Imported", started: now, ok: null, park: 1, parks: 2,
+        parkStates: [{ key: "x", name: "X", state: "building" }, { state: "pending" }] }));
+    tick(6);
+    assert.equal(ed("build.state").text, "building 1/2", "then its build, square by square");
+    assert.match(ed("build.line").text, /^Building the import · Park 1 of 2/);
+    assert.equal(ed("sq.0").fill, "#6fcf8a", "the imported playlist's squares");
+    mode.onApply = () => {
+        if (mode.applied.at(-1) !== "Imported") return;
+        sandbox.titleSequenceManager.titleSequences.push(seq2);
+        sequence.isPlaying = false;
+        seq2.isPlaying = true;
+    };
+    READ_BACK.add("RCTScreensaver.playlist");
+    saved["RCTScreensaver.edits"] = { [playlist.parks[0].key ?? playlist.parks[0].fileName]: { views: [] } };
+    mode.files.set("build-Imported.json", JSON.stringify({ buildVersion: 1, sequence: "Imported", started: now, ok: true, finished: now,
+        playlist: imported, titleMusic: "ride", warnings: [],
+        parkStates: imported.parks.map(p => ({ key: p.key ?? p.fileName, name: p.name, state: "built", warnings: 0 })),
+        messages: [{ level: "ok", text: "Built 2 parks" }] }));
+    mode.buildStatus = { ...mode.buildStatus, state: "done", finished: now };
+    tick(6);
+    assert.equal(mode.applied.at(-1), "Imported", "the engine installs the imported sequence");
+    assert.equal(saved["RCTScreensaver.playlist"].sequence, "Imported", "the imported playlist is the one installed");
+    assert.equal(JSON.stringify(saved["RCTScreensaver.edits"]), "{}", "the old playlist's edits leave the storage (its live file keeps them)");
+    assert.ok(logs.some(l => l.includes('playing "Imported" (2 parks)')), "the player starts on it");
+    assert.ok(seq2.lastSeek !== undefined, "and plays its parks");
+    tick(2);
+    assert.ok(ed("build"), "the editor is open again");
+    assert.match(ed("msgt.0").text, /^Imported "Imported" .* now playing/, "the plugin's line first");
+    assert.equal(ed("msgt.1").text, "Built 2 parks", "then the build's, newest first");
+    assert.equal(ed("msgt.2").text, "Imported \"Imported\" (2 parks)", "then the import's own, older");
+    assert.equal(ed("sq.1").fill, "#3d9a5c", "squares of the imported playlist");
+    // Reorder it in the editor, then import it again under the same name: the bundle's order plays at
+    // once (owner, 2026-11-12: it took effect only after a restart).
+    {
+        const f = ed("field");
+        mouse("move", f.x + 20, f.y + 10); mouse("down", f.x + 20, f.y + 10); mouse("up", f.x + 20, f.y + 10);
+        const p0 = ed("park.0"), p1 = ed("park.1");
+        mouse("move", p0.x + 6, p0.y + 8); mouse("down", p0.x + 6, p0.y + 8);
+        mouse("move", p0.x + 6, p0.y + 30); mouse("move", p1.x + 6, p1.y + p1.height + 2);
+        mouse("up", p1.x + 6, p1.y + p1.height + 2);
+        tick();
+        assert.equal(ed("pname.0").text, imported.parks[1].name, "reordered in the editor");
+        edClick("field"); tick(); // (closes the list)
+        edClick("import"); tick(2);
+        assert.equal(mode.imports, 2);
+        mode.files.set("task-import.json", JSON.stringify({ taskVersion: 1, task: "import", started: Date.now(), ok: true,
+            finished: Date.now(), sequence: "Imported", playlist: "C:/x/imported.toml", missing: [],
+            messages: [{ level: "ok", text: "Imported \"Imported\" (2 parks)" }] }));
+        mode.files.set("build-Imported.json", JSON.stringify({ buildVersion: 1, sequence: "Imported", started: Date.now(), ok: true,
+            finished: Date.now(), playlist: imported, titleMusic: "ride", warnings: [],
+            parkStates: imported.parks.map(p => ({ key: p.key ?? p.fileName, name: p.name, state: "built", warnings: 0 })),
+            messages: [{ level: "ok", text: "Built 2 parks" }] }));
+        mode.buildStatus = { ...mode.buildStatus, state: "done", finished: Date.now() };
+        tick(8);
+        assert.equal(logs.filter(l => l.includes('playing "Imported" (2 parks)')).length, 2, "the player starts afresh on the same name");
+        edClick("field"); tick();
+        assert.equal(ed("pname.0").text, imported.parks[0].name, "in the imported order");
+        edClick("field"); tick();
+    }
+    shortcuts["rctscreensaver.edit"]();
+    tick();
+    // Back to the fixture's playlist for the tests below.
+    READ_BACK.delete("RCTScreensaver.playlist");
+    sandbox.titleSequenceManager.titleSequences.pop();
+    seq2.isPlaying = false;
+    mode.set(false);
+    tick();
+}
+console.log("ok: Import and Export playlist through the file dialogs");
+
+// Performance runs (engine patch 0019, tools/perfrun.py): the plugin's events go into the engine's
 // perf log as marks; bench mode keeps the mouse from showing the bar (marked instead) and starts
 // OpenRCT2's function profiler, exported on an interval.
 const marks = [];
@@ -1036,6 +1168,6 @@ assert.ok(marks.includes("input move"), "and the input is marked for the report 
 assert.ok(legacy.includes("profiler_start"), "the function profiler starts");
 assert.ok(intervals.some(v => v.ms === 60000), "and is exported every minute");
 assert.ok(legacy.includes('profiler_export "C:/perf run/profiler.csv"'), "to the quoted path");
-console.log("ok: perf marks, bench mode and the profiler (patch 0018)");
+console.log("ok: perf marks, bench mode and the profiler (patch 0019)");
 
 console.log("ok: screensaver mode (start, stop, keys, settings, no toolbox items)");

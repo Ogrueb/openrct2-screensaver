@@ -525,6 +525,8 @@ export class EditorPanel implements EditorView {
             case "propsHead": this.propsOpen = !this.propsOpen; break;
             case "buildHead": this.buildOpen = this.buildFolded(); break;
             case "build": this.toggleBuild(); break;
+            case "import": this.bundle("import"); break;
+            case "export": this.bundle("export"); break;
         }
     }
 
@@ -537,6 +539,22 @@ export class EditorPanel implements EditorView {
             e.playback.savePlaylistProps(); // saved already; the build takes the live file
             this.messages.first = 0;
             builder.start(e.playback.sequenceName);
+        }
+        this.render();
+    }
+
+    /** Import playlist or Export playlist: the system's file dialog (the game waits while it is open),
+     *  then the generator in the background, followed in this pane like a build. */
+    private bundle(task: "import" | "export"): void {
+        const e = this.editor;
+        if (!e || !builder.bundlesAvailable || builder.running) {
+            return;
+        }
+        this.messages.first = 0;
+        if (task === "export") {
+            builder.exportPlaylist(e.playback.sequenceName);
+        } else {
+            builder.importPlaylist();
         }
         this.render();
     }
@@ -1101,7 +1119,7 @@ export class EditorPanel implements EditorView {
     /** The build pane's state, to redraw it when it changes. */
     private buildSignature(e: Editor): string {
         const line = builder.line;
-        return [line.phase, line.text, builder.running ? Math.floor(builder.elapsed / 1000) : "",
+        return [line.phase, line.text, builder.runningTask ?? "", builder.bundlesAvailable, builder.running ? Math.floor(builder.elapsed / 1000) : "",
             builder.parks.map(p => p.state + (p.warnings ?? 0) + (p.stale ? "*" : "")).join(","), builder.messages.length,
             builder.pendingEdits(e.playback.installedAt), this.crawlPhase()].join("|");
     }
@@ -1174,7 +1192,7 @@ export class EditorPanel implements EditorView {
         scene.set("build.sub", { ...scene.get("build.sub")!, colour: THEME.textDim });
         const count = builder.count;
         const [stateText, stateColour] = line.phase === "unavailable" ? ["needs the patched engine", THEME.textDim]
-            : line.phase === "running" ? [count ? `building ${count.park}/${count.parks}` : "building", THEME.textGood]
+            : line.phase === "running" ? [(builder.chip ?? "Building").toLowerCase(), THEME.textGood]
             : line.phase === "failed" ? ["failed", THEME.warning]
             : builder.pendingEdits(e.playback.installedAt) ? ["edits not built", THEME.pending]
             : ["built · playing", THEME.textGood];
@@ -1190,8 +1208,9 @@ export class EditorPanel implements EditorView {
         const running = line.phase === "running";
         const time = running ? clock(builder.elapsed) : "";
         const timeW = time ? measure(overlay, time, 13).width : 0;
-        // Only while it runs or when it failed: the header and the messages say the rest (owner, 2026-11-11)
-        const shownLine = running || line.phase === "failed" || line.phase === "unavailable" ? line.text : "";
+        // Only while it runs: the header and the messages say the rest (owner, 2026-11-11; a failure's line
+        // repeated the error message under it, owner 2026-11-12)
+        const shownLine = running || line.phase === "unavailable" ? line.text : "";
         // (with no line the squares take its space: owner, 2026-11-12)
         let squareH = s.square + 18 + 4;
         if (shownLine) {
@@ -1209,13 +1228,16 @@ export class EditorPanel implements EditorView {
         // Build and play, or Cancel build while one runs.
         const unavailable = line.phase === "unavailable";
         const nothing = !running && !unavailable && !builder.pendingEdits(e.playback.installedAt);
+        const task = builder.runningTask;
         const build = this.place("build", { x: x0, y, width: inner, height: s.buildButton },
-            unavailable ? line.text : running ? "Stop the build; the playlist plays on as it was (Ctrl+B)"
+            unavailable ? line.text : task === "export" ? "Stop the export (Ctrl+B)"
+                : task === "import" ? "Stop the import; the playlist plays on as it was (Ctrl+B)"
+                : running ? "Stop the build; the playlist plays on as it was (Ctrl+B)"
                 : nothing ? "Nothing to build: the playlist files hold every edit"
                 : "Save your live edits to the playlist and build it in the background, then play it (Ctrl+B)", unavailable || nothing);
         const st = this.state("build");
         button(scene, "build", build, { ...st, face: running || unavailable || nothing || st.hover || st.down ? undefined : THEME.buildFace },
-            { icon: running ? "close" : "build", iconSize: s.toolIcon, text: running ? "Cancel build" : "Build and play", textSize: 16, hint: "Ctrl+B" }, overlay);
+            { icon: running ? "close" : "build", iconSize: s.toolIcon, text: !running ? "Build and play" : task === "export" ? "Cancel export" : task === "import" ? "Cancel import" : "Cancel build", textSize: 16, hint: "Ctrl+B" }, overlay);
         y += s.buildButton + 10;
         // The messages: what the build took in, built, warned about; one about a park opens it.
         this.sectionLabel(scene, "build.msgs", "MESSAGES", x0, y);
@@ -1255,10 +1277,17 @@ export class EditorPanel implements EditorView {
             this.place("messages.thumb", this.messages.thumb!);
         }
         y += listH + 8;
-        // Import and Export wait for a way to pick files.
+        // Import and Export: a playlist bundle picked in the system's file dialog (patched engine).
         const halfW = Math.floor((inner - 4) / 2);
+        const bundles = builder.bundlesAvailable;
+        const tips = {
+            import: "Pick a playlist bundle (.zip) to import, build and play instead of this playlist",
+            export: "Save this playlist with your edits, its parks and your park profiles as a bundle (.zip)",
+        };
         for (const [id, icon, text, bx] of [["import", "import", "Import playlist", x0], ["export", "export", "Export playlist", x0 + inner - halfW]] as const) {
-            const r = this.place(id, { x: bx, y, width: halfW, height: s.boxButton }, `${text} (coming later)`, true);
+            const off = !bundles || running;
+            const tip = !bundles ? `${text} needs the patched engine with file dialogs` : running ? `${text}: wait for the ${task} to finish` : tips[id];
+            const r = this.place(id, { x: bx, y, width: halfW, height: s.boxButton }, tip, off);
             button(scene, id, r, this.state(id), { icon, iconSize: s.toolIcon, text, textSize: 14, left: true }, overlay);
         }
     }

@@ -146,6 +146,16 @@
     return liveSaved || void 0;
   }
   var liveProps = {};
+  function startPlaylistEdits(sequence) {
+    context.sharedStorage.set(NAMESPACE + ".edits", {});
+    context.sharedStorage.set(NAMESPACE + ".builtEdits", {});
+    const all = context.sharedStorage.get(NAMESPACE + ".playlistProps", {});
+    delete all[sequence];
+    context.sharedStorage.set(NAMESPACE + ".playlistProps", all);
+    delete liveProps[sequence];
+    liveEdits = void 0;
+    liveSaved = void 0;
+  }
   function writeLive() {
     const api = filesApi();
     const playlist = api ? loadPlaylist() : void 0;
@@ -215,6 +225,18 @@
   function buildApi() {
     return typeof screensaver !== "undefined" && screensaver !== null && typeof screensaver.build === "function" && typeof screensaver.applyBuild === "function" ? screensaver : void 0;
   }
+  function readTaskResult(task) {
+    const text = filesApi()?.readFile(`task-${task}.json`);
+    if (!text) {
+      return void 0;
+    }
+    try {
+      const result = JSON.parse(text);
+      return result && result.taskVersion === 1 && result.task === task ? result : void 0;
+    } catch {
+      return void 0;
+    }
+  }
   function buildFileName(sequence) {
     return "build-" + liveFileName(sequence);
   }
@@ -246,11 +268,13 @@
   var Builder = class {
     constructor(api = buildApi()) {
       this.api = api;
-      // the build this plugin started
+      // the build being followed (an import's, once it is known)
       this.started = 0;
       this.lastPoll = 0;
       // the last build's result (its squares and messages stay shown)
       this.notes = [];
+      // the plugin's own lines about the last task, before the generator's
+      this.earlier = [];
       this.builtFrom = 0;
       // when the build that plays started: edits saved since are not built
       this.startEdits = {};
@@ -260,8 +284,20 @@
     get available() {
       return this.api !== void 0 && filesApi() !== void 0;
     }
+    /** Export and Import: an engine with the file dialogs. */
+    get bundlesAvailable() {
+      return this.available && typeof this.api.exportPlaylist === "function" && typeof this.api.importPlaylist === "function";
+    }
     get running() {
-      return this.sequence !== void 0;
+      return this.task !== void 0;
+    }
+    /** What runs: a build, an export, an import (undefined: nothing). */
+    get runningTask() {
+      return this.task;
+    }
+    /** A build is under way: Build and play's, or an import's once the bundle is unpacked. */
+    get building() {
+      return this.task === "build" || this.task === "import" && this.sequence !== void 0;
     }
     start(sequence) {
       if (!this.api || this.running) {
@@ -273,54 +309,117 @@
         this.outcome = { phase: "failed", text: `Build failed: ${message(e)}`, warning: true };
         this.last = void 0;
         this.notes = [{ level: "error", text: `The build did not start: ${message(e)}` }];
+        this.earlier = [];
         log(`build of "${sequence}" did not start: ${message(e)}`);
         return;
       }
       this.last = this.last ?? readBuildResult(sequence);
+      this.begin("build", sequence);
+      this.startEdits = JSON.parse(JSON.stringify(loadEdits()));
+      log(`building "${sequence}"`);
+    }
+    /** Export playlist: the system's Save dialog (the game waits while it is open), then the export in
+     *  the background. */
+    exportPlaylist(sequence) {
+      this.startBundle("export", () => this.api.exportPlaylist(sequence), sequence);
+    }
+    /** Import playlist: the system's Open dialog, then the import and its build in the background. */
+    importPlaylist() {
+      this.startBundle("import", () => this.api.importPlaylist());
+    }
+    startBundle(task, run, sequence) {
+      if (!this.bundlesAvailable || this.running) {
+        return;
+      }
+      const name = task === "export" ? "Export" : "Import";
+      let picked;
+      try {
+        picked = run();
+      } catch (e) {
+        this.outcome = { phase: "failed", text: `${name} failed: ${message(e)}`, warning: true };
+        this.notes = [{ level: "error", text: `${name} did not start: ${message(e)}` }];
+        this.earlier = [];
+        log(`${task} did not start: ${message(e)}`);
+        return;
+      }
+      if (!picked) {
+        return;
+      }
+      this.begin(task, void 0);
+      log(task === "export" ? `exporting "${sequence}"` : "importing a playlist");
+    }
+    begin(task, sequence) {
+      this.task = task;
       this.sequence = sequence;
       this.started = Date.now();
-      this.startEdits = JSON.parse(JSON.stringify(loadEdits()));
+      this.lastPoll = 0;
       this.progress = void 0;
       this.outcome = void 0;
       this.notes = [];
-      log(`building "${sequence}"`);
+      this.earlier = [];
     }
     cancel() {
       if (this.api && this.running && this.api.cancelBuild()) {
-        log("build cancelled");
+        log(`${this.task} cancelled`);
       }
     }
-    /** Called on the plugin's update: follows a running build and takes it in when it is done. */
+    /** Called on the plugin's update: follows a running task and takes a build in when it is done. */
     update() {
-      if (!this.api || !this.sequence || Date.now() - this.lastPoll < POLL_MS) {
+      if (!this.api || !this.task || Date.now() - this.lastPoll < POLL_MS) {
         return;
       }
       this.lastPoll = Date.now();
-      const sequence = this.sequence;
       const status = this.api.buildStatus;
-      const result = readBuildResult(sequence);
-      const current = result && result.started >= this.started - STALE_MS ? result : void 0;
-      if (status.state === "running") {
+      const running = status.state === "running";
+      const fresh = (r) => r && r.started >= this.started - STALE_MS ? r : void 0;
+      if (this.task === "export") {
+        if (!running) {
+          this.finishExport(status, fresh(readTaskResult("export")));
+        }
+        return;
+      }
+      let imported;
+      if (this.task === "import") {
+        imported = fresh(readTaskResult("import"));
+        if (imported?.ok && imported.sequence && !this.sequence) {
+          this.sequence = imported.sequence;
+          this.last = void 0;
+        }
+      }
+      const sequence = this.sequence;
+      const current = sequence ? fresh(readBuildResult(sequence)) : void 0;
+      if (running) {
         this.progress = current ?? this.progress;
         return;
       }
+      const task = this.task;
+      this.task = void 0;
       this.sequence = void 0;
       this.progress = void 0;
-      this.last = current;
       const took = Date.now() - this.started;
+      const from = (r) => [...r?.messages ?? []].reverse();
+      if (task === "import" && !(imported?.ok && sequence)) {
+        const why = status.state === "cancelled" ? "cancelled" : imported?.error || status.error || "the generator failed";
+        this.outcome = { phase: status.state === "cancelled" ? "idle" : "failed", text: `Import ${status.state === "cancelled" ? "cancelled" : "failed: " + why}`, warning: status.state !== "cancelled" };
+        this.notes = imported?.messages?.some((m) => m.level === "error") ? from(imported) : [{ level: status.state === "cancelled" ? "info" : "error", text: `Import ${status.state === "cancelled" ? "cancelled; the playlist plays on as it was" : `failed: ${why} (log: screensaver/build.log in the user folder)`}` }, ...from(imported)];
+        log(`import ${status.state === "cancelled" ? "cancelled" : "failed: " + why}`);
+        return;
+      }
+      this.earlier = task === "import" ? from(imported) : [];
+      this.last = current;
       if (status.state === "cancelled") {
         this.outcome = { phase: "idle", text: "Build cancelled" };
-        this.notes = [{ level: "info", text: "Build cancelled; the playlist plays on as it was" }];
+        this.notes = [{ level: "info", text: task === "import" ? "Build cancelled; the imported playlist is in your playlists folder, the old one plays on" : "Build cancelled; the playlist plays on as it was" }];
         return;
       }
       if (status.state !== "done" || !current?.ok || !current.playlist) {
         const why = current?.ok === false && current.error ? current.error : status.error || "the generator failed";
         this.outcome = { phase: "failed", text: `Build failed: ${why}`, warning: true };
-        this.notes = current?.messages?.some((m) => m.level === "error") ? [] : [{ level: "error", text: `Build failed: ${why} (log: screensaver/build.log in the user folder)` }];
+        this.notes = [...current?.messages?.some((m) => m.level === "error") ? [] : [{ level: "error", text: `Build failed: ${why} (log: screensaver/build.log in the user folder)` }]];
         log(`build of "${sequence}" failed: ${why} (log: screensaver/build.log in the user folder)`);
         return;
       }
-      const error = this.onReady ? this.onReady(current) : "nothing to play it";
+      const error = this.onReady ? this.onReady(current, task === "import") : "nothing to play it";
       if (error) {
         this.outcome = { phase: "failed", text: `Built, but not taken in: ${error}`, warning: true };
         this.notes = [{ level: "error", text: `Built, but not taken in: ${error}` }];
@@ -328,40 +427,72 @@
         return;
       }
       this.builtFrom = current.started;
-      saveBuiltEdits(this.startEdits);
+      if (task === "build") {
+        saveBuiltEdits(this.startEdits);
+      }
       const warnings = current.warnings?.length ?? 0;
       const at = timeOfDay(current.finished ?? Date.now());
       this.outcome = {
         phase: "done",
-        text: `Built at ${at}, now playing${warnings ? `; ${warnings} warning${warnings > 1 ? "s" : ""}` : ""}`
+        text: `${task === "import" ? "Imported" : "Built"} at ${at}, now playing${warnings ? `; ${warnings} warning${warnings > 1 ? "s" : ""}` : ""}`
       };
-      this.notes = [{ level: "ok", text: `Built ${at} in ${clock(took)}, now playing` }];
+      this.notes = [{ level: "ok", text: task === "import" ? `Imported "${sequence}" ${at} in ${clock(took)}, now playing` : `Built ${at} in ${clock(took)}, now playing` }];
       for (const w of current.warnings ?? []) {
         log(`build warning: ${w}`);
       }
-      log(`build of "${sequence}" now playing`);
+      log(`${task === "import" ? "imported" : "build of"} "${sequence}" now playing`);
+    }
+    finishExport(status, result) {
+      this.task = void 0;
+      const lines = [...result?.messages ?? []].reverse();
+      if (status.state === "cancelled") {
+        this.outcome = { phase: "idle", text: "Export cancelled" };
+        this.notes = [{ level: "info", text: "Export cancelled" }];
+      } else if (status.state === "done" && result?.ok) {
+        this.outcome = { phase: "idle", text: `Exported to ${result.path ?? "the bundle"}` };
+        this.notes = lines;
+      } else {
+        const why = result?.ok === false && result.error ? result.error : status.error || "the generator failed";
+        this.outcome = { phase: "failed", text: `Export failed: ${why}`, warning: true };
+        this.notes = lines.some((m) => m.level === "error") ? lines : [{ level: "error", text: `Export failed: ${why} (log: screensaver/build.log in the user folder)` }, ...lines];
+      }
+      log(`export: ${this.outcome.text}`);
     }
     /** The line the editor shows (the controls bar's chip and the pane's header take theirs from it). */
     get line() {
       if (!this.available) {
         return { phase: "unavailable", text: "Building from the game needs the patched engine" };
       }
+      if (this.task === "export") {
+        return { phase: "running", text: "Exporting the playlist" };
+      }
+      if (this.task === "import" && !this.sequence) {
+        return { phase: "running", text: "Importing the playlist" };
+      }
       if (this.running) {
         const p = this.progress;
         const name = p?.parkKey && this.nameOf?.(p.parkKey) || p?.parkName;
         const where = p?.parks ? `Park ${p.park} of ${p.parks}${name ? " \xB7 " + name : ""}` : "Starting";
-        return { phase: "running", text: where };
+        return { phase: "running", text: this.task === "import" ? `Building the import \xB7 ${where}` : where };
       }
       return this.outcome ?? { phase: "idle", text: "" };
     }
-    /** The running build's time so far, ms. */
+    /** The running task's time so far, ms. */
     get elapsed() {
       return this.running ? Date.now() - this.started : 0;
     }
     /** The running build's park and count, for the controls bar's chip. */
     get count() {
       const p = this.progress;
-      return this.running && p?.parks ? { park: p.park ?? 0, parks: p.parks } : void 0;
+      return this.building && p?.parks ? { park: p.park ?? 0, parks: p.parks } : void 0;
+    }
+    /** The controls bar's chip while a task runs (the header's state is the same, lower case). */
+    get chip() {
+      if (!this.running) {
+        return void 0;
+      }
+      const count = this.count;
+      return this.task === "export" ? "Exporting" : this.task === "import" && !count ? "Importing" : count ? `Building ${count.park}/${count.parks}` : "Building";
     }
     /** The parks whose edits changed since the game's last build took them in (or since the install). */
     dirty() {
@@ -385,7 +516,7 @@
         const base = old && old.state !== "pending" && old.state !== "building" ? old : { key, name: p?.name, state: "built" };
         return { ...base, stale: dirty.has(key) };
       };
-      if (this.running) {
+      if (this.building) {
         return (this.progress?.parkStates ?? []).map((p) => p.state === "pending" && p.key ? carried(p.key, p) : p);
       }
       const order = this.orderOf?.() ?? [];
@@ -395,15 +526,21 @@
       const shown = new Set(order);
       return [...order.map((key) => carried(key)), ...(this.last?.parkStates ?? []).filter((p) => p.key && !shown.has(p.key))];
     }
-    /** The messages of the running build, else of the last one, newest first. */
+    /** The messages of the running build, else of the last one, newest first (the plugin's own lines
+     *  about the last task on top, an import's unpacking lines last). */
     get messages() {
-      const r = this.running ? this.progress : this.last;
-      return [...this.notes, ...[...r?.messages ?? []].reverse()];
+      const r = this.building ? this.progress : this.last;
+      return [...this.notes, ...[...r?.messages ?? []].reverse(), ...this.earlier];
     }
     /** Edits saved in the game since the playing build started (or since the install). */
     pendingEdits(installed) {
       const saved = lastLiveSave();
       return saved !== void 0 && saved > Math.max(this.builtFrom, installed ?? 0);
+    }
+    /** Another playlist plays now (an import): what was kept about the old one goes. */
+    forgetPlaylist() {
+      this.dirtyStamp = "";
+      this.startEdits = {};
     }
   };
   function message(e) {
@@ -4609,9 +4746,8 @@
         const face = id === "speed" ? speedFace(this.settings.speed, hover === id) : void 0;
         button(scene, id, this.boxes.get(id), { ...state(id, this.isOn(id, held) || alt), alt, face }, content, overlay);
       }
-      if (builder.running && !this.editorHooks?.editorOpen()) {
-        const count = builder.count;
-        const text = count ? `Building ${count.park}/${count.parks}` : "Building";
+      const text = builder.chip;
+      if (text && !this.editorHooks?.editorOpen()) {
         const m = measure(overlay, text, 13, true);
         const chip = { x: this.strip.x + this.strip.width - Math.ceil(m.width) - 16, y: this.strip.y - 26, width: Math.ceil(m.width) + 16, height: 22 };
         scene.set("build.chip", { type: "rect", ...chip, fill: THEME.faceOn, z: Z.face });
@@ -6008,6 +6144,12 @@
         case "build":
           this.toggleBuild();
           break;
+        case "import":
+          this.bundle("import");
+          break;
+        case "export":
+          this.bundle("export");
+          break;
       }
     }
     /** Build and play, or Cancel build (also Ctrl+B). */
@@ -6019,6 +6161,21 @@
         e.playback.savePlaylistProps();
         this.messages.first = 0;
         builder.start(e.playback.sequenceName);
+      }
+      this.render();
+    }
+    /** Import playlist or Export playlist: the system's file dialog (the game waits while it is open),
+     *  then the generator in the background, followed in this pane like a build. */
+    bundle(task) {
+      const e = this.editor;
+      if (!e || !builder.bundlesAvailable || builder.running) {
+        return;
+      }
+      this.messages.first = 0;
+      if (task === "export") {
+        builder.exportPlaylist(e.playback.sequenceName);
+      } else {
+        builder.importPlaylist();
       }
       this.render();
     }
@@ -6655,6 +6812,8 @@
       return [
         line.phase,
         line.text,
+        builder.runningTask ?? "",
+        builder.bundlesAvailable,
         builder.running ? Math.floor(builder.elapsed / 1e3) : "",
         builder.parks.map((p) => p.state + (p.warnings ?? 0) + (p.stale ? "*" : "")).join(","),
         builder.messages.length,
@@ -6720,7 +6879,7 @@
       label(scene, "build.sub", "saves live edits to the playlist", { x: x0 + 24 + tw + 8, y: y + 1, width: 0, height: s.propHeader }, 13, overlay);
       scene.set("build.sub", { ...scene.get("build.sub"), colour: THEME.textDim });
       const count = builder.count;
-      const [stateText, stateColour] = line.phase === "unavailable" ? ["needs the patched engine", THEME.textDim] : line.phase === "running" ? [count ? `building ${count.park}/${count.parks}` : "building", THEME.textGood] : line.phase === "failed" ? ["failed", THEME.warning] : builder.pendingEdits(e.playback.installedAt) ? ["edits not built", THEME.pending] : ["built \xB7 playing", THEME.textGood];
+      const [stateText, stateColour] = line.phase === "unavailable" ? ["needs the patched engine", THEME.textDim] : line.phase === "running" ? [(builder.chip ?? "Building").toLowerCase(), THEME.textGood] : line.phase === "failed" ? ["failed", THEME.warning] : builder.pendingEdits(e.playback.installedAt) ? ["edits not built", THEME.pending] : ["built \xB7 playing", THEME.textGood];
       const stw = measure(overlay, stateText, 13).width;
       label(scene, "build.state", stateText, { x: x0 + inner - 8 - stw, y, width: 0, height: s.propHeader }, 13, overlay);
       scene.set("build.state", { ...scene.get("build.state"), colour: stateColour });
@@ -6732,7 +6891,7 @@
       const running = line.phase === "running";
       const time = running ? clock(builder.elapsed) : "";
       const timeW = time ? measure(overlay, time, 13).width : 0;
-      const shownLine = running || line.phase === "failed" || line.phase === "unavailable" ? line.text : "";
+      const shownLine = running || line.phase === "unavailable" ? line.text : "";
       let squareH = s.square + 18 + 4;
       if (shownLine) {
         label(scene, "build.line", fit(overlay, shownLine, 13, inner - timeW - 12), { x: x0, y, width: 0, height: 18 }, 13, overlay);
@@ -6748,10 +6907,11 @@
       y += squareH + 8;
       const unavailable = line.phase === "unavailable";
       const nothing = !running && !unavailable && !builder.pendingEdits(e.playback.installedAt);
+      const task = builder.runningTask;
       const build = this.place(
         "build",
         { x: x0, y, width: inner, height: s.buildButton },
-        unavailable ? line.text : running ? "Stop the build; the playlist plays on as it was (Ctrl+B)" : nothing ? "Nothing to build: the playlist files hold every edit" : "Save your live edits to the playlist and build it in the background, then play it (Ctrl+B)",
+        unavailable ? line.text : task === "export" ? "Stop the export (Ctrl+B)" : task === "import" ? "Stop the import; the playlist plays on as it was (Ctrl+B)" : running ? "Stop the build; the playlist plays on as it was (Ctrl+B)" : nothing ? "Nothing to build: the playlist files hold every edit" : "Save your live edits to the playlist and build it in the background, then play it (Ctrl+B)",
         unavailable || nothing
       );
       const st = this.state("build");
@@ -6760,7 +6920,7 @@
         "build",
         build,
         { ...st, face: running || unavailable || nothing || st.hover || st.down ? void 0 : THEME.buildFace },
-        { icon: running ? "close" : "build", iconSize: s.toolIcon, text: running ? "Cancel build" : "Build and play", textSize: 16, hint: "Ctrl+B" },
+        { icon: running ? "close" : "build", iconSize: s.toolIcon, text: !running ? "Build and play" : task === "export" ? "Cancel export" : task === "import" ? "Cancel import" : "Cancel build", textSize: 16, hint: "Ctrl+B" },
         overlay
       );
       y += s.buildButton + 10;
@@ -6805,8 +6965,15 @@
       }
       y += listH + 8;
       const halfW = Math.floor((inner - 4) / 2);
+      const bundles = builder.bundlesAvailable;
+      const tips = {
+        import: "Pick a playlist bundle (.zip) to import, build and play instead of this playlist",
+        export: "Save this playlist with your edits, its parks and your park profiles as a bundle (.zip)"
+      };
       for (const [id, icon, text, bx] of [["import", "import", "Import playlist", x0], ["export", "export", "Export playlist", x0 + inner - halfW]]) {
-        const r = this.place(id, { x: bx, y, width: halfW, height: s.boxButton }, `${text} (coming later)`, true);
+        const off = !bundles || running;
+        const tip = !bundles ? `${text} needs the patched engine with file dialogs` : running ? `${text}: wait for the ${task} to finish` : tips[id];
+        const r = this.place(id, { x: bx, y, width: halfW, height: s.boxButton }, tip, off);
         button(scene, id, r, this.state(id), { icon, iconSize: s.toolIcon, text, textSize: 14, left: true }, overlay);
       }
     }
@@ -7037,12 +7204,13 @@
     }
     player = void 0;
   }
-  function takeBuild(result) {
+  function takeBuild(result, imported = false) {
     const api = buildApi();
     if (!api || !player?.isRunning || !result.playlist) {
       return "the screensaver is not playing";
     }
-    if (result.playlist.sequence !== player.sequenceName) {
+    const other = result.playlist.sequence !== player.sequenceName;
+    if (other && !imported) {
       return `another playlist is playing ("${player.sequenceName}")`;
     }
     try {
@@ -7051,20 +7219,33 @@
       return message(e);
     }
     const old = loadPlaylist();
-    const playlist = { ...result.playlist, installed: Date.now(), source: result.playlist.source ?? old?.source };
+    const playlist = { ...result.playlist, installed: Date.now(), source: result.playlist.source ?? (other ? void 0 : old?.source) };
     const check = resolveSequence(playlist);
     if (typeof check === "string") {
       return check;
     }
     savePlaylist(playlist);
+    if (imported) {
+      startPlaylistEdits(playlist.sequence);
+      builder.forgetPlaylist();
+    }
     if (result.titleMusic) {
       const settings = player.liveSettings;
       settings.titleMusic = result.titleMusic;
       saveSettings(settings);
       player.noteInstalledMusic(result.titleMusic);
     }
-    player.swapPlaylist(playlist);
-    return void 0;
+    if (!other && !imported) {
+      player.swapPlaylist(playlist);
+      return void 0;
+    }
+    const reopen = editor?.isOpen ?? false;
+    stopPlayer();
+    startPlayer();
+    if (reopen) {
+      editor?.open();
+    }
+    return player?.isRunning ? void 0 : "the imported playlist could not start";
   }
   builder.onReady = takeBuild;
   builder.nameOf = (key) => {
