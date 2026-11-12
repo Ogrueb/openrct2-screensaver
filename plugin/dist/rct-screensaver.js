@@ -1776,6 +1776,8 @@
     // a park built
     buildCurrent: "#6fcf8a",
     // the park being built
+    buildCrawl: "#ffffff59",
+    // its stripes crawling across it
     buildWarn: "#c8962a",
     // built with warnings
     buildFail: "#b8403a",
@@ -1913,6 +1915,7 @@
     squaresMax: 30
     // above, a bar with the count
   };
+  var CRAWL = { period: 12, stripe: 6, row: 2, step: 2, fps: 10 };
   var TIMING = {
     hideAfter: 2500,
     // without mouse movement (never while the mouse is over the bar)
@@ -6527,8 +6530,28 @@
         builder.running ? Math.floor(builder.elapsed / 1e3) : "",
         builder.parks.map((p) => p.state + (p.warnings ?? 0) + (p.stale ? "*" : "")).join(","),
         builder.messages.length,
-        builder.pendingEdits(e.playback.installedAt)
+        builder.pendingEdits(e.playback.installedAt),
+        this.crawlPhase()
       ].join("|");
+    }
+    /** The step of the building square's crawling stripes (redrawn at CRAWL.fps while a park builds). */
+    crawlPhase() {
+      return builder.running && builder.parks.some((p) => p.state === "building") ? Math.floor(this.now() * CRAWL.fps / 1e3) % (CRAWL.period / CRAWL.step) : -1;
+    }
+    /** Diagonal stripes crawling across a rect (rows of rects, as the overlay draws no clipped shapes). */
+    crawl(scene, id, r) {
+      const phase = Math.max(0, this.crawlPhase()) * CRAWL.step;
+      let n = 0;
+      for (let row = 0; row < r.height; row += CRAWL.row) {
+        const h = Math.min(CRAWL.row, r.height - row);
+        const shift = (phase - row) % CRAWL.period;
+        for (let x = shift - CRAWL.period; x < r.width; x += CRAWL.period) {
+          const a = Math.max(0, x), b = Math.min(r.width, x + CRAWL.stripe);
+          if (b > a) {
+            scene.set(`${id}.${n++}`, { type: "rect", x: r.x + a, y: r.y + row, width: b - a, height: h, fill: THEME.buildCrawl, z: Z.face + 1 });
+          }
+        }
+      }
     }
     /** The build pane shows only its header: by hand, else when it would run into the top-right box. */
     buildFolded() {
@@ -6582,15 +6605,19 @@
       const time = running ? clock(builder.elapsed) : "";
       const timeW = time ? measure(overlay, time, 13).width : 0;
       const shownLine = running || line.phase === "failed" || line.phase === "unavailable" ? line.text : "";
-      label(scene, "build.line", fit(overlay, shownLine, 13, inner - timeW - 12), { x: x0, y, width: 0, height: 18 }, 13, overlay);
-      scene.set("build.line", { ...scene.get("build.line"), colour: line.warning ? THEME.warning : line.phase === "done" ? THEME.textGood : THEME.text });
-      if (time) {
-        label(scene, "build.time", time, { x: x0 + inner - timeW, y, width: 0, height: 18 }, 13, overlay);
-        scene.set("build.time", { ...scene.get("build.time"), colour: THEME.textDim });
+      let squareH = s.square + 18 + 4;
+      if (shownLine) {
+        label(scene, "build.line", fit(overlay, shownLine, 13, inner - timeW - 12), { x: x0, y, width: 0, height: 18 }, 13, overlay);
+        scene.set("build.line", { ...scene.get("build.line"), colour: line.warning ? THEME.warning : line.phase === "done" ? THEME.textGood : THEME.text });
+        if (time) {
+          label(scene, "build.time", time, { x: x0 + inner - timeW, y, width: 0, height: 18 }, 13, overlay);
+          scene.set("build.time", { ...scene.get("build.time"), colour: THEME.textDim });
+        }
+        y += 18 + 4;
+        squareH = s.square;
       }
-      y += 18 + 4;
-      this.squares(scene, builder.parks, x0, y, inner);
-      y += s.square + 8;
+      this.squares(scene, builder.parks, x0, y, inner, squareH);
+      y += squareH + 8;
       const unavailable = line.phase === "unavailable";
       const nothing = !running && !unavailable && !builder.pendingEdits(e.playback.installedAt);
       const build = this.place(
@@ -6657,7 +6684,7 @@
     }
     /** A square per park of the build, in play order: built (a check), with warnings (!), failed or
      *  missing (red), the one being built (lit), still to come (empty); a bar past squaresMax parks. */
-    squares(scene, parks, x0, y, inner) {
+    squares(scene, parks, x0, y, inner, height) {
       const s = EDITOR;
       const overlay = this.mode.overlay;
       if (!parks.length) {
@@ -6667,12 +6694,17 @@
       if (parks.length > s.squaresMax) {
         const done = parks.filter((p) => p.state !== "pending" && p.state !== "building").length;
         const bad = parks.some((p) => p.state === "failed" || p.state === "missing");
-        const track = { x: x0, y, width: inner, height: s.square };
+        const track = { x: x0, y, width: inner, height };
         scene.set("sq.track", { type: "rect", ...track, fill: THEME.editorList, z: Z.face });
         bevel(scene, "sq.track", track, THEME.bevelDark, THEME.bevelLight, THEME.bevel, Z.bevel);
-        scene.set("sq.fill", { type: "rect", x: x0, y, width: Math.round(inner * done / parks.length), height: s.square, fill: bad ? THEME.buildFail : THEME.buildDone, z: Z.face + 1 });
+        scene.set("sq.fill", { type: "rect", x: x0, y, width: Math.round(inner * done / parks.length), height, fill: bad ? THEME.buildFail : THEME.buildDone, z: Z.face + 1 });
+        if (parks.some((p) => p.state === "building")) {
+          const slot = Math.max(4, Math.round(inner / parks.length));
+          const at = Math.round(inner * done / parks.length);
+          this.crawl(scene, "sq.crawl", { x: x0 + at, y, width: Math.min(slot, inner - at), height });
+        }
         const text = `${done} / ${parks.length} parks`;
-        label(scene, "sq.count", text, { x: x0 + inner / 2, y, width: 0, height: s.square }, 12, overlay, true);
+        label(scene, "sq.count", text, { x: x0 + inner / 2, y, width: 0, height }, 12, overlay, true);
         scene.set("sq.count", { ...scene.get("sq.count"), align: "center" });
         return;
       }
@@ -6681,12 +6713,15 @@
       const px = iconPixels(20, overlay.scale);
       const side = px / overlay.scale;
       parks.forEach((p, i) => {
-        const r = { x: Math.round(x0 + i * (w + gap)), y, width: Math.max(1, Math.round(w)), height: s.square };
+        const r = { x: Math.round(x0 + i * (w + gap)), y, width: Math.max(1, Math.round(w)), height };
         const what = p.state === "missing" ? "file missing" : p.state === "failed" ? "failed" : p.state === "building" ? "building" : p.state === "pending" ? "waiting" : `${p.state === "cached" ? "unchanged" : "built"}${p.warnings ? `, ${p.warnings} warning${p.warnings > 1 ? "s" : ""}` : ""}`;
         const name = p.key && builder.nameOf?.(p.key) || p.name || `Park ${i + 1}`;
         this.place(`sq.${i}`, r, `${name}: ${p.stale ? "edited, needs a build" : what}`);
         scene.set(`sq.${i}`, { type: "rect", ...r, fill: colourOf(p), z: Z.face, ...p.stale ? { opacity: 0.35 } : {} });
         bevel(scene, `sq.${i}`, r, THEME.bevelDark, THEME.bevelDark, THEME.bevel, Z.bevel);
+        if (p.state === "building") {
+          this.crawl(scene, `sqc.${i}`, r);
+        }
         const icon = p.state === "failed" || p.state === "missing" ? "close" : p.state === "built" || p.state === "cached" ? p.warnings ? "alert" : "check" : void 0;
         if (icon && r.width >= side && !p.stale) {
           scene.set(`sqi.${i}`, { type: "image", src: iconPath(icon, px), x: r.x + (r.width - side) / 2, y: r.y + (r.height - side) / 2, z: Z.icon });

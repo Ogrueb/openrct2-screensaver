@@ -304,7 +304,8 @@ closed.
   them (owner's test, 2026-11-11). The plugin keeps the edits each build took in (`RCTScreensaver.builtEdits`;
   an install sets it to the edits it leaves in the storage). Names are the playing playlist's. Green with a check: built (or unchanged, from the cache); amber
   with "!": built with warnings; red with a cross: failed, or its file is missing (the park is left out and
-  the rest builds); lit: being built; empty: still to come. The tooltip names the park and its state; a
+  the rest builds); lit, with diagonal stripes crawling across it (20 px/s; owner, 2026-11-12): being
+  built; empty: still to come. The tooltip names the park and its state; a
   click opens the park. Over 30 parks, a bar with "n / m parks" replaces them.
 - **Messages:** newest first: the plugin's own line about the outcome (built and playing, not taken in, cancelled,
   could not start), then the generator's (`messages`: what it took in from the game's edits, each park's
@@ -331,7 +332,7 @@ closed.
 - The line over the squares shows only while a build runs (the park and time), after a failure ("Build
   failed: <reason>"; a missing `generator.json` means: install once with `mksequence.py --install`) or when
   builds are unavailable; otherwise the header's state and the messages say it all (owner's test,
-  2026-11-11: the line repeated the header).
+  2026-11-11: the line repeated the header). With no line the squares grow into its space (owner, 2026-11-12).
 - **Every build bakes:** before it builds, `--live-build` writes the live file into the playlist's own files
   (as `tools/bakelive.py` does: views into `<playlist>.views.json`, properties and park order into the TOML,
   backups beside them) and marks it baked, so the playlist files always hold what plays (owner, 2026-11-11:

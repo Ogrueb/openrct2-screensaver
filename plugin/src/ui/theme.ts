@@ -51,6 +51,7 @@ export const THEME = {
     buildFace: "#3d7a50d0", // Build and play
     buildDone: "#3d9a5c", // a park built
     buildCurrent: "#6fcf8a", // the park being built
+    buildCrawl: "#ffffff59", // its stripes crawling across it
     buildWarn: "#c8962a", // built with warnings
     buildFail: "#b8403a", // failed, or its file is missing
     buildInfo: "#4a6a8a",
@@ -158,6 +159,10 @@ export const EDITOR = {
 };
 
 /** Controls bar timings, ms. */
+/** The building square's diagonal stripes (owner, 2026-11-12): px per stripe and gap, rows they are drawn
+ *  in, and how they move (step px per frame at fps, so 20 px/s). */
+export const CRAWL = { period: 12, stripe: 6, row: 2, step: 2, fps: 10 };
+
 export const TIMING = {
     hideAfter: 2500, // without mouse movement (never while the mouse is over the bar)
     fadeIn: 150,

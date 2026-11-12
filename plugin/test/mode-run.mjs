@@ -903,6 +903,16 @@ console.log("ok: park changes dip through black in the mode (patch 0010)");
     assert.equal(scene.get("rcts.ed.build.text")?.text, "Cancel build");
     assert.equal(ed("sq.0").fill, "#3d9a5c", "a square per park in the build's order: done");
     assert.equal(ed("sq.1").fill, "#6fcf8a", "the one being built");
+    {
+        const stripes = () => [...scene.keys()].filter(k => k.startsWith("rcts.ed.sqc.1.")).map(k => scene.get(k));
+        assert.ok(stripes().length > 4 && stripes().every(r => r.x >= ed("sq.1").x && r.x + r.width <= ed("sq.1").x + ed("sq.1").width),
+            "diagonal stripes crawl across it, inside the square");
+        const at = JSON.stringify(stripes());
+        tick(3);
+        assert.notEqual(JSON.stringify(stripes()), at, "and move");
+        assert.ok(![...scene.keys()].some(k => k.startsWith("rcts.ed.sqc.0.")), "only on the park being built");
+    }
+    const runningH = ed("sq.0").height;
     assert.equal(ed("sq.2").fill, ed("build.list").fill, "and the one still to come");
     assert.ok(ed("sqi.0") && !ed("sqi.1"), "a check on the parks built");
     dump("build-running");
@@ -928,7 +938,8 @@ console.log("ok: park changes dip through black in the mode (patch 0010)");
     assert.ok(installed && installed.built === built.built && installed.installed > 0, "and the new playlist is installed in the storage");
     const now_ = built.parks.find(p => p.load === sequence.lastSeek);
     assert.equal(now_?.key ?? now_?.fileName, before.key ?? before.fileName, "the same park plays on, from its new LOAD");
-    assert.equal(ed("build.line").text, "", "no line once built: the header and the messages say it");
+    assert.ok(!ed("build.line"), "no line once built: the header and the messages say it");
+    assert.equal(ed("sq.0").height, runningH + 22, "and the squares take its space");
     assert.equal(ed("build.state").text, "built · playing");
     assert.equal(ed("sq.1").fill, "#c8962a", "a park with warnings is amber");
     assert.match(ed("msgt.0").text, /^Built .* now playing/, "the plugin's line first");

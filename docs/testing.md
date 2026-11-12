@@ -208,7 +208,8 @@ Needs an engine build with patch 0017 and an install from this version (it write
       "Building n/m".
 - [ ] Build and play is inactive (Ctrl+B too) while every edit is built; an edit makes it active. The pane
       clears the exit button in the bottom right corner. Messages list newest first. Between builds the
-      pane shows no line over the squares (the header says "built · playing").
+      pane shows no line over the squares (the header says "built · playing") and the squares are taller;
+      the park being built has diagonal stripes crawling across its square.
 - [ ] After moving a park in the order the squares follow at once, none dimmed (a Playlist property
       change dims none either); a view edit dims only its park's square at once ("edited, needs a build"),
       and after the build it is lit again; while a build runs, parks not reached yet keep last build's
