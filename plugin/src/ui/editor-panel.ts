@@ -1208,8 +1208,9 @@ export class EditorPanel implements EditorView {
         const running = line.phase === "running";
         const time = running ? clock(builder.elapsed) : "";
         const timeW = time ? measure(overlay, time, 13).width : 0;
-        // Only while it runs or when it failed: the header and the messages say the rest (owner, 2026-11-11)
-        const shownLine = running || line.phase === "failed" || line.phase === "unavailable" ? line.text : "";
+        // Only while it runs: the header and the messages say the rest (owner, 2026-11-11; a failure's line
+        // repeated the error message under it, owner 2026-11-12)
+        const shownLine = running || line.phase === "unavailable" ? line.text : "";
         // (with no line the squares take its space: owner, 2026-11-12)
         let squareH = s.square + 18 + 4;
         if (shownLine) {

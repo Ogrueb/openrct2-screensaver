@@ -919,7 +919,7 @@ console.log("ok: park changes dip through black in the mode (patch 0010)");
     assert.ok(ed("import") && ed("export"), "Import and Export in the build pane");
     mode.buildFails = "No generator registered";
     edClick("build"); tick(6);
-    assert.ok(ed("build.line").text.startsWith("Build failed: No generator"), "a build that cannot start says why");
+    assert.ok(!ed("build.line"), "no line over the messages for a failure: the message says it once");
     assert.equal(ed("build.state").text, "failed");
     assert.match(ed("msgt.0").text, /did not start: No generator/, "and its message");
     mode.buildFails = undefined;
@@ -1106,6 +1106,34 @@ console.log("ok: builds from the game (Build and play, progress, the live swap)"
     assert.match(ed("msgt.0").text, /^Imported "Imported" .* now playing/, "the plugin's line first");
     assert.equal(ed("msgt.1").text, "Imported \"Imported\" (2 parks)", "then the import's");
     assert.equal(ed("sq.1").fill, "#3d9a5c", "squares of the imported playlist");
+    // Reorder it in the editor, then import it again under the same name: the bundle's order plays at
+    // once (owner, 2026-11-12: it took effect only after a restart).
+    {
+        const f = ed("field");
+        mouse("move", f.x + 20, f.y + 10); mouse("down", f.x + 20, f.y + 10); mouse("up", f.x + 20, f.y + 10);
+        const p0 = ed("park.0"), p1 = ed("park.1");
+        mouse("move", p0.x + 6, p0.y + 8); mouse("down", p0.x + 6, p0.y + 8);
+        mouse("move", p0.x + 6, p0.y + 30); mouse("move", p1.x + 6, p1.y + p1.height + 2);
+        mouse("up", p1.x + 6, p1.y + p1.height + 2);
+        tick();
+        assert.equal(ed("pname.0").text, imported.parks[1].name, "reordered in the editor");
+        edClick("field"); tick(); // (closes the list)
+        edClick("import"); tick(2);
+        assert.equal(mode.imports, 2);
+        mode.files.set("task-import.json", JSON.stringify({ taskVersion: 1, task: "import", started: Date.now(), ok: true,
+            finished: Date.now(), sequence: "Imported", playlist: "C:/x/imported.toml", missing: [],
+            messages: [{ level: "ok", text: "Imported \"Imported\" (2 parks)" }] }));
+        mode.files.set("build-Imported.json", JSON.stringify({ buildVersion: 1, sequence: "Imported", started: Date.now(), ok: true,
+            finished: Date.now(), playlist: imported, titleMusic: "ride", warnings: [],
+            parkStates: imported.parks.map(p => ({ key: p.key ?? p.fileName, name: p.name, state: "built", warnings: 0 })),
+            messages: [{ level: "ok", text: "Built 2 parks" }] }));
+        mode.buildStatus = { ...mode.buildStatus, state: "done", finished: Date.now() };
+        tick(8);
+        assert.equal(logs.filter(l => l.includes('playing "Imported" (2 parks)')).length, 2, "the player starts afresh on the same name");
+        edClick("field"); tick();
+        assert.equal(ed("pname.0").text, imported.parks[0].name, "in the imported order");
+        edClick("field"); tick();
+    }
     shortcuts["rctscreensaver.edit"]();
     tick();
     // Back to the fixture's playlist for the tests below.

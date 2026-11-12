@@ -119,11 +119,13 @@ function takeBuild(result: BuildResult, imported = false): string | undefined {
         saveSettings(settings);
         player.noteInstalledMusic(result.titleMusic);
     }
-    if (!other) {
+    if (!other && !imported) {
         player.swapPlaylist(playlist);
         return undefined;
     }
-    // Another sequence: the engine plays it from its first park already; the player starts on it.
+    // Another sequence, or an import over the playing one: the engine plays it from its first park already;
+    // the player starts on it afresh, so the imported park order and properties replace the old ones in
+    // memory too (owner, 2026-11-12: the order took effect only after a restart).
     const reopen = editor?.isOpen ?? false;
     stopPlayer();
     startPlayer();

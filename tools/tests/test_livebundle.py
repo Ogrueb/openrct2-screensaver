@@ -153,6 +153,12 @@ class LiveBundle(unittest.TestCase):
             # The same scripts installed already: nothing waits for a restart
             self.quiet(mksequence.live_build, "My List", self.user, True)
             self.assertEqual(result()["warnings"], [])
+            # Another playlist's script leaving the folder does not count: only new or changed ones wait
+            with open(os.path.join(self.user, "plugin", "rct-screensaver-companion-other.js"), "w") as f:
+                f.write("// other")
+            self.quiet(mksequence.live_build, "My List", self.user, True)
+            self.assertEqual(result()["warnings"], [])
+            self.assertFalse(os.path.exists(os.path.join(self.user, "plugin", "rct-screensaver-companion-other.js")))
             # A plain build from the game leaves the plugin folder alone
             os.remove(os.path.join(self.user, "plugin", "rct-screensaver-companion-animator.js"))
             self.quiet(mksequence.live_build, "My List", self.user)

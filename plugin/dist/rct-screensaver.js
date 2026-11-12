@@ -6886,7 +6886,7 @@
       const running = line.phase === "running";
       const time = running ? clock(builder.elapsed) : "";
       const timeW = time ? measure(overlay, time, 13).width : 0;
-      const shownLine = running || line.phase === "failed" || line.phase === "unavailable" ? line.text : "";
+      const shownLine = running || line.phase === "unavailable" ? line.text : "";
       let squareH = s.square + 18 + 4;
       if (shownLine) {
         label(scene, "build.line", fit(overlay, shownLine, 13, inner - timeW - 12), { x: x0, y, width: 0, height: 18 }, 13, overlay);
@@ -7230,7 +7230,7 @@
       saveSettings(settings);
       player.noteInstalledMusic(result.titleMusic);
     }
-    if (!other) {
+    if (!other && !imported) {
       player.swapPlaylist(playlist);
       return void 0;
     }

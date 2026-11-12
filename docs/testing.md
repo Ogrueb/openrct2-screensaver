@@ -241,10 +241,13 @@ playlist's file).
       imported playlist's first park, the editor stays open on it, and the messages say "Imported "<name>" ...
       now playing". The playlist is in `Documents\OpenRCT2\screensaver\playlists`, its parks under `bundles`.
 - [ ] After a restart of the game, the imported playlist plays. Build and play then builds it (not the old one).
-- [ ] Importing a playlist whose parks have scripts (Constellations, Sambhava's Rest) lists an amber "Park script
-      ... starts after a restart of the game" per script; after a restart the scripts run on their parks.
-- [ ] Importing a bundle of the playlist that is playing replaces it in place (the park on screen plays on).
-- [ ] A broken zip says why in the messages; Cancel import stops it and the playlist plays on.
+- [ ] Importing a playlist whose parks have scripts that are not installed yet (or differ) lists an amber "Park
+      script ... starts after a restart of the game" per such script; after a restart the scripts run on their
+      parks. Scripts already installed with the same code give no warning.
+- [ ] Importing a bundle of the playlist that is playing replaces it, in the bundle's park order at once (reorder
+      the parks in the editor before the import to see it).
+- [ ] A broken zip says why once, in the messages (no line above them); Cancel import stops it and the playlist
+      plays on.
 
 ### Live file (patch 0016, 2026-11-10)
 Passed in the game on 2026-11-10 (example playlist, Windows), except the settings page's panel, checked

@@ -3301,8 +3301,8 @@ def live_build(name, user_dir, imported=False):
             # An imported playlist's park scripts (companion plugins) go in now, but the game loads plugins only
             # as it starts (owner, 2026-11-12: say so in the build pane)
             _, changed = install_companions(result, user_dir)
-            if changed and result["companions"]:
-                for _, meta, park_names in result["companions"]:
+            for file_name, meta, park_names in result["companions"]:
+                if file_name in changed:
                     w = "Park script %s (%s) starts after a restart of the game" % (meta["name"], ", ".join(park_names))
                     note("warn", w)
                     warnings.append(w)
@@ -3514,8 +3514,8 @@ def live_import(bundle_path, user_dir):
 
 def install_companions(result, user_dir):
     """Put the build's companion plugins in the user plugin folder, replacing any installed before (only the
-    generated files). Returns (steps, changed): changed is True when the folder's companions differ from
-    before, which the game takes in only at its next start."""
+    generated files). Returns (steps, changed): changed holds the file names that are new or differ from
+    before, which the game takes in only at its next start (one it already runs needs no restart)."""
     plugin_dir = os.path.join(user_dir, "plugin")
     steps = []
 
@@ -3535,7 +3535,7 @@ def install_companions(result, user_dir):
         shutil.copy2(os.path.join(result["companionDir"], file_name), dest)
         after[file_name] = read(dest)
         steps.append("companion %s -> %s" % (meta["name"], dest))
-    return steps, before != after
+    return steps, {name for name, data in after.items() if before.get(name) != data}
 
 
 def install(result, user_dir, pulled=(), camera_log=False, props_pulled=False):
