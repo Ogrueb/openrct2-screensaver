@@ -19,25 +19,29 @@ playlist just imported): it is copied into its installed folder, or a new
 one in the user's sequence folder, the sequences are scanned again and it
 starts playing.
 ---
- src/openrct2-ui/screensaver/Build.cpp       | 267 +++++++++++++++++---
+ src/openrct2-ui/screensaver/Build.cpp       | 271 +++++++++++++++++---
  src/openrct2-ui/screensaver/Build.h         |  22 +-
  src/openrct2-ui/scripting/ScScreensaver.hpp |  44 +++-
- 3 files changed, 286 insertions(+), 47 deletions(-)
+ 3 files changed, 290 insertions(+), 47 deletions(-)
 
 diff --git a/src/openrct2-ui/screensaver/Build.cpp b/src/openrct2-ui/screensaver/Build.cpp
-index 31818b8..f8aba14 100644
+index 31818b8..1e13634 100644
 --- a/src/openrct2-ui/screensaver/Build.cpp
 +++ b/src/openrct2-ui/screensaver/Build.cpp
-@@ -39,6 +39,8 @@
+@@ -39,6 +39,12 @@
  #include <openrct2/core/Json.hpp>
  #include <openrct2/core/Path.hpp>
  #include <openrct2/core/String.hpp>
 +#include <openrct2/platform/Platform.h>
++#ifdef _WIN32
++    // windows.h's CreateWindow macro would rename IUiContext::CreateWindow
++    #undef CreateWindow
++#endif
 +#include <openrct2/ui/UiContext.h>
  #include <openrct2/scenes/title/TitleScene.h>
  #include <openrct2/scenes/title/TitleSequenceManager.h>
  #include <openrct2/scenes/title/TitleSequencePlayer.h>
-@@ -168,8 +170,8 @@ namespace OpenRCT2::Ui::Screensaver::Build
+@@ -168,8 +174,8 @@ namespace OpenRCT2::Ui::Screensaver::Build
  #else
              shared.pid = 0;
  #endif
@@ -48,7 +52,7 @@ index 31818b8..f8aba14 100644
          }
  
  #ifdef _WIN32
-@@ -327,6 +329,117 @@ namespace OpenRCT2::Ui::Screensaver::Build
+@@ -327,6 +333,117 @@ namespace OpenRCT2::Ui::Screensaver::Build
          }
      }
  
@@ -166,7 +170,7 @@ index 31818b8..f8aba14 100644
      bool Start(const std::string& sequence, std::string& error)
      {
          if (!IsSequenceName(sequence))
-@@ -334,42 +447,74 @@ namespace OpenRCT2::Ui::Screensaver::Build
+@@ -334,42 +451,74 @@ namespace OpenRCT2::Ui::Screensaver::Build
              error = "Not a title sequence name: " + sequence;
              return false;
          }
@@ -269,7 +273,7 @@ index 31818b8..f8aba14 100644
      }
  
      Status GetStatus()
-@@ -413,25 +558,50 @@ namespace OpenRCT2::Ui::Screensaver::Build
+@@ -413,25 +562,50 @@ namespace OpenRCT2::Ui::Screensaver::Build
              error = "No title sequence is playing";
              return false;
          }
@@ -332,7 +336,7 @@ index 31818b8..f8aba14 100644
          // The new files first (each written beside its place and renamed over it), the script last.
          std::set<fs::path> names;
          std::vector<fs::path> parks;
-@@ -490,6 +660,19 @@ namespace OpenRCT2::Ui::Screensaver::Build
+@@ -490,6 +664,19 @@ namespace OpenRCT2::Ui::Screensaver::Build
                  fs::remove(it->path(), ignored);
              }
          }
