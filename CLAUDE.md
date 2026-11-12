@@ -132,7 +132,7 @@ See README.md for usage.
   folder; an import's build replaces the playing playlist (`applyBuild` installs and plays its sequence). Parks and
   playlists (engine patch 0019, owner 2026-11-12; `docs/screensaver-ui.md` "Parks and playlists"): the park list's Use
   ticks (`playlistProps.use`, baked as `[[park]] use = false`; the build lists left-out parks as `unused`), Add park
-  (`addPark`, `--live-add`), a Playlists view from `live/playlists.json` (switching builds the other playlist), New
+  (`addPark`, `--live-add`), a PLAYLIST field over the park field listing `live/playlists.json` (switching builds the other playlist), New
   playlist from a folder (`newPlaylist`, `--live-new`) and Duplicate (`copyPlaylist`, Save dialog, `--live-copy`); the
   in-game park library is the next stage (roadmap).
 - **Palette index 10** is both the void outside the map and the UI black; a packed water

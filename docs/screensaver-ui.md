@@ -413,7 +413,8 @@ click on the park field (Playlist order):
   file that is no park fails with the reason (saves and loose objects: the settings page's folder scan converts
   and installs them). Its result goes to `live/task-add.json`, then the playlist builds and plays as with Build
   and play.
-- **Playlists** (a button in the list's header; "Back to parks" returns): every playlist the game can build, from
+- **Playlists** (the PLAYLIST field, a heading of its own over the park field, owner 2026-11-12: it names the
+  playing playlist and its parks; a click opens its list from under it over the park row): every playlist the game can build, from
   `live/playlists.json`, which the generator writes whenever it registers one (`--install`, an import, a new
   playlist, a copy): name, file and parks in use, the playing one marked "playing", a missing file in red. A click
   on another builds it (`screensaver.build(<name>)`, only changed parks thanks to the park cache) and plays it as an

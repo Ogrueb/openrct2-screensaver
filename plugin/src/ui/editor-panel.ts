@@ -1,6 +1,7 @@
 // The view editor in the screensaver mode (docs/screensaver-ui.md, "Editor"): three panes on the overlay,
 // in the controls bar's style (owner's design, 2026-11-10):
-// - the views pane, top left: the park (previous, a dropdown field, next; held, the field's list jumps on
+// - the views pane, top left: the playlist (a dropdown field of the playlists, to switch, make a new one or
+//   duplicate this one; owner, 2026-11-12), under it the park (previous, a dropdown field, next; held, the field's list jumps on
 //   release; clicked, it stays open as the playlist's order, its rows dragged to reorder the parks) over
 //   the park's route views, each row dragged by its grip to reorder them, and under them the event
 //   views (cut-ins, car cues, shows) in a list of their own, by when they play (owner, 2026-11-10);
@@ -126,7 +127,7 @@ export class EditorPanel implements EditorView {
     private rowDrag: RowDrag | undefined;
     private thumbDrag: { scroll: Scroll; y0: number; first0: number; count: () => number; visible: number } | undefined;
     private dropdown: { persistent: boolean; downAt: number } | undefined; // the park list
-    private playlists: PlaylistInfo[] | undefined; // the open list shows the playlists (read as it opens)
+    private playlists: PlaylistInfo[] | undefined; // the open list is the playlist field's (read as it opens)
     private useNote: { text: string; at: number } | undefined; // why a tick did nothing, for a moment
     private picked: string | undefined; // the restore point highlighted
     private propsOpen = true; // the Playlist properties unfolded
@@ -293,7 +294,7 @@ export class EditorPanel implements EditorView {
         const ed = this.editor!;
         const hit = this.hit();
         if (this.dropdown && (!hit || (!hit.startsWith("park.") && !hit.startsWith("parks.")))) {
-            // Another click closes the open list (a click on the field too); it does nothing else.
+            // Another click closes the open list (a click on either field too); it does nothing else.
             this.dropdown = undefined;
             return true;
         }
@@ -301,7 +302,12 @@ export class EditorPanel implements EditorView {
             return false;
         }
         this.downOn = hit;
-        if (hit === "field") {
+        if (hit === "plfield") {
+            // The playlist field's list opens on a click and stays open until the next one.
+            this.dropdown = { persistent: true, downAt: this.now() };
+            this.playlists = readPlaylists();
+            this.parks.first = 0;
+        } else if (hit === "field") {
             this.dropdown = { persistent: false, downAt: this.now() };
             this.playlists = undefined;
             this.parks.first = Math.max(0, ed.playback.playOrder.indexOf(ed.parkIndex) - 2);
@@ -655,6 +661,10 @@ export class EditorPanel implements EditorView {
         const inner = s.width - 2 * s.pad;
         let y = s.y + s.pad;
         const t = s.titleHeight;
+        // The playlist, a heading of its own over the park (owner, 2026-11-12)
+        const plField = this.place("plfield", { x: x0, y, width: inner, height: s.playlistHeight },
+            "The playlist: click to switch to another, make a new one or duplicate this one");
+        y += s.playlistHeight + s.gap;
         const order = e.playback.playOrder;
         const pos = order.indexOf(e.parkIndex);
         const many = order.length > 1;
@@ -703,11 +713,29 @@ export class EditorPanel implements EditorView {
         this.paneViews = { x: s.x, y: s.y, width: s.width, height: bottom + s.pad - s.y };
         this.frames.push(this.paneViews);
         backing(scene, "frame", this.paneViews, THEME.editorBacking);
-        // Title row
+        // Playlist row
+        const plOpen = this.dropdown !== undefined && this.playlists !== undefined;
+        scene.set("plfield", { type: "rect", ...plField, fill: plOpen ? THEME.faceDown : this.hit() === "plfield" ? THEME.faceHover : THEME.editorList, z: Z.face });
+        bevel(scene, "plfield", plField, THEME.bevelDark, THEME.bevelLight, THEME.bevel, Z.bevel);
+        if (plOpen) {
+            scene.set("plfield.open", { type: "rect", ...plField, fill: "#00000000", border: THEME.fieldOpen, borderWidth: 2, z: Z.icon });
+        }
+        foldMark(scene, "plfield.mark", plOpen, plField.x + plField.width - 24, plField.y + plField.height / 2, overlay);
+        const plHead = "PLAYLIST";
+        const plHeadW = measure(overlay, plHead, s.textSize - 2, true).width;
+        label(scene, "text.plhead", plHead, { x: plField.x + 8, y: plField.y, width: 0, height: plField.height }, s.textSize - 2, overlay, true);
+        scene.set("text.plhead", { ...scene.get("text.plhead")!, colour: THEME.textDim });
+        const parksN = `${order.length} park${order.length === 1 ? "" : "s"}`;
+        const parksW = measure(overlay, parksN, s.textSize).width;
+        label(scene, "text.plname", fit(overlay, e.playback.sequenceName, s.textSize, plField.width - plHeadW - parksW - 70, true),
+            { x: plField.x + 22 + plHeadW, y: plField.y, width: 0, height: plField.height }, s.textSize, overlay, true);
+        label(scene, "text.plparks", parksN, { x: plField.x + plField.width - 36 - parksW, y: plField.y, width: 0, height: plField.height }, s.textSize, overlay);
+        scene.set("text.plparks", { ...scene.get("text.plparks")!, colour: THEME.textDim });
+        // Park row
         button(scene, "prevPark", this.boxes.get("prevPark")!, this.state("prevPark"), { icon: "prev-view", iconSize: s.toolIcon }, overlay);
         button(scene, "nextPark", this.boxes.get("nextPark")!, this.state("nextPark"), { icon: "next-view", iconSize: s.toolIcon }, overlay);
         button(scene, "close", this.boxes.get("close")!, this.state("close"), { icon: "close", iconSize: s.toolIcon }, overlay);
-        const fieldOpen = this.dropdown !== undefined;
+        const fieldOpen = this.dropdown !== undefined && this.playlists === undefined;
         scene.set("field", { type: "rect", ...field, fill: fieldOpen ? THEME.faceDown : this.hit() === "field" ? THEME.faceHover : THEME.editorList, z: Z.face });
         bevel(scene, "field", field, THEME.bevelDark, THEME.bevelLight, THEME.bevel, Z.bevel);
         if (fieldOpen) {
@@ -865,10 +893,7 @@ export class EditorPanel implements EditorView {
     /** A click on a row or button of the open park list (its id after "parks."). */
     private parkListAction(e: Editor, what: string): void {
         const p = e.playback;
-        if (what === "mode") {
-            this.playlists = this.playlists ? undefined : readPlaylists();
-            this.parks.first = 0;
-        } else if (what.startsWith("tick.")) {
+        if (what.startsWith("tick.")) {
             const index = p.playOrder[Number(what.slice(5))];
             const park = index !== undefined ? p.parkKeyOf(index) : undefined;
             if (park !== undefined && !p.setParkUse(park, !p.parkInUse(index))) {
@@ -903,18 +928,18 @@ export class EditorPanel implements EditorView {
         }
     }
 
-    /** The park list, over the views list: the playlist's order, its rows dragged to reorder it and
-     *  ticked on and off; Add park; the playlists, to switch, make a new one or duplicate this one. */
+    /** The open list of either field. The park field's, over the views list: the playlist's order, its
+     *  rows dragged to reorder it and ticked on and off; Add park. The playlist field's, from under it
+     *  over the park row: the playlists, to switch, make a new one or duplicate this one. */
     private parkList(e: Editor, scene: Scene): void {
         const s = EDITOR;
         const overlay = this.mode.overlay;
         const order = e.playback.playOrder;
         const persistent = this.dropdown?.persistent === true;
-        if (!persistent) {
-            this.playlists = undefined;
-        }
         const items = this.parkItems(e);
-        const area = { x: this.listRect.x, y: this.listRect.y, width: this.paneViews.width - 2 * s.pad, height: this.listRect.height };
+        const plField = this.boxes.get("plfield")!;
+        const y0 = this.playlists ? plField.y + plField.height + 2 : this.listRect.y;
+        const area = { x: this.listRect.x, y: y0, width: this.paneViews.width - 2 * s.pad, height: this.listRect.y + this.listRect.height - y0 };
         this.parksRect = area;
         const visible = this.parkRows();
         const bar = items.length > visible ? s.scrollBar + 2 : 0;
@@ -925,24 +950,17 @@ export class EditorPanel implements EditorView {
         bevel(scene, "parks", area, THEME.bevelDark, THEME.bevelLight, THEME.bevel, z);
         // The open list carries the field's gold border (owner, 2026-11-10).
         scene.set("parks.open", { type: "rect", ...area, fill: "#00000000", border: THEME.fieldOpen, borderWidth: 2, z: z + 3 });
-        const head = !persistent ? "Release on a park to go there" : this.playlists ? "Playlists" : "Playlist order";
+        const head = !persistent ? "Release on a park to go there" : this.playlists ? "Switch to another playlist" : "Playlist order";
         label(scene, "parks.head", head, { x: area.x + 8, y: area.y, width: 0, height: s.parkRow }, s.textSize, overlay, true);
         scene.set("parks.head", { ...scene.get("parks.head")!, z: z + 2 });
         const parksOn = builder.parksAvailable;
         const busy = builder.running;
         if (persistent) {
-            // Parks | Playlists: the list switches between the park order and the playlists
-            const text = this.playlists ? "Back to parks" : "Playlists";
-            const w = measure(overlay, text, s.textSize - 1, true).width + 34;
-            const r = this.place("parks.mode", { x: area.x + area.width - bar - 4 - w, y: area.y + 3, width: w, height: s.parkRow - 6 },
-                this.playlists ? "Back to this playlist's parks" : "Switch to another playlist, make a new one or duplicate this one");
-            button(scene, "parks.mode", r, this.state("parks.mode"), { icon: this.playlists ? "prev-view" : "next-view", iconSize: 16, text, textSize: s.textSize - 1, left: true }, overlay);
-            lift(scene, "parks.mode", z);
             const note = this.useNote && this.now() - this.useNote.at < 2500 ? this.useNote.text
                 : this.playlists ? "" : "drag to reorder · tick to play";
             if (note) {
                 const hw = measure(overlay, note, s.textSize - 2).width;
-                const hx = area.x + area.width - bar - 12 - w - hw;
+                const hx = area.x + area.width - bar - 8 - hw;
                 if (hx > area.x + measure(overlay, head, s.textSize, true).width + 16) {
                     label(scene, "parks.help", note, { x: hx, y: area.y, width: 0, height: s.parkRow }, s.textSize - 2, overlay);
                     scene.set("parks.help", { ...scene.get("parks.help")!, colour: note === this.useNote?.text ? THEME.pending : THEME.textDim, z: z + 2 });

@@ -1225,9 +1225,9 @@ console.log("ok: Import and Export playlist through the file dialogs");
     mode.files.set("playlists.json", JSON.stringify({ playlistsVersion: 1, playlists: [
         { name: "Evening", file: "evening.toml", parks: 2 }, { name: playlist.sequence, file: "mini.toml", parks: 3 },
         { name: "Gone", file: "gone.toml", missing: true }] }));
-    edClick("field"); tick();
-    edClick("parks.mode"); tick();
-    assert.equal(scene.get("rcts.ed.parks.head").text, "Playlists");
+    edClick("plfield"); tick();
+    assert.equal(scene.get("rcts.ed.parks.head").text, "Switch to another playlist");
+    assert.equal(ed("text.plname").text, playlist.sequence, "the playlist field names the playing one");
     assert.equal(ed("pname.0").text, "Evening");
     assert.equal(ed("pcount.1").text, "playing", "the playing one is marked");
     assert.equal(ed("pcount.2").text, "file missing");
@@ -1246,14 +1246,12 @@ console.log("ok: Import and Export playlist through the file dialogs");
     edClick("build"); tick(6);
     assert.match(ed("msgt.0").text, /^Switch cancelled/);
     // New playlist from a folder and Duplicate go through the engine's dialogs.
-    edClick("field"); tick();
-    edClick("parks.mode"); tick();
+    edClick("plfield"); tick();
     edClick("parks.new"); tick(2);
     assert.equal(mode.made, 1);
     assert.equal(ed("build.state").text, "making the playlist");
     edClick("build"); tick(6);
-    edClick("field"); tick();
-    edClick("parks.mode"); tick();
+    edClick("plfield"); tick();
     edClick("parks.copy"); tick(2);
     assert.deepEqual(mode.copied, [playlist.sequence], "Duplicate copies the playing playlist");
     assert.equal(ed("build.state").text, "copying the playlist");

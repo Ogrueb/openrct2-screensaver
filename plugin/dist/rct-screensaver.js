@@ -2203,6 +2203,8 @@
     // the drag handle column of the views and parks
     parkRow: 26,
     // the park dropdown's rows
+    playlistHeight: 26,
+    // the playlist field over the park's (owner, 2026-11-12)
     dragStart: 5,
     // pixels the mouse moves before a press on a row drags it
     holdOpen: 300,
@@ -6016,7 +6018,11 @@
         return false;
       }
       this.downOn = hit;
-      if (hit === "field") {
+      if (hit === "plfield") {
+        this.dropdown = { persistent: true, downAt: this.now() };
+        this.playlists = readPlaylists();
+        this.parks.first = 0;
+      } else if (hit === "field") {
         this.dropdown = { persistent: false, downAt: this.now() };
         this.playlists = void 0;
         this.parks.first = Math.max(0, ed.playback.playOrder.indexOf(ed.parkIndex) - 2);
@@ -6402,6 +6408,12 @@
       const inner = s.width - 2 * s.pad;
       let y = s.y + s.pad;
       const t = s.titleHeight;
+      const plField = this.place(
+        "plfield",
+        { x: x0, y, width: inner, height: s.playlistHeight },
+        "The playlist: click to switch to another, make a new one or duplicate this one"
+      );
+      y += s.playlistHeight + s.gap;
       const order = e.playback.playOrder;
       const pos = order.indexOf(e.parkIndex);
       const many = order.length > 1;
@@ -6450,10 +6462,34 @@
       this.paneViews = { x: s.x, y: s.y, width: s.width, height: bottom + s.pad - s.y };
       this.frames.push(this.paneViews);
       backing(scene, "frame", this.paneViews, THEME.editorBacking);
+      const plOpen = this.dropdown !== void 0 && this.playlists !== void 0;
+      scene.set("plfield", { type: "rect", ...plField, fill: plOpen ? THEME.faceDown : this.hit() === "plfield" ? THEME.faceHover : THEME.editorList, z: Z.face });
+      bevel(scene, "plfield", plField, THEME.bevelDark, THEME.bevelLight, THEME.bevel, Z.bevel);
+      if (plOpen) {
+        scene.set("plfield.open", { type: "rect", ...plField, fill: "#00000000", border: THEME.fieldOpen, borderWidth: 2, z: Z.icon });
+      }
+      foldMark(scene, "plfield.mark", plOpen, plField.x + plField.width - 24, plField.y + plField.height / 2, overlay);
+      const plHead = "PLAYLIST";
+      const plHeadW = measure(overlay, plHead, s.textSize - 2, true).width;
+      label(scene, "text.plhead", plHead, { x: plField.x + 8, y: plField.y, width: 0, height: plField.height }, s.textSize - 2, overlay, true);
+      scene.set("text.plhead", { ...scene.get("text.plhead"), colour: THEME.textDim });
+      const parksN = `${order.length} park${order.length === 1 ? "" : "s"}`;
+      const parksW = measure(overlay, parksN, s.textSize).width;
+      label(
+        scene,
+        "text.plname",
+        fit(overlay, e.playback.sequenceName, s.textSize, plField.width - plHeadW - parksW - 70, true),
+        { x: plField.x + 22 + plHeadW, y: plField.y, width: 0, height: plField.height },
+        s.textSize,
+        overlay,
+        true
+      );
+      label(scene, "text.plparks", parksN, { x: plField.x + plField.width - 36 - parksW, y: plField.y, width: 0, height: plField.height }, s.textSize, overlay);
+      scene.set("text.plparks", { ...scene.get("text.plparks"), colour: THEME.textDim });
       button(scene, "prevPark", this.boxes.get("prevPark"), this.state("prevPark"), { icon: "prev-view", iconSize: s.toolIcon }, overlay);
       button(scene, "nextPark", this.boxes.get("nextPark"), this.state("nextPark"), { icon: "next-view", iconSize: s.toolIcon }, overlay);
       button(scene, "close", this.boxes.get("close"), this.state("close"), { icon: "close", iconSize: s.toolIcon }, overlay);
-      const fieldOpen = this.dropdown !== void 0;
+      const fieldOpen = this.dropdown !== void 0 && this.playlists === void 0;
       scene.set("field", { type: "rect", ...field, fill: fieldOpen ? THEME.faceDown : this.hit() === "field" ? THEME.faceHover : THEME.editorList, z: Z.face });
       bevel(scene, "field", field, THEME.bevelDark, THEME.bevelLight, THEME.bevel, Z.bevel);
       if (fieldOpen) {
@@ -6650,10 +6686,7 @@
     /** A click on a row or button of the open park list (its id after "parks."). */
     parkListAction(e, what) {
       const p = e.playback;
-      if (what === "mode") {
-        this.playlists = this.playlists ? void 0 : readPlaylists();
-        this.parks.first = 0;
-      } else if (what.startsWith("tick.")) {
+      if (what.startsWith("tick.")) {
         const index = p.playOrder[Number(what.slice(5))];
         const park = index !== void 0 ? p.parkKeyOf(index) : void 0;
         if (park !== void 0 && !p.setParkUse(park, !p.parkInUse(index))) {
@@ -6687,18 +6720,18 @@
         }
       }
     }
-    /** The park list, over the views list: the playlist's order, its rows dragged to reorder it and
-     *  ticked on and off; Add park; the playlists, to switch, make a new one or duplicate this one. */
+    /** The open list of either field. The park field's, over the views list: the playlist's order, its
+     *  rows dragged to reorder it and ticked on and off; Add park. The playlist field's, from under it
+     *  over the park row: the playlists, to switch, make a new one or duplicate this one. */
     parkList(e, scene) {
       const s = EDITOR;
       const overlay = this.mode.overlay;
       const order = e.playback.playOrder;
       const persistent = this.dropdown?.persistent === true;
-      if (!persistent) {
-        this.playlists = void 0;
-      }
       const items = this.parkItems(e);
-      const area = { x: this.listRect.x, y: this.listRect.y, width: this.paneViews.width - 2 * s.pad, height: this.listRect.height };
+      const plField = this.boxes.get("plfield");
+      const y0 = this.playlists ? plField.y + plField.height + 2 : this.listRect.y;
+      const area = { x: this.listRect.x, y: y0, width: this.paneViews.width - 2 * s.pad, height: this.listRect.y + this.listRect.height - y0 };
       this.parksRect = area;
       const visible = this.parkRows();
       const bar2 = items.length > visible ? s.scrollBar + 2 : 0;
@@ -6711,25 +6744,16 @@
       scene.set("parks", { type: "rect", ...area, fill: "#0b170fff", z });
       bevel(scene, "parks", area, THEME.bevelDark, THEME.bevelLight, THEME.bevel, z);
       scene.set("parks.open", { type: "rect", ...area, fill: "#00000000", border: THEME.fieldOpen, borderWidth: 2, z: z + 3 });
-      const head = !persistent ? "Release on a park to go there" : this.playlists ? "Playlists" : "Playlist order";
+      const head = !persistent ? "Release on a park to go there" : this.playlists ? "Switch to another playlist" : "Playlist order";
       label(scene, "parks.head", head, { x: area.x + 8, y: area.y, width: 0, height: s.parkRow }, s.textSize, overlay, true);
       scene.set("parks.head", { ...scene.get("parks.head"), z: z + 2 });
       const parksOn = builder.parksAvailable;
       const busy = builder.running;
       if (persistent) {
-        const text2 = this.playlists ? "Back to parks" : "Playlists";
-        const w = measure(overlay, text2, s.textSize - 1, true).width + 34;
-        const r2 = this.place(
-          "parks.mode",
-          { x: area.x + area.width - bar2 - 4 - w, y: area.y + 3, width: w, height: s.parkRow - 6 },
-          this.playlists ? "Back to this playlist's parks" : "Switch to another playlist, make a new one or duplicate this one"
-        );
-        button(scene, "parks.mode", r2, this.state("parks.mode"), { icon: this.playlists ? "prev-view" : "next-view", iconSize: 16, text: text2, textSize: s.textSize - 1, left: true }, overlay);
-        lift(scene, "parks.mode", z);
         const note = this.useNote && this.now() - this.useNote.at < 2500 ? this.useNote.text : this.playlists ? "" : "drag to reorder \xB7 tick to play";
         if (note) {
           const hw = measure(overlay, note, s.textSize - 2).width;
-          const hx = area.x + area.width - bar2 - 12 - w - hw;
+          const hx = area.x + area.width - bar2 - 8 - hw;
           if (hx > area.x + measure(overlay, head, s.textSize, true).width + 16) {
             label(scene, "parks.help", note, { x: hx, y: area.y, width: 0, height: s.parkRow }, s.textSize - 2, overlay);
             scene.set("parks.help", { ...scene.get("parks.help"), colour: note === this.useNote?.text ? THEME.pending : THEME.textDim, z: z + 2 });

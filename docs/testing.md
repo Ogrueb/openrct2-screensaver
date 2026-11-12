@@ -260,7 +260,7 @@ Needs an engine build with patch 0019 and an install from this version (`generat
 - [ ] Add park… (last row) opens Windows' Open dialog for `.park` and `.zip`; the picked park is added at the
       end of the playlist file and the playlist built ("Added <file> to <playlist>"), then plays with it. A park
       already in the playlist says so.
-- [ ] Playlists (button in the list's header) lists every installed playlist with its park count, the playing
+- [ ] The PLAYLIST field over the park field names the playing playlist; a click lists every installed playlist with its park count, the playing
       one marked. A click on another builds it ("Building "<name>" · Park n of m") and plays it with the editor
       open; a click back switches back, the edits made in the first one still there.
 - [ ] New playlist from a folder… opens the folder dialog; the new playlist ("RCT Screensaver <folder>") is
