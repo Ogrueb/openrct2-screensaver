@@ -3714,8 +3714,9 @@ def live_add(name, park_path, user_dir):
 def live_new(folder, user_dir):
     """Make a new playlist of the parks in the folder the user picked in the game's folder dialog
     (screensaver.newPlaylist): every park and download read in place, as the settings page's scan does,
-    the playlist written to <user dir>/screensaver/playlists and registered, then built as an import is.
-    The result goes to task-new.json in the live folder. Returns the process exit code."""
+    the playlist written to <user dir>/screensaver/playlists and registered (live/playlists.json lists it).
+    No build follows (owner, 2026-11-12): the game keeps its lists open, and picking the playlist there
+    builds and plays it. The result goes to task-new.json in the live folder. Returns the process exit code."""
     note, write = task_runner("new", user_dir, path=folder)
     try:
         write(ok=None)
@@ -3736,14 +3737,15 @@ def live_new(folder, user_dir):
         write(ok=True, finished=int(time.time() * 1000), sequence=name, playlist=path)
     except Exception as e:  # anything: the game shows it
         return task_failed(note, write, "New playlist", e)
-    return live_build(name, user_dir, imported=True)
+    return 0
 
 
 def live_copy(name, to, user_dir):
     """Copy the playlist installed as title sequence `name` (the game's edits baked in first) to the file
     the user named in the game's Save dialog (screensaver.copyPlaylist), named after the file, with its
-    views file; park paths follow the new folder. Registered and built as an import is. The result goes
-    to task-copy.json in the live folder. Returns the process exit code."""
+    views file; park paths follow the new folder. Registered, not built (owner, 2026-11-12: a copy needs no
+    rebuild; the playing playlist plays on, and picking the copy in the game builds it, its parks from the
+    park cache). The result goes to task-copy.json in the live folder. Returns the process exit code."""
     note, write = task_runner("copy", user_dir, path=to)
     try:
         write(ok=None)
@@ -3778,7 +3780,7 @@ def live_copy(name, to, user_dir):
         write(ok=True, finished=int(time.time() * 1000), sequence=new_name, playlist=to)
     except Exception as e:  # anything: the game shows it
         return task_failed(note, write, "Duplicating the playlist", e)
-    return live_build(new_name, user_dir, imported=True)
+    return 0
 
 
 def install_companions(result, user_dir):

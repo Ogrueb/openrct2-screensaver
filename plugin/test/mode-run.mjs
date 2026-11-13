@@ -1265,16 +1265,39 @@ console.log("ok: Import and Export playlist through the file dialogs");
     edClick("build"); tick(6);
     assert.match(ed("msgt.0").text, /^Switch cancelled/);
     // New playlist from a folder and Duplicate go through the engine's dialogs.
+    // Both only make the playlist file: no build follows, the list stays open with the new one to pick
+    // (owner, 2026-11-12).
+    const lists = extra => JSON.stringify({ playlistsVersion: 1, playlists: [
+        { name: "Evening", file: "evening.toml", parks: 2 }, { name: playlist.sequence, file: "mini.toml", parks: 3 }, ...extra] });
+    const finish = (task, sequence, extra) => {
+        mode.files.set(`task-${task}.json`, JSON.stringify({ taskVersion: 1, task, started: Date.now(), ok: true, finished: Date.now(),
+            sequence, playlist: `C:/x/${sequence}.toml`, messages: [{ level: "ok", text: `${task} line` }] }));
+        mode.files.set("playlists.json", lists(extra));
+        mode.buildStatus = { ...mode.buildStatus, state: "done", finished: Date.now() };
+        tick(6);
+    };
+    mode.builds.length = 0;
     edClick("plfield"); tick();
     edClick("parks.new"); tick(2);
     assert.equal(mode.made, 1);
     assert.equal(ed("build.state").text, "making the playlist");
-    edClick("build"); tick(6);
-    edClick("plfield"); tick();
+    assert.ok(ed("parks.new"), "the list stays open");
+    finish("new", "RCT Screensaver loose", [{ name: "RCT Screensaver loose", file: "loose.toml", parks: 5 }]);
+    assert.equal(ed("pname.2").text, "RCT Screensaver loose", "the new playlist listed");
+    assert.equal(ed("pcount.2").text, "new · 5 parks", "marked new");
+    assert.match(ed("msgt.0").text, /^Made "RCT Screensaver loose"/, ed("msgt.0").text);
+    assert.equal(mode.builds.length, 0, "no build");
+    assert.equal(ed("text.plname").text, playlist.sequence, "the playlist plays on");
+    mouse("move", 900, 700);
+    dump("parks-made");
     edClick("parks.copy"); tick(2);
     assert.deepEqual(mode.copied, [playlist.sequence], "Duplicate copies the playing playlist");
     assert.equal(ed("build.state").text, "copying the playlist");
-    edClick("build"); tick(6);
+    finish("copy", "Mini copy", [{ name: "RCT Screensaver loose", file: "loose.toml", parks: 5 }, { name: "Mini copy", file: "mini copy.toml", parks: 3 }]);
+    assert.equal(ed("pname.3").text, "Mini copy");
+    assert.equal(ed("pcount.3").text, "new · 3 parks");
+    assert.equal(mode.builds.length, 0, "a copy needs no rebuild");
+    edClick("plfield"); tick(); // (closes the list)
     // Back as it was for the tests below.
     delete playlist.unused;
     delete mode.addPark; delete mode.newPlaylist; delete mode.copyPlaylist;

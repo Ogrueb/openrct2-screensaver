@@ -31,7 +31,10 @@ export type BuildTask = "build" | "export" | "import" | "add" | "new" | "copy" |
 type FileTask = "export" | "import" | "add" | "new" | "copy";
 
 /** The tasks whose build replaces the playing playlist with another one. */
-const NEW_PLAYLIST: BuildTask[] = ["import", "new", "copy", "open"];
+const NEW_PLAYLIST: BuildTask[] = ["import", "open"];
+// Tasks that only make a playlist file: no build follows (owner, 2026-11-12: New keeps the list open, a copy needs
+// no rebuild); the playlist plays on and the new one waits in the PLAYLIST list until it is picked.
+const FILE_ONLY: BuildTask[] = ["new", "copy"];
 
 /** How the build pane names each task. */
 const NOUN: Record<BuildTask, string> = {
@@ -222,6 +225,9 @@ export class Builder {
      *  build of a playlist just imported, which replaces the playing one. */
     onReady: ((result: BuildResult, imported: boolean) => string | undefined) | undefined;
 
+    /** The playlist New or Duplicate made last (not built yet): the editor opens the PLAYLIST list on it. */
+    made: { sequence: string; at: number } | undefined;
+
     constructor(private readonly api: BuildApi | undefined = buildApi()) {}
 
     get available(): boolean {
@@ -386,7 +392,9 @@ export class Builder {
             imported = fresh(readTaskResult(this.task));
             if (imported?.ok && imported.sequence && !this.sequence) {
                 this.sequence = imported.sequence;
-                this.last = undefined; // (the squares are the imported playlist's from here)
+                if (!FILE_ONLY.includes(this.task)) {
+                    this.last = undefined; // (the squares are the imported playlist's from here)
+                }
             }
         }
         const sequence = this.sequence;
@@ -408,6 +416,16 @@ export class Builder {
             this.notes = imported?.messages?.some(m => m.level === "error") ? from(imported)
                 : [{ level: status.state === "cancelled" ? "info" : "error", text: `${what} ${status.state === "cancelled" ? "cancelled; the playlist plays on as it was" : `failed: ${why} (log: screensaver/build.log in the user folder)`}` }, ...from(imported)];
             log(`${NOUN[task]} ${status.state === "cancelled" ? "cancelled" : "failed: " + why}`);
+            return;
+        }
+        if (FILE_ONLY.includes(task)) {
+            const made = imported!.sequence!;
+            const verb = task === "new" ? "Made" : "Copied";
+            this.outcome = { phase: "idle", text: `${verb} "${made}"` };
+            this.notes = [{ level: "ok", text: `${verb} "${made}"; pick it above to play it` }];
+            this.earlier = from(imported).filter(m => m.level !== "ok"); // (the generator's own line says the same)
+            this.made = { sequence: made, at: Date.now() };
+            log(`${NOUN[task]} "${made}" made`);
             return;
         }
         // (the task's own lines come before its build's, so they are listed under them: newest first)

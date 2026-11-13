@@ -222,7 +222,8 @@
   }
 
   // src/builder.ts
-  var NEW_PLAYLIST = ["import", "new", "copy", "open"];
+  var NEW_PLAYLIST = ["import", "open"];
+  var FILE_ONLY = ["new", "copy"];
   var NOUN = {
     build: "build",
     export: "export",
@@ -455,7 +456,9 @@
         imported = fresh(readTaskResult(this.task));
         if (imported?.ok && imported.sequence && !this.sequence) {
           this.sequence = imported.sequence;
-          this.last = void 0;
+          if (!FILE_ONLY.includes(this.task)) {
+            this.last = void 0;
+          }
         }
       }
       const sequence = this.sequence;
@@ -476,6 +479,16 @@
         this.outcome = { phase: status.state === "cancelled" ? "idle" : "failed", text: `${what} ${status.state === "cancelled" ? "cancelled" : "failed: " + why}`, warning: status.state !== "cancelled" };
         this.notes = imported?.messages?.some((m) => m.level === "error") ? from(imported) : [{ level: status.state === "cancelled" ? "info" : "error", text: `${what} ${status.state === "cancelled" ? "cancelled; the playlist plays on as it was" : `failed: ${why} (log: screensaver/build.log in the user folder)`}` }, ...from(imported)];
         log(`${NOUN[task]} ${status.state === "cancelled" ? "cancelled" : "failed: " + why}`);
+        return;
+      }
+      if (FILE_ONLY.includes(task)) {
+        const made = imported.sequence;
+        const verb = task === "new" ? "Made" : "Copied";
+        this.outcome = { phase: "idle", text: `${verb} "${made}"` };
+        this.notes = [{ level: "ok", text: `${verb} "${made}"; pick it above to play it` }];
+        this.earlier = from(imported).filter((m) => m.level !== "ok");
+        this.made = { sequence: made, at: Date.now() };
+        log(`${NOUN[task]} "${made}" made`);
         return;
       }
       this.earlier = task !== "build" && task !== "open" ? from(imported) : [];
@@ -5901,6 +5914,8 @@
       this.events = new Scroll();
       this.points = new Scroll();
       this.followed = -1;
+      // why a tick did nothing, for a moment
+      this.seenMade = 0;
       // the restore point highlighted
       this.propsOpen = true;
       // the Playlist properties unfolded
@@ -5954,7 +5969,7 @@
       if (second >= 0 && second !== this.clockShown && !this.busy || e && e.playback.isLoading !== this.loadingShown || build !== this.buildShown && !this.busy || !!e?.clipNote !== this.clipShown && !this.busy) {
         this.render();
       }
-      if (!e || e.pinned || this.hidden || this.busy || this.over(this.mouse.x, this.mouse.y)) {
+      if (!e || e.pinned || this.hidden || this.busy || this.dropdown !== void 0 || this.over(this.mouse.x, this.mouse.y)) {
         return;
       }
       if (this.now() - this.lastMove >= TIMING.hideAfter) {
@@ -5963,7 +5978,7 @@
       }
     }
     get busy() {
-      return this.downOn !== void 0 || this.rowDrag !== void 0 || this.thumbDrag !== void 0 || this.dropdown !== void 0;
+      return this.downOn !== void 0 || this.rowDrag !== void 0 || this.thumbDrag !== void 0 || this.dropdown !== void 0 && !this.dropdown.persistent;
     }
     over(x, y) {
       return this.frames.some((f) => contains(f, x, y));
@@ -6513,6 +6528,14 @@
       this.paneViews = { x: s.x, y: s.y, width: s.width, height: bottom + s.pad - s.y };
       this.frames.push(this.paneViews);
       backing(scene, "frame", this.paneViews, THEME.editorBacking);
+      const made = builder.made;
+      if (made && made.at !== this.seenMade) {
+        this.seenMade = made.at;
+        this.dropdown = { persistent: true, downAt: this.now() };
+        this.playlists = readPlaylists();
+        const at = this.playlists.findIndex((pl) => pl.name === made.sequence);
+        this.parks.first = Math.max(0, at - 3);
+      }
       const plOpen = this.dropdown !== void 0 && this.playlists !== void 0;
       scene.set("plfield", { type: "rect", ...plField, fill: plOpen ? THEME.faceDown : this.hit() === "plfield" ? THEME.faceHover : THEME.editorList, z: Z.face });
       bevel(scene, "plfield", plField, THEME.bevelDark, THEME.bevelLight, THEME.bevel, Z.bevel);
@@ -6752,8 +6775,6 @@
         this.messages.first = 0;
         builder.addPark(p.sequenceName);
       } else if (what === "new" || what === "copy") {
-        this.dropdown = void 0;
-        this.playlists = void 0;
         this.messages.first = 0;
         if (what === "new") {
           builder.newPlaylist();
@@ -6899,13 +6920,14 @@
           const tip2 = playing ? "Playing now" : pl.missing ? `${pl.file} is missing` : busy ? `Wait for the ${builder.noun} to finish` : `Switch to "${pl.name}": it is built (only changed parks) and played`;
           const row2 = this.place(`parks.pl.${item.i}`, rowRect, tip2, off2);
           scene.set(`ppl.${i}`, { type: "rect", ...row2, fill: playing ? THEME.faceOn : hover === `parks.pl.${item.i}` && !off2 ? THEME.faceHover : i % 2 ? THEME.face : "#00000000", z: z + 1 });
-          const right = playing ? "playing" : pl.missing ? "file missing" : `${pl.parks ?? 0} park${pl.parks === 1 ? "" : "s"}`;
+          const fresh = builder.made?.sequence === pl.name && !playing;
+          const right = playing ? "playing" : pl.missing ? "file missing" : `${fresh ? "new \xB7 " : ""}${pl.parks ?? 0} park${pl.parks === 1 ? "" : "s"}`;
           const rw = measure(overlay, right, s.textSize).width;
           text(`pname.${i}`, fit(overlay, pl.name, s.textSize, width - 24 - rw - 16), area.x + 12, y, pl.missing ? THEME.textDim : void 0, playing);
-          text(`pcount.${i}`, right, area.x + width - 8 - rw, y, pl.missing ? THEME.warning : THEME.textDim);
+          text(`pcount.${i}`, right, area.x + width - 8 - rw, y, pl.missing ? THEME.warning : fresh ? THEME.pending : THEME.textDim);
           continue;
         }
-        const [label0, tip, icon] = item.kind === "add" ? ["Add park\u2026", "Pick a park file or download (.park, .zip); it is added and the playlist built", "add"] : item.kind === "new" ? ["New playlist from a folder\u2026", "Pick a folder of parks: a playlist of them is made, built and played", "add"] : ["Duplicate this playlist\u2026", "Name a copy of this playlist (with your edits); it is built and played", "import"];
+        const [label0, tip, icon] = item.kind === "add" ? ["Add park\u2026", "Pick a park file or download (.park, .zip); it is added and the playlist built", "add"] : item.kind === "new" ? ["New playlist from a folder\u2026", "Pick a folder of parks: a playlist of them is made and listed here, to pick", "add"] : ["Duplicate this playlist\u2026", "Name a copy of this playlist (with your edits); it is listed here, to pick", "import"];
         const off = !parksOn || busy;
         const why = !parksOn ? "needs the patched engine with these dialogs" : busy ? `wait for the ${builder.noun} to finish` : "";
         const id = `parks.${item.kind}`;

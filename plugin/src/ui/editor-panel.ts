@@ -129,6 +129,7 @@ export class EditorPanel implements EditorView {
     private dropdown: { persistent: boolean; downAt: number } | undefined; // the park list
     private playlists: PlaylistInfo[] | undefined; // the open list is the playlist field's (read as it opens)
     private useNote: { text: string; at: number } | undefined; // why a tick did nothing, for a moment
+    private seenMade = 0; // the last playlist New or Duplicate made that the list was opened on (builder.made.at)
     private picked: string | undefined; // the restore point highlighted
     private propsOpen = true; // the Playlist properties unfolded
     private clipShown = false; // a Copy/Paste note is on its button (it goes after a moment)
@@ -188,7 +189,7 @@ export class EditorPanel implements EditorView {
             || (build !== this.buildShown && !this.busy) || (!!e?.clipNote !== this.clipShown && !this.busy)) {
             this.render();
         }
-        if (!e || e.pinned || this.hidden || this.busy || this.over(this.mouse.x, this.mouse.y)) {
+        if (!e || e.pinned || this.hidden || this.busy || this.dropdown !== undefined || this.over(this.mouse.x, this.mouse.y)) {
             return;
         }
         if (this.now() - this.lastMove >= TIMING.hideAfter) {
@@ -198,7 +199,7 @@ export class EditorPanel implements EditorView {
     }
 
     private get busy(): boolean {
-        return this.downOn !== undefined || this.rowDrag !== undefined || this.thumbDrag !== undefined || this.dropdown !== undefined;
+        return this.downOn !== undefined || this.rowDrag !== undefined || this.thumbDrag !== undefined || (this.dropdown !== undefined && !this.dropdown.persistent);
     }
 
     private over(x: number, y: number): boolean {
@@ -727,6 +728,15 @@ export class EditorPanel implements EditorView {
         this.paneViews = { x: s.x, y: s.y, width: s.width, height: bottom + s.pad - s.y };
         this.frames.push(this.paneViews);
         backing(scene, "frame", this.paneViews, THEME.editorBacking);
+        // A playlist New or Duplicate just made: its list opens (or reads again) with it, to pick
+        const made = builder.made;
+        if (made && made.at !== this.seenMade) {
+            this.seenMade = made.at;
+            this.dropdown = { persistent: true, downAt: this.now() };
+            this.playlists = readPlaylists();
+            const at = this.playlists.findIndex(pl => pl.name === made.sequence);
+            this.parks.first = Math.max(0, at - 3);
+        }
         // Playlist row
         const plOpen = this.dropdown !== undefined && this.playlists !== undefined;
         scene.set("plfield", { type: "rect", ...plField, fill: plOpen ? THEME.faceDown : this.hit() === "plfield" ? THEME.faceHover : THEME.editorList, z: Z.face });
@@ -923,8 +933,7 @@ export class EditorPanel implements EditorView {
             this.messages.first = 0;
             builder.addPark(p.sequenceName);
         } else if (what === "new" || what === "copy") {
-            this.dropdown = undefined;
-            this.playlists = undefined;
+            // (the list stays open: the new playlist shows in it once made, to pick; owner, 2026-11-12)
             this.messages.first = 0;
             if (what === "new") {
                 builder.newPlaylist();
@@ -1058,16 +1067,18 @@ export class EditorPanel implements EditorView {
                     : `Switch to "${pl.name}": it is built (only changed parks) and played`;
                 const row = this.place(`parks.pl.${item.i}`, rowRect, tip, off);
                 scene.set(`ppl.${i}`, { type: "rect", ...row, fill: playing ? THEME.faceOn : hover === `parks.pl.${item.i}` && !off ? THEME.faceHover : i % 2 ? THEME.face : "#00000000", z: z + 1 });
-                const right = playing ? "playing" : pl.missing ? "file missing" : `${pl.parks ?? 0} park${pl.parks === 1 ? "" : "s"}`;
+                const fresh = builder.made?.sequence === pl.name && !playing;
+                const right = playing ? "playing" : pl.missing ? "file missing"
+                    : `${fresh ? "new · " : ""}${pl.parks ?? 0} park${pl.parks === 1 ? "" : "s"}`;
                 const rw = measure(overlay, right, s.textSize).width;
                 text(`pname.${i}`, fit(overlay, pl.name, s.textSize, width - 24 - rw - 16), area.x + 12, y, pl.missing ? THEME.textDim : undefined, playing);
-                text(`pcount.${i}`, right, area.x + width - 8 - rw, y, pl.missing ? THEME.warning : THEME.textDim);
+                text(`pcount.${i}`, right, area.x + width - 8 - rw, y, pl.missing ? THEME.warning : fresh ? THEME.pending : THEME.textDim);
                 continue;
             }
             // The action rows: Add park; New playlist; Duplicate
             const [label0, tip, icon] = item.kind === "add" ? ["Add park…", "Pick a park file or download (.park, .zip); it is added and the playlist built", "add"]
-                : item.kind === "new" ? ["New playlist from a folder…", "Pick a folder of parks: a playlist of them is made, built and played", "add"]
-                : ["Duplicate this playlist…", "Name a copy of this playlist (with your edits); it is built and played", "import"];
+                : item.kind === "new" ? ["New playlist from a folder…", "Pick a folder of parks: a playlist of them is made and listed here, to pick", "add"]
+                : ["Duplicate this playlist…", "Name a copy of this playlist (with your edits); it is listed here, to pick", "import"];
             const off = !parksOn || busy;
             const why = !parksOn ? "needs the patched engine with these dialogs" : busy ? `wait for the ${builder.noun} to finish` : "";
             const id = `parks.${item.kind}`;

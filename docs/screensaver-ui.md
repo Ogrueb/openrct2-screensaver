@@ -426,11 +426,13 @@ click on the park field (Playlist order):
   `mksequence.py --live-new <folder>`, which reads the folder as the settings page's scan does (`parkinfo.
   scan_folder`; parks and downloads in place, RCT saves and loose objects listed as warnings), writes
   `screensaver/playlists/<slug>.toml` named "RCT Screensaver <folder>" (" 2" and so on when taken), registers it
-  and builds it; `live/task-new.json`.
+  and lists it (`live/task-new.json`). No build follows (owner's test, 2026-11-12): the PLAYLIST list stays open with
+  the new playlist marked "new", and picking it builds and plays it.
 - **Duplicate this playlist…** calls `screensaver.copyPlaylist(<sequence>)`: the system's Save dialog in
   `screensaver/playlists` ("<name> copy.toml"), then `mksequence.py --live-copy <sequence> --to <file>`: the
   game's edits baked, the playlist copied with its views file, named after the file (another name than any other
-  playlist's), park paths following the new folder; registered and built; `live/task-copy.json`. The game has no
+  playlist's), park paths following the new folder; registered and listed, not built (owner's test, 2026-11-12: a copy
+  needs no rebuild; the playlist plays on, and picking the copy builds it from the park cache); `live/task-copy.json`. The game has no
   text input of its own, so the dialog's file name is the name.
 - The build pane follows each as it follows a build: the header ("adding the park", "making the playlist",
   "copying the playlist", "building"), Cancel <task>, the squares and the messages; one task at a time.

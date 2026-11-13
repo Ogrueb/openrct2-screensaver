@@ -261,16 +261,20 @@ and the ticks passed; Add park, New and Duplicate were inactive on an engine wit
 - [ ] Ticked on there, the park moves up into the order (after the rest, "needs a build") and can be dragged to its
       place before the build; the build plays it there. Ticked off again, it goes back under NOT IN THE BUILD.
 - [ ] The views pane has no close button; E and the bar's edit button close the editor.
-- [ ] Add park… (last row) opens Windows' Open dialog for `.park` and `.zip`; the picked park is added at the
+- [x] Add park… (last row) opens Windows' Open dialog for `.park` and `.zip`; the picked park is added at the
       end of the playlist file and the playlist built ("Added <file> to <playlist>"), then plays with it. A park
       already in the playlist says so.
 - [x] The PLAYLIST field over the park field names the playing playlist; a click lists every installed playlist with its park count, the playing
       one marked. A click on another builds it ("Building "<name>" · Park n of m") and plays it with the editor
       open; a click back switches back, the edits made in the first one still there.
-- [ ] New playlist from a folder… opens the folder dialog; the new playlist ("RCT Screensaver <folder>") is
-      written to `Documents\OpenRCT2\screensaver\playlists`, built and played, and listed under Playlists.
-- [ ] Duplicate this playlist… opens the Save dialog in that folder ("<name> copy.toml"); the copy is named after
-      the file, built and played; the original keeps its file and edits.
+- [x] New playlist from a folder… opens the folder dialog; the new playlist ("RCT Screensaver <folder>") is
+      written to `Documents\OpenRCT2\screensaver\playlists` (passed 2026-11-12, then built at once: changed).
+- [ ] New playlist: no build follows; the PLAYLIST list stays open with the new playlist marked "new · n parks",
+      the old playlist plays on, and picking the new one builds and plays it.
+- [x] Duplicate this playlist… opens the Save dialog in that folder ("<name> copy.toml"); the copy is named after
+      the file; the original keeps its file and edits (passed 2026-11-12, then built at once: changed).
+- [ ] Duplicate: no rebuild; the copy is listed "new" under PLAYLIST and the playlist plays on; picking the copy
+      builds it quickly (its parks from the cache), with the original's ticks and edits.
 - [ ] After a restart of the game, the last playlist built from the game plays.
 
 ### Live file (patch 0016, 2026-11-10)
