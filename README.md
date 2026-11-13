@@ -33,36 +33,46 @@ game files, which are not included; neither are any parks (see `ExampleParks/REA
 
 ## Installing
 
-1. **Patched engine.** Download the engine build (`openrct2.exe` and `openrct2.com`) from the
-   project's releases, or build it yourself with the "Engine build" workflow (`engine/README.md`).
-   Keep a copy of the stock pair, then replace both files in your OpenRCT2 v0.5.6 install. The
-   data files are unchanged by the patches, and nothing else in the install is touched.
-2. **Parks.** Put park downloads (zips as published on New Element Designs, loose `.park` files,
-   or RCT2 `.sv6` saves) in a folder. The ten example parks that the shipped playlists use are
-   listed with their download pages in `ExampleParks/README.md`.
-3. **Settings page.** Run `Settings.cmd` on Windows or `./settings.sh` on Linux and macOS (or
-   `python tools/settings.py` anywhere). It opens the generator's
-   page in your browser: point Source parks at your folder and Scan, set the options you want,
-   Build, then Install (OpenRCT2 must be closed). The page writes everything under
-   `Documents\OpenRCT2\screensaver\`; Install puts the title sequence in
-   `Documents\OpenRCT2\sequence\`, the plugin in `Documents\OpenRCT2\plugin\` (with its icons under
-   `plugin\rct-screensaver\icons\` and one `rct-screensaver-companion-*.js` per park script), and
-   the playlist and settings in `plugin.store.json` (other plugins' data is left alone; a `.bak`
-   copy is kept).
-
-   The command-line equivalent, for a playlist written by hand, is
-
-   ```sh
-   python tools/mksequence.py playlists/example.toml --install
-   ```
-
-   Pass `--user-dir` if your OpenRCT2 user folder is not `Documents\OpenRCT2`.
-4. **Run it.** Start OpenRCT2 and click the Screensaver button on the main menu (the fifth button,
+1. **Patched engine.** Download the engine build from the project's releases, or build it yourself
+   with the "Engine build" workflow (`engine/README.md`). On Windows it holds `openrct2.exe`,
+   `openrct2.com` and a `data` folder: keep a copy of the stock pair, then extract the zip into your
+   OpenRCT2 v0.5.6 install, replacing both executables and merging `data` into the install's own
+   (it only adds `data\plugin\` and `data\screensaver\`). That is all the screensaver needs: the
+   build carries the plugin, the generator and a Python to run it.
+2. **Parks.** Put park downloads (zips as published on New Element Designs, or loose `.park` files)
+   in a folder. The ten example parks that the shipped playlists use are listed with their download
+   pages in `ExampleParks/README.md`.
+3. **Run it.** Start OpenRCT2 and click the Screensaver button on the main menu (the fifth button,
    a monitor with a park), or start `openrct2.exe --screensaver` to go straight into the mode. Esc
-   returns to the menu, or quits when the game was started with the flag.
+   returns to the menu, or quits when the game was started with the flag. With no playlist yet the
+   mode says so: **New playlist from a folder of parks** picks your folder, builds the playlist and
+   plays it; **Import playlist** takes a bundle someone exported. The view editor (E) does the rest
+   (see "Setting views by hand").
 
-Upgrading: replace the two executables again and run Install again (the plugin, its icons and the
-companion scripts are replaced; views you set in the editor are kept, see "Setting views by hand").
+The settings page and the command line do more than the game's editor (every generator option,
+renders, RCT2 `.sv6` saves and loose objects through the folder scan). They need the source archive
+and Python 3.11 or newer: run `Settings.cmd` on Windows or `./settings.sh` on Linux and macOS (or
+`python tools/settings.py` anywhere). It opens the generator's page in your browser: point Source
+parks at your folder and Scan, set the options you want, Build, then Install (OpenRCT2 must be
+closed). The page writes everything under `Documents\OpenRCT2\screensaver\`; Install puts the title
+sequence in `Documents\OpenRCT2\sequence\`, the plugin in `Documents\OpenRCT2\plugin\` (with its
+icons under `plugin\rct-screensaver\icons\` and one `rct-screensaver-companion-*.js` per park script),
+and the playlist and settings in `plugin.store.json` (other plugins' data is left alone; a `.bak` copy
+is kept). A plugin installed this way replaces the one the engine carries, and the game's builds then
+run the source archive's generator (`screensaver\generator.json` names it).
+
+The command-line equivalent, for a playlist written by hand, is
+
+```sh
+python tools/mksequence.py playlists/example.toml --install
+```
+
+Pass `--user-dir` if your OpenRCT2 user folder is not `Documents\OpenRCT2`.
+
+Upgrading: extract the new engine build over the old one. If you installed with the settings page or
+`--install`, run Install again too (the plugin in your user folder replaces the engine's; its icons and
+the companion scripts are replaced; views you set in the editor are kept, see "Setting views by hand").
+Without it, delete `Documents\OpenRCT2\plugin\rct-screensaver.js` once to play the engine's own copy.
 
 ### Linux
 
@@ -80,7 +90,8 @@ chmod +x openrct2-*.AppImage && ./openrct2-*.AppImage --appimage-extract
 ```
 
 Give it the folder holding RCT2's `Data`, `ObjData` and `Tracks` (copied from a Windows install
-or GOG). The user folder is `~/.config/OpenRCT2` (Install writes there; the page's own files go to
+or GOG). The build carries the plugin and the generator; the game's build buttons run the generator
+with the `python3` on your PATH (3.11 or newer, which current distributions ship). The user folder is `~/.config/OpenRCT2` (Install writes there; the page's own files go to
 `~/.config/OpenRCT2/screensaver/`), and the settings page wants `squashfs-root/AppRun` as its
 OpenRCT2 path. `python3-tkinter` (or your distribution's Tk package) gives the page its file
 dialogs. Run it with `squashfs-root/AppRun --screensaver` for the mode straight away. The

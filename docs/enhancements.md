@@ -27,7 +27,7 @@ Requirements, each shippable alone:
    files, Python 3.11+ and Node 20+. Owner's step; blocks 4-6.
 2. **Linux engine build** (`.github/workflows/engine.yml`): a job `Linux x64` beside `Windows x64`, copied
    from OpenRCT2's own Ubuntu CI job (its container image or `apt` list, CMake with the release's
-   options), the same "Apply patches" step (the release input leaving out 0020), producing one artifact:
+   options), the same "Apply patches" step (the release input leaving out 0021), producing one artifact:
    a tarball of the install tree (`cmake --install` into a prefix; the binary, `libopenrct2.so` if built
    shared, and the `data/` folder), named `openrct2-<tag>-openrct2-screensaver-linux-x64[-release]`.
    An AppImage is a second step only if the tarball proves awkward to run (a decision for after 4).
@@ -55,7 +55,7 @@ Requirements, each shippable alone:
    Done when: every row passes or is listed in `docs/known-issues.md` with the display server named.
 5. **Tools with the Linux executable**: once each on the test machine, `renderviews.py --openrct2
    <path>`, `drawviews.py` (its renders), `importparks.py` with one `.sv6` (`openrct2 convert`) and
-   one loose-object download, `perfrun.py run perf/quick.toml --exe <path>` (the perf log with patch 0020,
+   one loose-object download, `perfrun.py run perf/quick.toml --exe <path>` (the perf log with patch 0021,
    and `--user-data-path` sandboxes), and `mksequence.py --install` into the XDG user folder
    (`~/.config/OpenRCT2`). Fix path and process differences as they show (expected: the `.com` vs `.exe`
    choice in `renderviews.py`, process names in `userdata.py`'s running check, `pythonw` in the launcher).
