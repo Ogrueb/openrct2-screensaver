@@ -8,18 +8,18 @@ screensaver.addPark(sequence) shows the system's Open dialog for a park (a
 .park, or a download holding one) and runs the registered generator with
 --live-add <sequence> --park <file>, which adds it to the playlist and
 builds it. screensaver.newPlaylist() shows the folder dialog and runs it
-with --live-new <folder>, which makes a playlist of the parks in it and
-builds it. screensaver.copyPlaylist(sequence) shows the Save dialog in the
-user's playlists folder and runs it with --live-copy <sequence> --to
-<file>, which copies the playlist under the file's name and builds it.
-Each returns false when the dialog is closed; applyBuild then plays a new
-playlist as it plays an imported one. buildStatus.task names them add,
-new and copy.
+with --live-new <folder>, which makes a playlist of the parks in it.
+screensaver.copyPlaylist(sequence) shows the Save dialog in the user's
+playlists folder and runs it with --live-copy <sequence> --to <file>, which
+copies the playlist under the file's name (with its installed build when
+there is one). Whether a task builds is up to the generator. Each returns
+false when the dialog is closed; applyBuild plays a new build as it plays an
+imported one. buildStatus.task names them add, new and copy.
 ---
  src/openrct2-ui/screensaver/Build.cpp       | 159 ++++++++++++++++++++
- src/openrct2-ui/screensaver/Build.h         |  19 ++-
+ src/openrct2-ui/screensaver/Build.h         |  20 ++-
  src/openrct2-ui/scripting/ScScreensaver.hpp |  66 +++++++-
- 3 files changed, 240 insertions(+), 4 deletions(-)
+ 3 files changed, 241 insertions(+), 4 deletions(-)
 
 diff --git a/src/openrct2-ui/screensaver/Build.cpp b/src/openrct2-ui/screensaver/Build.cpp
 index 1e13634..2cf6083 100644
@@ -192,7 +192,7 @@ index 1e13634..2cf6083 100644
      {
          auto& shared = GetShared();
 diff --git a/src/openrct2-ui/screensaver/Build.h b/src/openrct2-ui/screensaver/Build.h
-index cd4b5f6..87552b6 100644
+index cd4b5f6..a1741c3 100644
 --- a/src/openrct2-ui/screensaver/Build.h
 +++ b/src/openrct2-ui/screensaver/Build.h
 @@ -23,6 +23,9 @@
@@ -214,7 +214,7 @@ index cd4b5f6..87552b6 100644
          std::string sequence;
          int32_t exitCode = 0;
          int64_t started = 0;  // ms since 1970
-@@ -66,6 +69,20 @@ namespace OpenRCT2::Ui::Screensaver::Build
+@@ -66,6 +69,21 @@ namespace OpenRCT2::Ui::Screensaver::Build
      // to import and build it. False as for Export().
      bool Import(bool& cancelled, std::string& error);
  
@@ -224,19 +224,20 @@ index cd4b5f6..87552b6 100644
 +    bool AddPark(const std::string& sequence, bool& cancelled, std::string& error);
 +
 +    // Shows the system's folder dialog and, once a folder is picked, runs the generator to make a new
-+    // playlist of the parks in it and build it; Apply() then installs and plays it. False as for Export().
++    // playlist of the parks in it (the generator decides whether it builds; Apply() plays a build). False
++    // as for Export().
 +    bool NewPlaylist(bool& cancelled, std::string& error);
 +
 +    // Shows the system's Save dialog for a playlist file (the user's playlists folder first) and, once
-+    // a name is given, runs the generator to copy the title sequence's playlist under that name and build
-+    // it; Apply() then installs and plays the copy. False as for Export().
++    // a name is given, runs the generator to copy the title sequence's playlist under that name (with its
++    // installed build when there is one; Apply() then plays the copy). False as for Export().
 +    bool CopyPlaylist(const std::string& sequence, bool& cancelled, std::string& error);
 +
      Status GetStatus();
  
      // Stops a running build; false when none runs.
 diff --git a/src/openrct2-ui/scripting/ScScreensaver.hpp b/src/openrct2-ui/scripting/ScScreensaver.hpp
-index 25336af..6d23c99 100644
+index 25336af..664d1fb 100644
 --- a/src/openrct2-ui/scripting/ScScreensaver.hpp
 +++ b/src/openrct2-ui/scripting/ScScreensaver.hpp
 @@ -7,7 +7,8 @@
@@ -297,7 +298,7 @@ index 25336af..6d23c99 100644
 +        }
 +
 +        // newPlaylist() shows the system's folder dialog and makes a playlist of the parks in the picked
-+        // folder, then builds it, in the background (applyBuild then plays it). False when the dialog was
++        // folder, in the background (buildStatus follows it; the generator lists its parks). False when the dialog was
 +        // closed; throws with the reason when it cannot start.
 +        static JSValue newPlaylist(JSContext* ctx, JSValue, int, JSValue*)
 +        {
@@ -312,7 +313,7 @@ index 25336af..6d23c99 100644
 +        }
 +
 +        // copyPlaylist(sequence) shows the system's Save dialog to name a copy of that title sequence's
-+        // playlist, then copies and builds it in the background (applyBuild then plays it). False when
++        // playlist, then copies it in the background (applyBuild then plays the copy). False when
 +        // the dialog was closed; throws with the reason when it cannot start.
 +        static JSValue copyPlaylist(JSContext* ctx, JSValue, int argc, JSValue* argv)
 +        {
