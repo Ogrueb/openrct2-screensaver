@@ -214,8 +214,8 @@ playlist-wide properties there.
 
 The panel became three panes (round 8 of the mockups accepted, built the same day):
 
-- **Views pane, top left.** Previous park, the park field (name, "N / M ▾" its place in the play order),
-  next park, close. A press on the field held past 0.3 s opens the park list over the views and jumps to
+- **Views pane, top left.** The PLAYLIST field, then previous park, the park field (name, "N / M ▾" its place
+  in the play order), next park (no close button since 2026-11-12, owner: E and the pencil close the editor). A press on the field held past 0.3 s opens the park list over the views and jumps to
   the park the button is released on; a click opens it as **Playlist order**: rows with grips, Use ticks
   (2026-11-12, "Parks and playlists" below), numbers, names and view counts, dragged to reorder the parks (saved in the game at once, `RCTScreensaver.
   playlistProps.<sequence>.order`, and played in that order at once), clicked to go to a park (the list
@@ -404,7 +404,9 @@ click on the park field (Playlist order):
   can't be ticked off (the header says so for a moment). Ticks save at once (`RCTScreensaver.playlistProps.
   <sequence>.use`, park key → on/off, in the live file's `props`); a build bakes them into the playlist file
   (`[[park]] use = false`, removed when ticked on; comments kept). The build lists the parks it left out in the
-  playlist (`unused`: key and name), shown under NOT IN THE BUILD with their ticks: ticked on, "needs a build".
+  playlist (`unused`: key and name), shown under NOT IN THE BUILD with their ticks. Ticked on, a park moves up into the order (after the rest by default),
+  marked "needs a build", and can be dragged to where it should play before the build (owner, 2026-11-12); its
+  place is saved with the order (`order` names its key) and the build bakes it there.
 - **Add park…** (the list's last row) calls `screensaver.addPark(<sequence>)`: the engine shows the system's Open
   dialog (`*.park;*.zip`, starting where the last park or bundle was picked) and runs `mksequence.py --live-add
   <sequence> --park <file>`. The generator bakes the game's edits, appends a `[[park]]` with the file relative to
@@ -413,21 +415,30 @@ click on the park field (Playlist order):
   file that is no park fails with the reason (saves and loose objects: the settings page's folder scan converts
   and installs them). Its result goes to `live/task-add.json`, then the playlist builds and plays as with Build
   and play.
-- **Playlists** (a button in the list's header; "Back to parks" returns): every playlist the game can build, from
+- **Playlists** (the PLAYLIST field, a heading of its own over the park field, owner 2026-11-12: it names the
+  playing playlist and its parks; a click opens its list from under it over the park row): every playlist the game can build, from
   `live/playlists.json`, which the generator writes whenever it registers one (`--install`, an import, a new
   playlist, a copy): name, file and parks in use, the playing one marked "playing", a missing file in red. A click
   on another builds it (`screensaver.build(<name>)`, only changed parks thanks to the park cache) and plays it as an
   import is played (`applyBuild` of a sequence that is not playing): its edits come from its live file, the
   playing playlist's edits leave the storage and stay in its own live file.
+- **New playlist…** and **Duplicate…** sit side by side at the top of the PLAYLIST list (owner, 2026-11-13; a
+  plus and a copy icon), above the playlists.
 - **New playlist from a folder…** calls `screensaver.newPlaylist()`: the system's folder dialog, then
   `mksequence.py --live-new <folder>`, which reads the folder as the settings page's scan does (`parkinfo.
   scan_folder`; parks and downloads in place, RCT saves and loose objects listed as warnings), writes
   `screensaver/playlists/<slug>.toml` named "RCT Screensaver <folder>" (" 2" and so on when taken), registers it
-  and builds it; `live/task-new.json`.
+  and lists it (`live/task-new.json`, with its parks: key and a name from the NE catalog or the file). No build
+  follows (owner's tests, 2026-11-12/13): the park list opens on the new playlist's parks ("New playlist: its parks",
+  PLAYLIST showing it "not built"), to tick off and drag into order (saved to its own live file), and **Build and play
+  this playlist** builds it with them and plays it. Closed without building, it stays in the PLAYLIST list.
 - **Duplicate this playlist…** calls `screensaver.copyPlaylist(<sequence>)`: the system's Save dialog in
   `screensaver/playlists` ("<name> copy.toml"), then `mksequence.py --live-copy <sequence> --to <file>`: the
   game's edits baked, the playlist copied with its views file, named after the file (another name than any other
-  playlist's), park paths following the new folder; registered and built; `live/task-copy.json`. The game has no
+  playlist's), park paths following the new folder; registered; no rebuild (owner's tests, 2026-11-12/13): the
+  installed sequence is copied to `screensaver/build/live/<copy>` and the plugin has the engine apply it, so the copy
+  plays at once with the playing playlist's edits and properties (without an installed folder, the copy is listed
+  to pick, which builds it); `live/task-copy.json`. The game has no
   text input of its own, so the dialog's file name is the name.
 - The build pane follows each as it follows a build: the header ("adding the park", "making the playlist",
   "copying the playlist", "building"), Cancel <task>, the squares and the messages; one task at a time.

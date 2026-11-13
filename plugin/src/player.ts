@@ -606,6 +606,43 @@ export class Player {
         return true;
     }
 
+    /** The editor's Playlist order: the parks in play order (index into the playlist) with, where the saved
+     *  order puts them, the parks the build left out that are ticked on again (index -1: they play after
+     *  the next build, so they can be placed before it; owner, 2026-11-12), else after the rest. */
+    get orderRows(): { key: string; index: number; name: string }[] {
+        const rows = this.parkOrder.map(i => ({ key: this.parkKeyOf(i)!, index: i, name: this.playlist.parks[i].name }));
+        const saved = this.props.order ?? [];
+        for (const park of this.unusedParks.filter(p => p.on)) {
+            const at = saved.indexOf(park.key);
+            // before the first row the saved order puts after it
+            const next = at < 0 ? -1 : rows.findIndex(r => { const k = saved.indexOf(r.key); return k > at; });
+            rows.splice(next < 0 ? rows.length : next, 0, { key: park.key, index: -1, name: park.name });
+        }
+        return rows;
+    }
+
+    /** Moves a row of the editor's Playlist order (orderRows positions), parks waiting for a build too;
+     *  the park on screen stays; saved at once. */
+    moveOrderRow(from: number, to: number): void {
+        const rows = this.orderRows;
+        const n = rows.length;
+        if (from === to || from < 0 || to < 0 || from >= n || to >= n) {
+            return;
+        }
+        const [moved] = rows.splice(from, 1);
+        rows.splice(to, 0, moved);
+        const current = this.parkOrder[this.parkPos];
+        this.parkOrder = rows.filter(r => r.index >= 0).map(r => r.index);
+        this.parkPos = this.parkOrder.indexOf(current);
+        this.unplayed.clear();
+        this.history = [];
+        this.pickNext();
+        const order = rows.map(r => r.key);
+        this.props.order = order;
+        this.savedProps.order = order;
+        savePlaylistProps(this.playlist.sequence, this.savedProps);
+    }
+
     /** Moves a park in the play order (positions), keeping the park on screen; saved at once. */
     moveParkInOrder(from: number, to: number): void {
         const n = this.parkOrder.length;
@@ -620,6 +657,12 @@ export class Player {
         this.history = [];
         this.pickNext();
         const order = this.parkOrder.map(i => this.playlist.parks[i].key ?? this.playlist.parks[i].fileName);
+        const saved = this.props.order ?? [];
+        for (const park of this.unusedParks.filter(p => p.on && saved.includes(p.key))) {
+            // (a park waiting for a build keeps its place before the park it stood before)
+            const after = saved.slice(saved.indexOf(park.key) + 1).find(k => order.includes(k));
+            order.splice(after === undefined ? order.length : order.indexOf(after), 0, park.key);
+        }
         this.props.order = order;
         this.savedProps.order = order;
         savePlaylistProps(this.playlist.sequence, this.savedProps);

@@ -4,7 +4,7 @@ import { builder, buildApi, BuildResult, message } from "./builder";
 import { Editor } from "./editor";
 import { modeSettings, perfLogging, perfMark, screensaverApi } from "./mode";
 import { Player } from "./player";
-import { loadPlaylist, loadSettings, Playlist, resolveSequence, savePlaylist, saveSettings, startPlaylistEdits, TITLES } from "./storage";
+import { loadPlaylist, loadPlaylistProps, loadSettings, Playlist, resolveSequence, savePlaylist, savePlaylistProps, saveSettings, startPlaylistEdits, TITLES } from "./storage";
 import { Captions } from "./ui/captions";
 import { ControlsBar } from "./ui/controls";
 import { EditorPanel } from "./ui/editor-panel";
@@ -87,6 +87,37 @@ function stopPlayer(release = false): void {
  *  reloads its script, the new playlist is installed in the storage and the player swaps to it. The
  *  build of a playlist just imported replaces the playing playlist: the engine installs its sequence
  *  and plays it, and the player starts again on it (the editor opens again if it was open). */
+/** Duplicate: the playing playlist goes on as its copy, from the build the generator copied along (no
+ *  rebuild); the edits and Playlist properties carry over to it. */
+function takeCopy(sequence: string, source: string | undefined): string | undefined {
+    const api = buildApi();
+    const old = loadPlaylist();
+    if (!api || !player?.isRunning || !old) {
+        return "the screensaver is not playing";
+    }
+    try {
+        api.applyBuild(sequence);
+    } catch (e) {
+        return message(e);
+    }
+    const playlist: Playlist = { ...old, sequence, source, installed: Date.now() };
+    const check = resolveSequence(playlist);
+    if (typeof check === "string") {
+        return check;
+    }
+    const props = loadPlaylistProps(old.sequence);
+    savePlaylist(playlist);
+    savePlaylistProps(sequence, props); // (written to the copy's live file, now the playing one)
+    builder.forgetPlaylist();
+    const reopen = editor?.isOpen ?? false;
+    stopPlayer();
+    startPlayer();
+    if (reopen) {
+        editor?.open();
+    }
+    return player?.isRunning ? undefined : "the copy could not start";
+}
+
 function takeBuild(result: BuildResult, imported = false): string | undefined {
     const api = buildApi();
     if (!api || !player?.isRunning || !result.playlist) {
@@ -135,6 +166,7 @@ function takeBuild(result: BuildResult, imported = false): string | undefined {
     return player?.isRunning ? undefined : "the imported playlist could not start";
 }
 builder.onReady = takeBuild;
+builder.onCopied = takeCopy;
 builder.nameOf = key => {
     const park = player?.isRunning ? loadPlaylist()?.parks.find(p => (p.key ?? p.fileName) === key) : undefined;
     return park?.name;

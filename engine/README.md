@@ -41,7 +41,7 @@ on top of the ones before it. Comments in the patches name no project and use US
 | 0008 | Plugin API | `TitleSequence.backgroundLoading` |
 | 0009 | Plugin API | `TitleSequence.fadeSounds(level, ms)` |
 | 0010 | Plugin API | `TitleSequence.nextParkReady` and `holdSwitch` |
-| 0011 | Screensaver mode | The mode: settings in memory, `--screensaver`, Esc, mouse to the plugin |
+| 0011 | Screensaver mode | The mode: settings in memory, `--screensaver`, Esc, mouse to the plugin, the arrow cursor kept |
 | 0012 | Screensaver mode | The main menu's Screensaver button |
 | 0013 | Screensaver mode | The overlay at the window's resolution |
 | 0014 | Screensaver mode | Renderer, volumes, weather and time of day settings |

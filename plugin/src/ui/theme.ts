@@ -123,6 +123,7 @@ export const EDITOR = {
     scrollBar: 12, // a list's scroll bar, when it overflows
     grip: 18, // the drag handle column of the views and parks
     parkRow: 26, // the park dropdown's rows
+    playlistHeight: 26, // the playlist field over the park's (owner, 2026-11-12)
     dragStart: 5, // pixels the mouse moves before a press on a row drags it
     holdOpen: 300, // ms: a press on the park field held this long opens the list until release
     // The toolbox

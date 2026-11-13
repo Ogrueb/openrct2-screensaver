@@ -31,7 +31,10 @@ export type BuildTask = "build" | "export" | "import" | "add" | "new" | "copy" |
 type FileTask = "export" | "import" | "add" | "new" | "copy";
 
 /** The tasks whose build replaces the playing playlist with another one. */
-const NEW_PLAYLIST: BuildTask[] = ["import", "new", "copy", "open"];
+const NEW_PLAYLIST: BuildTask[] = ["import", "open"];
+// Tasks that only make a playlist file: no build follows (owner, 2026-11-12: New keeps the list open, a copy needs
+// no rebuild); the playlist plays on and the new one waits in the PLAYLIST list until it is picked.
+const FILE_ONLY: BuildTask[] = ["new", "copy"];
 
 /** How the build pane names each task. */
 const NOUN: Record<BuildTask, string> = {
@@ -143,6 +146,8 @@ export interface TaskResult {
     sequence?: string; // export, add: the playlist's; import, new, copy: the new playlist's, once written
     playlist?: string; // import, new, copy: the playlist file it wrote; add: the playlist's file
     missing?: string[]; // import: parks neither in the bundle nor the park folder
+    parks?: { key: string; name: string }[]; // new: the new playlist's parks, before its first build
+    built?: boolean; // copy: the playing build was copied along (applyBuild plays the copy without a rebuild)
     messages?: BuildMessage[];
 }
 
@@ -221,6 +226,13 @@ export class Builder {
     /** Takes a finished build in; returns an error message, or undefined once it plays. `imported`: the
      *  build of a playlist just imported, which replaces the playing one. */
     onReady: ((result: BuildResult, imported: boolean) => string | undefined) | undefined;
+
+    /** The playlist New or Duplicate made last (not built yet): the editor opens the PLAYLIST list on it. */
+    made: { sequence: string; at: number; task: "new" | "copy"; playlist?: string; parks?: { key: string; name: string }[] } | undefined;
+
+    /** Plays a copy of the playing playlist from the copied build (no rebuild); an error message, or
+     *  undefined once it plays. */
+    onCopied: ((sequence: string, source: string | undefined) => string | undefined) | undefined;
 
     constructor(private readonly api: BuildApi | undefined = buildApi()) {}
 
@@ -386,7 +398,9 @@ export class Builder {
             imported = fresh(readTaskResult(this.task));
             if (imported?.ok && imported.sequence && !this.sequence) {
                 this.sequence = imported.sequence;
-                this.last = undefined; // (the squares are the imported playlist's from here)
+                if (!FILE_ONLY.includes(this.task)) {
+                    this.last = undefined; // (the squares are the imported playlist's from here)
+                }
             }
         }
         const sequence = this.sequence;
@@ -408,6 +422,30 @@ export class Builder {
             this.notes = imported?.messages?.some(m => m.level === "error") ? from(imported)
                 : [{ level: status.state === "cancelled" ? "info" : "error", text: `${what} ${status.state === "cancelled" ? "cancelled; the playlist plays on as it was" : `failed: ${why} (log: screensaver/build.log in the user folder)`}` }, ...from(imported)];
             log(`${NOUN[task]} ${status.state === "cancelled" ? "cancelled" : "failed: " + why}`);
+            return;
+        }
+        if (task === "copy" && imported!.built && this.onCopied) {
+            // The copy plays at once from the playing build (owner, 2026-11-13: a copy needs no rebuild)
+            const made = imported!.sequence!;
+            const error = this.onCopied(made, imported!.playlist);
+            if (!error) {
+                this.outcome = { phase: "done", text: `Copied to "${made}", now playing` };
+                this.notes = [{ level: "ok", text: `Copied to "${made}", now playing; the original keeps its own file` }];
+                this.earlier = [];
+                log(`copy "${made}" now playing`);
+                return;
+            }
+            log(`copy "${made}" not taken in: ${error}`); // (listed to pick instead)
+        }
+        if (FILE_ONLY.includes(task)) {
+            const made = imported!.sequence!;
+            const verb = task === "new" ? "Made" : "Copied";
+            this.outcome = { phase: "idle", text: `${verb} "${made}"` };
+            this.notes = [{ level: "ok", text: task === "new" && imported!.parks?.length ? `${verb} "${made}"; tick and order its parks, then build it`
+                : `${verb} "${made}"; pick it above to play it` }];
+            this.earlier = from(imported).filter(m => m.level !== "ok"); // (the generator's own line says the same)
+            this.made = { sequence: made, at: Date.now(), task: task as "new" | "copy", playlist: imported!.playlist, parks: imported!.parks };
+            log(`${NOUN[task]} "${made}" made`);
             return;
         }
         // (the task's own lines come before its build's, so they are listed under them: newest first)

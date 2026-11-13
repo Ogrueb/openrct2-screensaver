@@ -74,6 +74,12 @@ class LiveParks(unittest.TestCase):
         self.assertIn("# first park", text)
         self.assertIn("# the sequence", text)
 
+    def test_a_left_out_park_ticked_on_goes_where_the_order_places_it(self):
+        # (the editor places a park waiting for a build before it is built: owner, 2026-11-12)
+        mksequence.write_props(self.playlist, {"order": ["b.park", "a.park", "c.park"], "use": {"b.park": True}})
+        self.assertEqual([(e["file"], e.get("use", True)) for e in self.read()["park"]],
+                         [("b.park", True), ("a.park", True), ("c.park", True)])
+
     def test_ticks_are_listed_in_the_live_summary(self):
         self.assertTrue(livefile.summary({"props": {"use": {"a.park": False}}})["use"])
         self.assertEqual(livefile.summary({"props": {"use": {"a.park": False}}})["props"], [])
@@ -140,12 +146,15 @@ class LiveParks(unittest.TestCase):
         self.assertEqual(code, 0)
         result = self.task("new")
         self.assertEqual(result["sequence"], "RCT Screensaver lib")
-        build.assert_called_once_with("RCT Screensaver lib", self.user, imported=True)
+        build.assert_not_called()  # (no build: picking it in the game builds it)
         data = self.read(result["playlist"])
         self.assertEqual(data["name"], "RCT Screensaver lib")
         self.assertEqual(len(data["park"]), 4)
         self.assertTrue(all(os.path.isfile(os.path.join(os.path.dirname(result["playlist"]), e["file"])) for e in data["park"]))
         self.assertEqual(mksequence.registered_playlists(self.user)["RCT Screensaver lib"], result["playlist"])
+        # its parks, for the game's park list before the first build
+        self.assertEqual([p["key"] for p in result["parks"]], ["a.park", "b.park", "c.park", "d.park"])
+        self.assertTrue(all(p["name"] for p in result["parks"]))
 
     def test_a_second_new_playlist_of_the_folder_gets_its_own_name(self):
         self.run_task(mksequence.live_new, self.lib, self.user)
@@ -168,13 +177,26 @@ class LiveParks(unittest.TestCase):
             json.dump({"version": 1, "parks": {}}, f)
         code, build = self.run_task(mksequence.live_copy, "My List", to, self.user)
         self.assertEqual(code, 0)
-        build.assert_called_once_with("Evening", self.user, imported=True)
+        build.assert_not_called()  # (a copy needs no rebuild)
         data = self.read(to)
         self.assertEqual(data["name"], "Evening")
         self.assertEqual([e["file"] for e in data["park"]], ["../../../lib/a.park", "../../../lib/b.park", "../../../lib/c.park"])
         self.assertTrue(os.path.exists(mksequence.edits_path(to)))
         self.assertEqual(self.task("copy")["sequence"], "Evening")
+        self.assertFalse(self.task("copy")["built"], "no installed build to take along")
         self.assertEqual(self.read()["name"], "My List", "the original stays")
+
+    def test_copy_takes_the_playing_build_along(self):
+        installed = os.path.join(self.user, "sequence", "My List")
+        os.makedirs(installed)
+        for name in ("script.txt", "a.park"):
+            with open(os.path.join(installed, name), "w") as f:
+                f.write(name)
+        self.assertFalse(self.run_task(mksequence.live_copy, "My List", os.path.join(self.lib, "Evening.toml"), self.user)[0])
+        self.assertTrue(self.task("copy")["built"])
+        out_dir, _ = mksequence.live_build_paths("Evening", self.user)
+        self.assertEqual(sorted(os.listdir(os.path.join(out_dir, "Evening"))), ["a.park", "script.txt"],
+                         "where the game takes builds from (applyBuild)")
 
     def test_copy_over_the_playlist_itself_fails(self):
         code, _ = self.run_task(mksequence.live_copy, "My List", self.playlist, self.user)

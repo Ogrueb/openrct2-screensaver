@@ -46,7 +46,7 @@ Read by tools/perfreport.py; runs driven by tools/perfrun.py.
  create mode 100644 src/openrct2/PerfLog.h
 
 diff --git a/src/openrct2-ui/scripting/ScScreensaver.hpp b/src/openrct2-ui/scripting/ScScreensaver.hpp
-index 6d23c99..e7a3adf 100644
+index 664d1fb..5ea5fd8 100644
 --- a/src/openrct2-ui/scripting/ScScreensaver.hpp
 +++ b/src/openrct2-ui/scripting/ScScreensaver.hpp
 @@ -20,6 +20,7 @@

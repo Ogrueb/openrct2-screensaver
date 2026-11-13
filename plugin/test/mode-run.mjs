@@ -756,8 +756,9 @@ assert.ok(scene.get("rcts.bar.titles.icon").src.includes("titles-off"), "on -> o
         edClick("boxHead");
         assert.ok(ed("checkpoint"));
     }
-    edClick("close");
-    assert.equal(ed("frame"), undefined, "the close button closes the panel");
+    assert.equal(ed("close"), undefined, "no close button (E closes it)");
+    shortcuts["rctscreensaver.edit"](); tick();
+    assert.equal(ed("frame"), undefined, "E closes the panel");
     // The mouse on the park is the bar's again once the editor is closed.
     const c0 = JSON.stringify(viewport.centre);
     mouse("move", 1400, 700); mouse("down", 1400, 700); mouse("move", 1200, 700); mouse("up", 1200, 700);
@@ -1176,9 +1177,27 @@ console.log("ok: Import and Export playlist through the file dialogs");
     assert.equal(ed("pname.4").text, "Old Mill");
     edClick("pu.4"); tick();
     assert.equal(saved["RCTScreensaver.playlistProps"][playlist.sequence].use["old-mill.park"], true, "ticked on for the next build");
-    assert.equal(ed("pcount.4").text, "needs a build");
+    // Ticked on, it joins the order (after the rest) to be placed before the build (owner, 2026-11-12).
+    assert.equal(ed("pname.3").text, "Old Mill", "in the order");
+    assert.equal(ed("pcount.3").text, "needs a build");
+    assert.equal(ed("ph.3"), undefined, "nothing left under NOT IN THE BUILD");
+    {
+        const from = ed("park.3"), to = ed("park.0");
+        mouse("move", from.x + 6, from.y + 8); mouse("down", from.x + 6, from.y + 8);
+        mouse("move", from.x + 6, from.y - 10); mouse("move", to.x + 6, to.y + 2);
+        dump("parks-placing");
+        mouse("up", to.x + 6, to.y + 2);
+        tick();
+    }
+    assert.equal(ed("pname.0").text, "Old Mill", "dragged to the top");
+    const placed = saved["RCTScreensaver.playlistProps"][playlist.sequence].order;
+    assert.equal(placed[0], "old-mill.park", "its place saved with the order");
+    assert.equal(JSON.stringify([...placed.slice(1)].sort()), JSON.stringify([...keys].sort()), "the built parks after it");
+    assert.ok(JSON.parse(mode.files.get("Mini.json")).props.order[0] === "old-mill.park", "and in the live file for the build");
     dump("parks-ticks");
-    edClick("pu.4"); tick(); // (off again)
+    edClick("ptick.0"); tick(); // (off again: back under NOT IN THE BUILD)
+    assert.equal(ed("pname.4").text, "Old Mill");
+    assert.equal(ed("ph.3").text, "NOT IN THE BUILD");
     assert.ok(JSON.parse(mode.files.get("Mini.json")).props.use[second] === false, "and written to the live file for the next build");
     // The last park in use stays on.
     edClick("ptick.2"); tick();
@@ -1225,16 +1244,18 @@ console.log("ok: Import and Export playlist through the file dialogs");
     mode.files.set("playlists.json", JSON.stringify({ playlistsVersion: 1, playlists: [
         { name: "Evening", file: "evening.toml", parks: 2 }, { name: playlist.sequence, file: "mini.toml", parks: 3 },
         { name: "Gone", file: "gone.toml", missing: true }] }));
-    edClick("field"); tick();
-    edClick("parks.mode"); tick();
-    assert.equal(scene.get("rcts.ed.parks.head").text, "Playlists");
-    assert.equal(ed("pname.0").text, "Evening");
-    assert.equal(ed("pcount.1").text, "playing", "the playing one is marked");
-    assert.equal(ed("pcount.2").text, "file missing");
-    assert.ok(ed("parks.new") && ed("parks.copy"), "New playlist and Duplicate under them");
+    edClick("plfield"); tick();
+    assert.equal(scene.get("rcts.ed.parks.head").text, "Switch to another playlist");
+    assert.equal(ed("text.plname").text, playlist.sequence, "the playlist field names the playing one");
+    assert.equal(ed("pname.1").text, "Evening");
+    assert.equal(ed("pcount.2").text, "playing", "the playing one is marked");
+    assert.equal(ed("pcount.3").text, "file missing");
+    assert.ok(ed("parks.new") && ed("parks.copy"), "New playlist and Duplicate");
+    assert.equal(ed("parks.new").y, ed("parks.copy").y, "side by side");
+    assert.ok(ed("parks.new").y < ed("ppl.1").y, "on top of the playlists");
     dump("parks-playlists");
     mode.builds.length = 0;
-    edClick("ppl.0"); tick(2);
+    edClick("ppl.1"); tick(2);
     assert.deepEqual(mode.builds, ["Evening"], "a click builds the other playlist");
     assert.equal(ed("build.state").text, "building");
     assert.equal(scene.get("rcts.ed.build.text")?.text, "Cancel switch");
@@ -1246,18 +1267,66 @@ console.log("ok: Import and Export playlist through the file dialogs");
     edClick("build"); tick(6);
     assert.match(ed("msgt.0").text, /^Switch cancelled/);
     // New playlist from a folder and Duplicate go through the engine's dialogs.
-    edClick("field"); tick();
-    edClick("parks.mode"); tick();
+    // Both only make the playlist file: no build follows, the list stays open with the new one to pick
+    // (owner, 2026-11-12).
+    const lists = extra => JSON.stringify({ playlistsVersion: 1, playlists: [
+        { name: "Evening", file: "evening.toml", parks: 2 }, { name: playlist.sequence, file: "mini.toml", parks: 3 }, ...extra] });
+    const finish = (task, sequence, extra, more = {}) => {
+        mode.files.set(`task-${task}.json`, JSON.stringify({ taskVersion: 1, task, started: Date.now(), ok: true, finished: Date.now(),
+            sequence, playlist: `C:/x/${sequence}.toml`, messages: [{ level: "ok", text: `${task} line` }], ...more }));
+        mode.files.set("playlists.json", lists(extra));
+        mode.buildStatus = { ...mode.buildStatus, state: "done", finished: Date.now() };
+        tick(6);
+    };
+    mode.builds.length = 0;
+    edClick("plfield"); tick();
     edClick("parks.new"); tick(2);
     assert.equal(mode.made, 1);
     assert.equal(ed("build.state").text, "making the playlist");
-    edClick("build"); tick(6);
-    edClick("field"); tick();
-    edClick("parks.mode"); tick();
+    assert.ok(ed("parks.new"), "the list stays open");
+    // New: the park list opens on the new playlist's parks, to tick and order before its first build
+    // (owner, 2026-11-13).
+    const loose = ["Dreamport", "Mandala", "Morow World"].map(name => ({ key: name.toLowerCase() + ".park", name }));
+    finish("new", "RCT Screensaver loose", [{ name: "RCT Screensaver loose", file: "loose.toml", parks: 3 }], { parks: loose });
+    assert.equal(scene.get("rcts.ed.parks.head").text, "New playlist: its parks");
+    assert.equal(ed("text.plname").text, "RCT Screensaver loose");
+    assert.equal(ed("text.plparks").text, "3 parks · not built");
+    assert.deepEqual([0, 1, 2].map(i => ed(`pname.${i}`).text), ["Dreamport", "Mandala", "Morow World"]);
+    assert.match(ed("msgt.0").text, /^Made "RCT Screensaver loose"/, ed("msgt.0").text);
+    assert.equal(mode.builds.length, 0, "no build");
+    edClick("ptick.1"); tick(); // (Mandala out)
+    assert.match(ed("pname.1").text, /\(left out\)$/);
+    {
+        const from = ed("park.2"), to = ed("park.0");
+        mouse("move", from.x + 6, from.y + 8); mouse("down", from.x + 6, from.y + 8);
+        mouse("move", from.x + 6, from.y - 10); mouse("move", to.x + 6, to.y + 2);
+        mouse("up", to.x + 6, to.y + 2); tick();
+    }
+    assert.equal(ed("pname.0").text, "Morow World", "dragged to the top");
+    const draftLive = JSON.parse(mode.files.get("RCT_Screensaver_loose.json"));
+    assert.equal(draftLive.sequence, "RCT Screensaver loose");
+    assert.equal(draftLive.source, "C:/x/RCT Screensaver loose.toml");
+    assert.equal(draftLive.props.use["mandala.park"], false, "the ticks in its live file, for its build");
+    assert.equal(draftLive.props.order[0], "morow world.park", "and the order");
+    mouse("move", 900, 700);
+    dump("parks-made");
+    edClick("parks.build"); tick(2);
+    assert.deepEqual(mode.builds, ["RCT Screensaver loose"], "Build and play builds the new playlist");
+    mode.buildStatus = { ...mode.buildStatus, state: "cancelled", finished: Date.now() };
+    mode.cancelBuild = function () { return true; };
+    tick(6);
+    mode.builds.length = 0;
+    edClick("plfield"); tick();
     edClick("parks.copy"); tick(2);
     assert.deepEqual(mode.copied, [playlist.sequence], "Duplicate copies the playing playlist");
     assert.equal(ed("build.state").text, "copying the playlist");
-    edClick("build"); tick(6);
+    // (built: the playing build copied along; the mock can't play it, so the copy is listed to pick)
+    finish("copy", "Mini copy", [{ name: "RCT Screensaver loose", file: "loose.toml", parks: 5 }, { name: "Mini copy", file: "mini copy.toml", parks: 3 }], { built: true });
+    assert.equal(mode.applied.at(-1), "Mini copy", "the copy's build is applied, no rebuild");
+    assert.equal(ed("pname.4").text, "Mini copy");
+    assert.equal(ed("pcount.4").text, "new · 3 parks");
+    assert.equal(mode.builds.length, 0, "a copy needs no rebuild");
+    edClick("plfield"); tick(); // (closes the list)
     // Back as it was for the tests below.
     delete playlist.unused;
     delete mode.addPark; delete mode.newPlaylist; delete mode.copyPlaylist;
