@@ -1143,7 +1143,7 @@ export class EditorPanel implements EditorView {
             }
             if (item.kind === "plbuttons") {
                 const off = !parksOn || busy;
-                const why = !parksOn ? "needs the patched engine with these dialogs" : busy ? `wait for the ${builder.noun} to finish` : "";
+                const why = !parksOn ? (builder.available ? "needs the patched engine with these dialogs" : builder.unavailableReason) : busy ? `wait for the ${builder.noun} to finish` : "";
                 const half = Math.floor((width - 12) / 2);
                 const pair: [string, string, string, string][] = [
                     ["parks.new", "New playlist from a folder…", "Pick a folder of parks: a playlist of them is made, its parks listed to tick and order", "add"],
@@ -1159,8 +1159,8 @@ export class EditorPanel implements EditorView {
             // The action rows: Add park; Build and play the new playlist
             const [label0, tip, icon] = item.kind === "add" ? ["Add park…", "Pick a park file or download (.park, .zip); it is added and the playlist built", "add"]
                 : ["Build and play this playlist", "Build the new playlist with these parks, in this order, and play it", "build"];
-            const off = (!parksOn && item.kind !== "build") || busy;
-            const why = !parksOn ? "needs the patched engine with these dialogs" : busy ? `wait for the ${builder.noun} to finish` : "";
+            const off = (item.kind === "build" ? !builder.available : !parksOn) || busy;
+            const why = !parksOn ? (builder.available ? "needs the patched engine with these dialogs" : builder.unavailableReason) : busy ? `wait for the ${builder.noun} to finish` : "";
             const id = `parks.${item.kind}`;
             const row = this.place(id, { x: area.x + 4, y: y + 2, width: width - 8, height: s.parkRow - 4 }, why ? `${label0.replace("…", "")}: ${why}` : tip, off);
             button(scene, id, row, this.state(id), { icon, iconSize: 16, text: label0, textSize: s.textSize, left: true }, overlay);
@@ -1477,7 +1477,7 @@ export class EditorPanel implements EditorView {
         label(scene, "build.sub", "saves live edits to the playlist", { x: x0 + 24 + tw + 8, y: y + 1, width: 0, height: s.propHeader }, 13, overlay);
         scene.set("build.sub", { ...scene.get("build.sub")!, colour: THEME.textDim });
         const count = builder.count;
-        const [stateText, stateColour] = line.phase === "unavailable" ? ["needs the patched engine", THEME.textDim]
+        const [stateText, stateColour] = line.phase === "unavailable" ? [builder.unavailableShort, THEME.textDim]
             : line.phase === "running" ? [(builder.chip ?? "Building").toLowerCase(), THEME.textGood]
             : line.phase === "failed" ? ["failed", THEME.warning]
             : builder.pendingEdits(e.playback.installedAt) ? ["edits not built", THEME.pending]
@@ -1574,7 +1574,7 @@ export class EditorPanel implements EditorView {
         };
         for (const [id, icon, text, bx] of [["import", "import", "Import playlist", x0], ["export", "export", "Export playlist", x0 + inner - halfW]] as const) {
             const off = !bundles || running;
-            const tip = !bundles ? `${text} needs the patched engine with file dialogs` : running ? `${text}: wait for the ${task} to finish` : tips[id];
+            const tip = !bundles ? (builder.available ? `${text} needs the patched engine with file dialogs` : `${text}: ${builder.unavailableReason}`) : running ? `${text}: wait for the ${task} to finish` : tips[id];
             const r = this.place(id, { x: bx, y, width: halfW, height: s.boxButton }, tip, off);
             button(scene, id, r, this.state(id), { icon, iconSize: s.toolIcon, text, textSize: 14, left: true }, overlay);
         }

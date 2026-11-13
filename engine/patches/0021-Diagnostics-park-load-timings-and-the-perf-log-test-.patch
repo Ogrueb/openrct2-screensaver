@@ -46,7 +46,7 @@ Read by tools/perfreport.py; runs driven by tools/perfrun.py.
  create mode 100644 src/openrct2/PerfLog.h
 
 diff --git a/src/openrct2-ui/scripting/ScScreensaver.hpp b/src/openrct2-ui/scripting/ScScreensaver.hpp
-index 664d1fb..5ea5fd8 100644
+index afc620b..4f64ac9 100644
 --- a/src/openrct2-ui/scripting/ScScreensaver.hpp
 +++ b/src/openrct2-ui/scripting/ScScreensaver.hpp
 @@ -20,6 +20,7 @@
@@ -57,7 +57,7 @@ index 664d1fb..5ea5fd8 100644
      #include <openrct2/PlatformEnvironment.h>
      #include <openrct2/core/FileSystem.hpp>
      #include <openrct2/core/Path.hpp>
-@@ -546,6 +547,8 @@ namespace OpenRCT2::Scripting
+@@ -547,6 +548,8 @@ namespace OpenRCT2::Scripting
                  JS_CFUNC_DEF("addPark", 1, ScScreensaver::addPark),
                  JS_CFUNC_DEF("newPlaylist", 0, ScScreensaver::newPlaylist),
                  JS_CFUNC_DEF("copyPlaylist", 1, ScScreensaver::copyPlaylist),
@@ -66,7 +66,7 @@ index 664d1fb..5ea5fd8 100644
              };
              RegisterBase(ctx, "Screensaver", nullptr, funcs);
              ScreensaverJS::InstallListeners();
-@@ -567,6 +570,19 @@ namespace OpenRCT2::Scripting
+@@ -568,6 +571,19 @@ namespace OpenRCT2::Scripting
              return JS_NewBool(ctx, Ui::Screensaver::IsActive());
          }
  
@@ -1157,7 +1157,7 @@ index dedf3dd..4087f38 100644
          virtual Object* GetLoadedObject(ObjectType objectType, size_t index) = 0;
          template<typename TClass>
 diff --git a/src/openrct2/scripting/ScriptEngine.cpp b/src/openrct2/scripting/ScriptEngine.cpp
-index bb88d98..432696a 100644
+index 9d6af5b..5137296 100644
 --- a/src/openrct2/scripting/ScriptEngine.cpp
 +++ b/src/openrct2/scripting/ScriptEngine.cpp
 @@ -12,6 +12,7 @@
@@ -1168,7 +1168,7 @@ index bb88d98..432696a 100644
      #include "../PlatformEnvironment.h"
      #include "../actions/GameAction.hpp"
      #include "../actions/general/CustomAction.h"
-@@ -1281,6 +1282,7 @@ JSValue ScriptEngine::ExecutePluginCall(
+@@ -1301,6 +1302,7 @@ JSValue ScriptEngine::ExecutePluginCall(
      if (JS_IsFunction(ctx, func) && (!plugin || plugin->HasStarted()))
      {
          ScriptExecutionInfo::PluginScope scope(_execInfo, plugin, isGameStateMutable);

@@ -27,7 +27,12 @@ Layouts:
           drives views and park changes. Without the plugin this shows one view per park.
   stock   Every view is written as LOCATION/WAIT steps, for OpenRCT2 without the plugin.
 """
-import argparse, collections, glob, hashlib, json, pickle, math, statistics, os, random, re, shutil, subprocess, sys, tempfile, time, tomllib
+import sys
+if sys.version_info < (3, 11):
+    # (the game runs this from its build buttons: the message reaches screensaver/build.log)
+    sys.exit("mksequence.py needs Python 3.11 or newer; this is Python %d.%d (%s)"
+             % (sys.version_info[0], sys.version_info[1], sys.executable))
+import argparse, collections, glob, hashlib, json, pickle, math, statistics, os, random, re, shutil, subprocess, tempfile, time, tomllib
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import companions, livefile, nedesigns, parkinfo, profiles, userdata  # noqa: E402

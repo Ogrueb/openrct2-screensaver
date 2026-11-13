@@ -7,6 +7,9 @@
 #   installs vary too much to replace files in one.
 # - Linux x64 AppImage: the same build bundled with its libraries (OpenRCT2's AppImage recipe), for
 #   distributions whose libraries differ from Ubuntu 24.04's (Fedora: ICU, libzip).
+# - Every build carries the screensaver's own files in OpenRCT2's data folder (tools/mkshipped.py): the
+#   plugin in data/plugin, the generator in data/screensaver, and on Windows Python's embeddable package
+#   (data/screensaver/python), so the screensaver mode builds playlists without a source checkout.
 # - With "publish_tag" on a release build: a draft GitHub release holding the Windows zip and the
 #   AppImage (labeled beta), its notes from docs/releases/<tag>.md. Publishing it stays a click on
 #   the release page.
@@ -16,7 +19,7 @@ on:
   workflow_dispatch:
     inputs:
       release:
-        description: "Release build: leave out the diagnostics patch (0020)"
+        description: "Release build: leave out the diagnostics patch (0021)"
         type: boolean
         default: false
       publish_tag:
@@ -34,10 +37,39 @@ env:
   OPENRCT2_BUILD_SERVER: openrct2-screensaver
   PLATFORM: x64
   CONFIGURATION: Release
+  # Python's Windows embeddable package shipped with the generator (3.14: zstd in the standard library)
+  PYTHON_EMBED_VERSION: "3.14.0"
 
 jobs:
+  shipped:
+    name: Screensaver files
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout openrct2-screensaver
+        uses: actions/checkout@v4
+      - name: Lay out the data folder's files
+        shell: bash
+        run: |
+          python3 tools/mkshipped.py shipped-linux
+          curl -fsSLo python-embed.zip \
+            "https://www.python.org/ftp/python/$PYTHON_EMBED_VERSION/python-$PYTHON_EMBED_VERSION-embed-amd64.zip"
+          python3 tools/mkshipped.py shipped-windows --python-zip python-embed.zip
+      - name: Upload (Linux)
+        uses: actions/upload-artifact@v4
+        with:
+          name: shipped-linux
+          path: shipped-linux
+          if-no-files-found: error
+      - name: Upload (Windows)
+        uses: actions/upload-artifact@v4
+        with:
+          name: shipped-windows
+          path: shipped-windows
+          if-no-files-found: error
+
   windows:
     name: Windows x64
+    needs: shipped
     runs-on: windows-2025-vs2026
     steps:
       - name: Checkout openrct2-screensaver
@@ -60,7 +92,7 @@ jobs:
         working-directory: openrct2
         run: |
           for p in ../engine/patches/*.patch; do
-            if [ "${{ inputs.release }}" = "true" ] && [[ "$(basename "$p")" == 0020-* ]]; then
+            if [ "${{ inputs.release }}" = "true" ] && [[ "$(basename "$p")" == 0021-* ]]; then
               echo "== $p (left out of the release build)"
               continue
             fi
@@ -73,17 +105,29 @@ jobs:
         run: |
           export DISTANCE_FROM_TAG=0
           . scripts/setenv && build
+      - name: Download the screensaver files
+        uses: actions/download-artifact@v4
+        with:
+          name: shipped-windows
+          path: dist/data
+      - name: Gather the files
+        shell: bash
+        run: |
+          cp openrct2/bin/openrct2.exe openrct2/bin/openrct2.com dist/
+          test -f dist/data/plugin/rct-screensaver.js
+          test -f dist/data/screensaver/tools/mksequence.py
+          test -f dist/data/screensaver/python/python.exe
       - name: Upload binaries
         uses: actions/upload-artifact@v4
         with:
           name: openrct2-${{ steps.version.outputs.ref }}-openrct2-screensaver-x64${{ inputs.release == true && '-release' || '' }}
-          path: |
-            openrct2/bin/openrct2.exe
-            openrct2/bin/openrct2.com
+          # openrct2.exe and openrct2.com, and data/ to merge into the install's data folder
+          path: dist
           if-no-files-found: error
 
   linux:
     name: Linux x64
+    needs: shipped
     runs-on: ubuntu-24.04
     # OpenRCT2's own build image for its Ubuntu 24.04 portable job at this release (its ci.yml)
     container: ghcr.io/openrct2/openrct2-build:26-noble
@@ -110,7 +154,7 @@ jobs:
           # The container runs as root over a workspace owned by the runner's user
           git config --global --add safe.directory '*'
           for p in ../engine/patches/*.patch; do
-            if [ "${{ inputs.release }}" = "true" ] && [[ "$(basename "$p")" == 0020-* ]]; then
+            if [ "${{ inputs.release }}" = "true" ] && [[ "$(basename "$p")" == 0021-* ]]; then
               echo "== $p (left out of the release build)"
               continue
             fi
@@ -130,6 +174,14 @@ jobs:
           export DISTANCE_FROM_TAG=0
           . scripts/setenv -q && build -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON -DPORTABLE=ON \
             -DCMAKE_POSITION_INDEPENDENT_CODE=on -DWITH_TESTS=off
+      - name: Download the screensaver files
+        uses: actions/download-artifact@v4
+        with:
+          name: shipped-linux
+          path: shipped
+      - name: Add them to the data folder
+        shell: bash
+        run: cp -r shipped/. openrct2/bin/install/usr/share/openrct2/
       - name: Make the tarball
         id: tarball
         shell: bash
@@ -140,7 +192,8 @@ jobs:
           . scripts/setenv -q && build-portable "artifacts/$name.tar.gz" bin/install/usr
           # The tree the tarball must hold (a listing piped into head would end the step with SIGPIPE)
           tar -tzf "artifacts/$name.tar.gz" > contents.txt
-          for f in "OpenRCT2/openrct2" "OpenRCT2/openrct2-cli" "OpenRCT2/libopenrct2\.so.*" "OpenRCT2/data/g2\.dat"; do
+          for f in "OpenRCT2/openrct2" "OpenRCT2/openrct2-cli" "OpenRCT2/libopenrct2\.so.*" "OpenRCT2/data/g2\.dat" \
+              "OpenRCT2/data/plugin/rct-screensaver\.js" "OpenRCT2/data/screensaver/tools/mksequence\.py"; do
             grep -qxE "$f" contents.txt || { echo "missing from the tarball: $f"; exit 1; }
           done
           ./bin/openrct2-cli --version || true
@@ -153,6 +206,7 @@ jobs:
 
   linux-appimage:
     name: Linux x64 AppImage
+    needs: shipped
     runs-on: ubuntu-24.04
     # OpenRCT2's own AppImage job at this release: built on Ubuntu 22.04 with clang, and linuxdeploy
     # bundles the libraries, so it runs on distributions whose library versions differ from Ubuntu's
@@ -180,7 +234,7 @@ jobs:
         run: |
           git config --global --add safe.directory '*'
           for p in ../engine/patches/*.patch; do
-            if [ "${{ inputs.release }}" = "true" ] && [[ "$(basename "$p")" == 0020-* ]]; then
+            if [ "${{ inputs.release }}" = "true" ] && [[ "$(basename "$p")" == 0021-* ]]; then
               echo "== $p (left out of the release build)"
               continue
             fi
@@ -198,6 +252,14 @@ jobs:
         run: |
           export DISTANCE_FROM_TAG=0
           . scripts/setenv -q && build -DCMAKE_CXX_COMPILER=clang++-20 -DCMAKE_BUILD_TYPE=Release -DAPPIMAGE=ON
+      - name: Download the screensaver files
+        uses: actions/download-artifact@v4
+        with:
+          name: shipped-linux
+          path: shipped
+      - name: Add them to the data folder
+        shell: bash
+        run: cp -r shipped/. openrct2/bin/install/usr/share/openrct2/
       - name: Build the AppImage
         id: appimage
         shell: bash
@@ -246,7 +308,7 @@ jobs:
           if gh release view "$TAG" > /dev/null 2>&1; then echo "release $TAG exists already"; exit 1; fi
           mkdir dist
           win=openrct2-$ref-openrct2-screensaver-x64-release
-          (cd "builds/$win" && zip -9 "../../dist/$win.zip" openrct2.exe openrct2.com)
+          (cd "builds/$win" && zip -9 -r "../../dist/$win.zip" openrct2.exe openrct2.com data)
           app=openrct2-$ref-openrct2-screensaver-linux-x64-release
           cp "builds/$app-appimage/$app.AppImage" "dist/openrct2-$ref-openrct2-screensaver-linux-x64-beta.AppImage"
           ls -l dist

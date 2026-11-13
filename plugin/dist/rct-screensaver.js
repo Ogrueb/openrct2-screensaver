@@ -296,6 +296,7 @@
     }
   }
   var POLL_MS = 500;
+  var GENERATOR_MS = 5e3;
   var STALE_MS = 5e3;
   function log(message2) {
     console.log(`[RCT Screensaver] ${message2}`);
@@ -321,11 +322,49 @@
       this.builtFrom = 0;
       // when the build that plays started: edits saved since are not built
       this.startEdits = {};
+      this.generatorRead = 0;
       this.dirtyStamp = "";
       this.dirtySet = /* @__PURE__ */ new Set();
     }
-    get available() {
+    /** The engine has the build API (the patched engine). */
+    get engineAvailable() {
       return this.api !== void 0 && filesApi() !== void 0;
+    }
+    /** What the engine says about the generator (asked at most every few seconds: it looks on the PATH);
+     *  undefined on an engine that does not tell. */
+    get generator() {
+      if (!this.engineAvailable) {
+        return void 0;
+      }
+      if (Date.now() - this.generatorRead >= GENERATOR_MS || this.generatorRead === 0) {
+        this.generatorRead = Date.now();
+        try {
+          const info = this.api.generator;
+          this.generatorInfo = info && typeof info.available === "boolean" ? info : void 0;
+        } catch {
+          this.generatorInfo = void 0;
+        }
+      }
+      return this.generatorInfo;
+    }
+    /** Builds and the dialogs can run: the patched engine and a generator it can start. */
+    get available() {
+      return this.engineAvailable && this.generator?.available !== false;
+    }
+    /** Why building is unavailable (empty when it is available). */
+    get unavailableReason() {
+      if (!this.engineAvailable) {
+        return "Building from the game needs the patched engine";
+      }
+      const g = this.generator;
+      return g && !g.available ? g.reason || "No generator found" : "";
+    }
+    /** A short state for the build pane's header while building is unavailable. */
+    get unavailableShort() {
+      if (!this.engineAvailable) {
+        return "needs the patched engine";
+      }
+      return /python/i.test(this.unavailableReason) ? "needs Python" : "no generator";
     }
     /** Export and Import: an engine with the file dialogs. */
     get bundlesAvailable() {
@@ -572,7 +611,7 @@
     /** The line the editor shows (the controls bar's chip and the pane's header take theirs from it). */
     get line() {
       if (!this.available) {
-        return { phase: "unavailable", text: "Building from the game needs the patched engine" };
+        return { phase: "unavailable", text: this.unavailableReason };
       }
       if (this.task === "export") {
         return { phase: "running", text: "Exporting the playlist" };
@@ -4850,13 +4889,13 @@
       this.mode.configure(modeSettings(this.settings));
     }
     /** One step faster or slower; a click wraps round (4× then 1×), the wheel stops at the ends. */
-    speed(delta, wrap) {
+    speed(delta, wrap2) {
       const p = this.player();
       if (!p) {
         return;
       }
       let target = this.settings.speed + delta;
-      if (wrap) {
+      if (wrap2) {
         target = target > MAX_SPEED2 ? MIN_SPEED2 : target < MIN_SPEED2 ? MAX_SPEED2 : target;
       }
       p.changeSpeed(target - this.settings.speed);
@@ -7008,7 +7047,7 @@
         }
         if (item.kind === "plbuttons") {
           const off2 = !parksOn || busy;
-          const why2 = !parksOn ? "needs the patched engine with these dialogs" : busy ? `wait for the ${builder.noun} to finish` : "";
+          const why2 = !parksOn ? builder.available ? "needs the patched engine with these dialogs" : builder.unavailableReason : busy ? `wait for the ${builder.noun} to finish` : "";
           const half = Math.floor((width - 12) / 2);
           const pair = [
             ["parks.new", "New playlist from a folder\u2026", "Pick a folder of parks: a playlist of them is made, its parks listed to tick and order", "add"],
@@ -7027,8 +7066,8 @@
           continue;
         }
         const [label0, tip, icon] = item.kind === "add" ? ["Add park\u2026", "Pick a park file or download (.park, .zip); it is added and the playlist built", "add"] : ["Build and play this playlist", "Build the new playlist with these parks, in this order, and play it", "build"];
-        const off = !parksOn && item.kind !== "build" || busy;
-        const why = !parksOn ? "needs the patched engine with these dialogs" : busy ? `wait for the ${builder.noun} to finish` : "";
+        const off = (item.kind === "build" ? !builder.available : !parksOn) || busy;
+        const why = !parksOn ? builder.available ? "needs the patched engine with these dialogs" : builder.unavailableReason : busy ? `wait for the ${builder.noun} to finish` : "";
         const id = `parks.${item.kind}`;
         const row = this.place(id, { x: area.x + 4, y: y + 2, width: width - 8, height: s.parkRow - 4 }, why ? `${label0.replace("\u2026", "")}: ${why}` : tip, off);
         button(scene, id, row, this.state(id), { icon, iconSize: 16, text: label0, textSize: s.textSize, left: true }, overlay);
@@ -7390,7 +7429,7 @@
       label(scene, "build.sub", "saves live edits to the playlist", { x: x0 + 24 + tw + 8, y: y + 1, width: 0, height: s.propHeader }, 13, overlay);
       scene.set("build.sub", { ...scene.get("build.sub"), colour: THEME.textDim });
       const count = builder.count;
-      const [stateText, stateColour] = line.phase === "unavailable" ? ["needs the patched engine", THEME.textDim] : line.phase === "running" ? [(builder.chip ?? "Building").toLowerCase(), THEME.textGood] : line.phase === "failed" ? ["failed", THEME.warning] : builder.pendingEdits(e.playback.installedAt) ? ["edits not built", THEME.pending] : ["built \xB7 playing", THEME.textGood];
+      const [stateText, stateColour] = line.phase === "unavailable" ? [builder.unavailableShort, THEME.textDim] : line.phase === "running" ? [(builder.chip ?? "Building").toLowerCase(), THEME.textGood] : line.phase === "failed" ? ["failed", THEME.warning] : builder.pendingEdits(e.playback.installedAt) ? ["edits not built", THEME.pending] : ["built \xB7 playing", THEME.textGood];
       const stw = measure(overlay, stateText, 13).width;
       label(scene, "build.state", stateText, { x: x0 + inner - 8 - stw, y, width: 0, height: s.propHeader }, 13, overlay);
       scene.set("build.state", { ...scene.get("build.state"), colour: stateColour });
@@ -7483,7 +7522,7 @@
       };
       for (const [id, icon, text, bx] of [["import", "import", "Import playlist", x0], ["export", "export", "Export playlist", x0 + inner - halfW]]) {
         const off = !bundles || running;
-        const tip = !bundles ? `${text} needs the patched engine with file dialogs` : running ? `${text}: wait for the ${task} to finish` : tips[id];
+        const tip = !bundles ? builder.available ? `${text} needs the patched engine with file dialogs` : `${text}: ${builder.unavailableReason}` : running ? `${text}: wait for the ${task} to finish` : tips[id];
         const r = this.place(id, { x: bx, y, width: halfW, height: s.boxButton }, tip, off);
         button(scene, id, r, this.state(id), { icon, iconSize: s.toolIcon, text, textSize: 14, left: true }, overlay);
       }
@@ -7657,6 +7696,218 @@
     return starts;
   }
 
+  // src/ui/welcome.ts
+  var WIDTH2 = 520;
+  var PAD = 16;
+  var ROW = 34;
+  var GAP = 6;
+  var LIST_MAX = 6;
+  var LIST_MS = 3e3;
+  function fitText(api, text, size, width) {
+    if (measure(api.overlay, text, size).width <= width) {
+      return text;
+    }
+    let t = text;
+    while (t.length > 1 && measure(api.overlay, t + "\u2026", size).width > width) {
+      t = t.slice(0, -1);
+    }
+    return t + "\u2026";
+  }
+  function wrap(api, text, size, width) {
+    const lines = [];
+    let line = "";
+    for (const word of text.split(" ")) {
+      const next = line ? `${line} ${word}` : word;
+      if (line && measure(api.overlay, next, size).width > width) {
+        lines.push(line);
+        line = word;
+      } else {
+        line = next;
+      }
+    }
+    if (line) {
+      lines.push(line);
+    }
+    return lines;
+  }
+  var Welcome = class {
+    // when this panel's New started: the playlist it makes is built and played at once
+    /** `problem`: why the installed playlist cannot play (empty: none is installed). */
+    constructor(api, problem = "") {
+      this.api = api;
+      this.problem = problem;
+      this.hits = [];
+      this.mouse = { x: 0, y: 0 };
+      this.playlists = [];
+      this.listRead = 0;
+      this.shown = "";
+      this.newSince = 0;
+      this.layer = new Layer(api.overlay, "rcts.welcome.");
+    }
+    open() {
+      this.layer.show(true, 0);
+      this.api.cursorVisible = true;
+      this.update();
+    }
+    close() {
+      this.layer.clear();
+    }
+    update() {
+      if (Date.now() - this.listRead >= LIST_MS) {
+        this.listRead = Date.now();
+        this.playlists = readPlaylists().filter((p) => !p.missing);
+      }
+      const made = builder.made;
+      if (this.newSince && made && made.task === "new" && made.at >= this.newSince && !builder.running) {
+        this.newSince = 0;
+        builder.openPlaylist(made.sequence);
+      } else if (this.newSince && !builder.running && builder.runningTask === void 0 && builder.line.phase === "failed") {
+        this.newSince = 0;
+      }
+      const scene = this.draw();
+      const signature = JSON.stringify([...scene.entries()]);
+      if (signature !== this.shown) {
+        this.shown = signature;
+        this.layer.render(scene);
+      }
+    }
+    /** True when the mouse is taken (over the panel). */
+    onMouse(e) {
+      this.mouse = { x: e.x, y: e.y };
+      const hit = this.hits.find((h) => contains(h.rect, e.x, e.y));
+      this.hover = hit?.id;
+      if (e.type === "down" && e.button === 0) {
+        this.down = hit && !hit.off ? hit.id : void 0;
+      } else if (e.type === "up" && e.button === 0) {
+        if (hit && !hit.off && this.down === hit.id) {
+          this.click(hit.id);
+        }
+        this.down = void 0;
+      }
+      this.update();
+      return hit !== void 0;
+    }
+    click(id) {
+      if (id === "new") {
+        this.newSince = Date.now();
+        builder.newPlaylist();
+        if (!builder.running) {
+          this.newSince = 0;
+        }
+      } else if (id === "import") {
+        builder.importPlaylist();
+      } else {
+        const pl = this.playlists[Number(id.slice(3))];
+        if (pl) {
+          builder.openPlaylist(pl.name);
+        }
+      }
+    }
+    draw() {
+      const scene = /* @__PURE__ */ new Map();
+      const overlay = this.api.overlay;
+      const inner = WIDTH2 - 2 * PAD;
+      const available = builder.available;
+      const busy = builder.running;
+      const line = builder.line;
+      const intro = this.problem ? `The installed playlist cannot play: ${this.problem}.` : "The screensaver plays a playlist of parks, with views it makes for each park. There is none yet.";
+      const introLines = wrap(this.api, intro, 15, inner);
+      const reason = available ? "" : builder.unavailableReason;
+      const reasonLines = reason ? wrap(this.api, reason, 14, inner) : [];
+      const listed = this.playlists.slice(0, LIST_MAX);
+      const status = busy ? `${line.text}${builder.elapsed ? ` \xB7 ${clock(builder.elapsed)}` : ""}` : line.phase === "failed" ? line.text : "";
+      const statusLines = status ? wrap(this.api, status, 14, inner) : [];
+      const height = PAD + 28 + 6 + introLines.length * 20 + 10 + reasonLines.length * 19 + (reasonLines.length ? 10 : 0) + ROW + GAP + ROW + (listed.length ? 14 + 20 + listed.length * (ROW + GAP) + (this.playlists.length > LIST_MAX ? 20 : 0) : 0) + (statusLines.length ? 10 + statusLines.length * 19 : 0) + 10 + 18 + PAD;
+      const frame = { x: Math.round((ui.width - WIDTH2) / 2), y: Math.max(8, Math.round((ui.height - height) / 2)), width: WIDTH2, height };
+      backing(scene, "frame", frame, THEME.editorBacking);
+      let y = frame.y + PAD;
+      const x0 = frame.x + PAD;
+      label(scene, "title", this.problem ? "Playlist not found" : "No playlist yet", { x: x0, y, width: inner, height: 28 }, 22, overlay, true);
+      y += 28 + 6;
+      introLines.forEach((t, i) => {
+        label(scene, `intro.${i}`, t, { x: x0, y: y + i * 20, width: inner, height: 20 }, 15, overlay);
+      });
+      y += introLines.length * 20 + 10;
+      reasonLines.forEach((t, i) => {
+        label(scene, `why.${i}`, t, { x: x0, y: y + i * 19, width: inner, height: 19 }, 14, overlay);
+        scene.set(`why.${i}`, { ...scene.get(`why.${i}`), colour: THEME.warning });
+      });
+      y += reasonLines.length * 19 + (reasonLines.length ? 10 : 0);
+      this.hits = [];
+      const why = !available ? reason : busy ? `Wait for the ${builder.noun} to finish` : "";
+      const action = (id, icon, text, tip, r, off) => {
+        this.hits.push({ id, rect: r, tip: off && why ? why : tip, off });
+        button(
+          scene,
+          id,
+          r,
+          { hover: this.hover === id, down: this.down === id && this.hover === id, on: false, disabled: off },
+          { icon, iconSize: 18, text, textSize: 15, left: true },
+          overlay
+        );
+      };
+      const parksOff = !builder.parksAvailable || busy;
+      action(
+        "new",
+        "add",
+        "New playlist from a folder of parks\u2026",
+        "Pick a folder of parks (.park files or park downloads): a playlist of them is made, built and played",
+        { x: x0, y, width: inner, height: ROW },
+        parksOff
+      );
+      y += ROW + GAP;
+      action(
+        "import",
+        "import",
+        "Import playlist\u2026",
+        "Pick a playlist bundle (.zip) someone exported: it is imported, built and played",
+        { x: x0, y, width: inner, height: ROW },
+        !builder.bundlesAvailable || busy
+      );
+      y += ROW;
+      if (listed.length) {
+        y += 14;
+        label(scene, "plhead", "YOUR PLAYLISTS", { x: x0, y, width: inner, height: 20 }, 13, overlay, true);
+        scene.set("plhead", { ...scene.get("plhead"), colour: THEME.textDim });
+        y += 20;
+        listed.forEach((pl, i) => {
+          const count = pl.parks !== void 0 ? ` (${pl.parks} park${pl.parks === 1 ? "" : "s"})` : "";
+          action(
+            `pl.${i}`,
+            "build",
+            fitText(this.api, pl.name + count, 15, inner - 50),
+            `Build "${pl.name}" and play it`,
+            { x: x0, y, width: inner, height: ROW },
+            !available || busy
+          );
+          y += ROW + GAP;
+        });
+        if (this.playlists.length > LIST_MAX) {
+          label(scene, "plmore", `and ${this.playlists.length - LIST_MAX} more`, { x: x0, y, width: inner, height: 20 }, 13, overlay);
+          scene.set("plmore", { ...scene.get("plmore"), colour: THEME.textDim });
+          y += 20;
+        }
+        y -= GAP;
+      }
+      if (statusLines.length) {
+        y += 10;
+        statusLines.forEach((t, i) => {
+          label(scene, `status.${i}`, t, { x: x0, y: y + i * 19, width: inner, height: 19 }, 14, overlay);
+          scene.set(`status.${i}`, { ...scene.get(`status.${i}`), colour: line.warning ? THEME.warning : THEME.textGood });
+        });
+        y += statusLines.length * 19;
+      }
+      y += 10;
+      label(scene, "esc", "Esc leaves the screensaver", { x: x0, y, width: inner, height: 18 }, 13, overlay);
+      scene.set("esc", { ...scene.get("esc"), colour: THEME.textDim });
+      const tipped = this.hits.find((h) => h.id === this.hover);
+      if (tipped && contains(tipped.rect, this.mouse.x, this.mouse.y)) {
+        tooltip(scene, "tip", tipped.tip, this.mouse.x, tipped.rect.y - 4, overlay, ui.width);
+      }
+      return scene;
+    }
+  };
+
   // src/main.ts
   var UPDATE_INTERVAL_MS = 100;
   var DEBUG_INTERVAL_MS = 1e3;
@@ -7666,6 +7917,7 @@
   var bar;
   var captions;
   var editorPanel;
+  var welcome;
   var onTitleScreen = false;
   var lastDebug = 0;
   var mode = screensaverApi();
@@ -7680,7 +7932,8 @@
     const settings = loadSettings();
     const playlist = loadPlaylist();
     if (!playlist) {
-      log3("no playlist installed; run tools/mksequence.py --install");
+      log3("no playlist installed: make one in the screensaver mode (New playlist, Import) or with tools/mksequence.py --install");
+      showWelcome("");
       return;
     }
     if (playlist.titles && TITLES.includes(playlist.titles)) {
@@ -7689,6 +7942,7 @@
     const sequence = resolveSequence(playlist);
     if (typeof sequence === "string") {
       log3(sequence);
+      showWelcome(sequence);
       return;
     }
     player = new Player(playlist, sequence, settings, mode?.active ? mode.overlay : void 0);
@@ -7707,7 +7961,15 @@
       captions = new Captions(mode, () => player, settings, () => editor?.isOpen ?? false, () => bar?.shown ?? false);
     }
   }
+  function showWelcome(problem) {
+    if (mode?.active && mode.overlay) {
+      welcome = new Welcome(mode, problem);
+      welcome.open();
+    }
+  }
   function stopPlayer(release = false) {
+    welcome?.close();
+    welcome = void 0;
     bar?.close();
     bar = void 0;
     captions?.close();
@@ -7752,10 +8014,11 @@
   }
   function takeBuild(result, imported = false) {
     const api = buildApi();
-    if (!api || !player?.isRunning || !result.playlist) {
+    const fresh = !player?.isRunning && imported && welcome !== void 0;
+    if (!api || !player?.isRunning && !fresh || !result.playlist) {
       return "the screensaver is not playing";
     }
-    const other = result.playlist.sequence !== player.sequenceName;
+    const other = fresh || result.playlist.sequence !== player.sequenceName;
     if (other && !imported) {
       return `another playlist is playing ("${player.sequenceName}")`;
     }
@@ -7776,10 +8039,10 @@
       builder.forgetPlaylist();
     }
     if (result.titleMusic) {
-      const settings = player.liveSettings;
+      const settings = player?.liveSettings ?? loadSettings();
       settings.titleMusic = result.titleMusic;
       saveSettings(settings);
-      player.noteInstalledMusic(result.titleMusic);
+      player?.noteInstalledMusic(result.titleMusic);
     }
     if (!other && !imported) {
       player.swapPlaylist(playlist);
@@ -7819,6 +8082,7 @@
       modeStarted = true;
       startPlayer();
     }
+    welcome?.update();
     if (!player?.isRunning) {
       return;
     }
@@ -7986,6 +8250,10 @@
             lastInputMark = Date.now();
             perfMark(`input ${e.type}`);
           }
+          return;
+        }
+        if (welcome) {
+          welcome.onMouse(e);
           return;
         }
         const onPark = editorPanel?.isOpen === true && (editorPanel.dragging || !bar?.covers(e.x, e.y) && !bar?.panelOpen);

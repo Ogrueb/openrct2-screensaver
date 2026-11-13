@@ -1341,7 +1341,70 @@ console.log("ok: Import and Export playlist through the file dialogs");
 }
 console.log("ok: parks ticked on and off, Add park, and switching, new and duplicated playlists");
 
-// Performance runs (engine patch 0020, tools/perfrun.py): the plugin's events go into the engine's
+// A fresh install (only the game's own title sequences): no playlist installed. The mode shows how to get
+// one; without a generator the buttons are gray with the engine's reason; New playlist makes one, builds it
+// and the player starts on it.
+{
+    const installed = store.RCTScreensaver.playlist;
+    delete store.RCTScreensaver.playlist;
+    READ_BACK.add("RCTScreensaver.playlist"); // (what the build installs is read back)
+    delete saved["RCTScreensaver.playlist"];
+    mode.builds.length = 0;
+    mode.applied.length = 0;
+    mode.buildStatus = { ...mode.buildStatus, state: "idle", task: "" };
+    mode.files.delete("playlists.json");
+    Object.assign(mode, {
+        generator: { available: false, shipped: false, python: "", script: "", reason: "Python 3.11 or newer is needed to build playlists: none found on the PATH" },
+        made: 0,
+        newPlaylist() { this.made++; this.buildStatus = { ...this.buildStatus, state: "running", task: "new", sequence: "", started: now }; return true; },
+        addPark() { return false; }, copyPlaylist() { return false; },
+        exportPlaylist() { return false; }, importPlaylist() { return false; },
+    });
+    const wl = id => scene.get("rcts.welcome." + id);
+    const wlClick = id => { const e = wl(id); const x = e.x + e.width / 2, y = e.y + e.height / 2; mouse("move", x, y); mouse("down", x, y); mouse("up", x, y); };
+    sequence.isPlaying = false;
+    mode.set(true);
+    tick(60); // (the generator is asked again every 5 s)
+    assert.equal(wl("title").text, "No playlist yet");
+    assert.ok(logs.some(l => l.includes("no playlist installed")));
+    assert.equal(wl("new").fill, "#2a2e2c80", "New is gray without a generator");
+    assert.match(wl("why.0").text, /^Python 3\.11/, "and the panel says why");
+    assert.equal(scene.get("rcts.bar.strip"), undefined, "no controls bar without a playlist");
+    wlClick("new"); tick();
+    assert.equal(mode.made, 0, "a gray button does nothing");
+    mode.generator = { available: true, shipped: true, python: "C:/Program Files/OpenRCT2/data/screensaver/python/python.exe", script: "x", reason: "" };
+    tick(60);
+    assert.notEqual(wl("new").fill, "#2a2e2c80", "with a generator New is on");
+    assert.equal(wl("why.0"), undefined);
+    wlClick("new"); tick(2);
+    assert.equal(mode.made, 1, "New opens the folder dialog");
+    mode.files.set("task-new.json", JSON.stringify({ taskVersion: 1, task: "new", started: now, ok: true, finished: now,
+        sequence: "RCT Screensaver parks", playlist: "C:/x/parks.toml", parks: [{ key: "a.park", name: "A" }], messages: [] }));
+    mode.files.set("playlists.json", JSON.stringify({ playlistsVersion: 1, playlists: [{ name: "RCT Screensaver parks", file: "parks.toml", parks: 1 }] }));
+    mode.buildStatus = { ...mode.buildStatus, state: "done", finished: now };
+    tick(32); // (the playlists file is read every 3 s)
+    assert.deepEqual(mode.builds, ["RCT Screensaver parks"], "the new playlist is built at once");
+    assert.match(wl("pl.0.text").text, /^RCT Screensaver parks/, "and listed");
+    mode.files.set("build-RCT_Screensaver_parks.json", JSON.stringify({ buildVersion: 1, sequence: "RCT Screensaver parks", started: now, ok: true,
+        finished: now, playlist: { ...installed, sequence: playlist.sequence }, parkStates: [], messages: [] }));
+    mode.buildStatus = { ...mode.buildStatus, state: "done", finished: now };
+    tick(12);
+    assert.deepEqual(mode.applied, ["RCT Screensaver parks"], "the build is installed and played");
+    assert.equal(wl("title"), undefined, "the panel goes");
+    assert.ok(logs.some(l => l.includes("playing")), "the player starts on the new playlist");
+    // Back as it was for the tests below.
+    mode.set(false);
+    tick();
+    READ_BACK.delete("RCTScreensaver.playlist");
+    delete saved["RCTScreensaver.playlist"];
+    store.RCTScreensaver.playlist = installed;
+    for (const k of ["generator", "made", "newPlaylist", "addPark", "copyPlaylist", "exportPlaylist", "importPlaylist"]) delete mode[k];
+    mode.buildStatus = { ...mode.buildStatus, state: "idle", task: "" };
+    mode.files.delete("playlists.json");
+}
+console.log("ok: a fresh install: no playlist, gray without a generator, New playlist builds and plays");
+
+// Performance runs (engine patch 0021, tools/perfrun.py): the plugin's events go into the engine's
 // perf log as marks; bench mode keeps the mouse from showing the bar (marked instead) and starts
 // OpenRCT2's function profiler, exported on an interval.
 const marks = [];
@@ -1363,6 +1426,6 @@ assert.ok(marks.includes("input move"), "and the input is marked for the report 
 assert.ok(legacy.includes("profiler_start"), "the function profiler starts");
 assert.ok(intervals.some(v => v.ms === 60000), "and is exported every minute");
 assert.ok(legacy.includes('profiler_export "C:/perf run/profiler.csv"'), "to the quoted path");
-console.log("ok: perf marks, bench mode and the profiler (patch 0020)");
+console.log("ok: perf marks, bench mode and the profiler (patch 0021)");
 
 console.log("ok: screensaver mode (start, stop, keys, settings, no toolbox items)");
