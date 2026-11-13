@@ -756,8 +756,9 @@ assert.ok(scene.get("rcts.bar.titles.icon").src.includes("titles-off"), "on -> o
         edClick("boxHead");
         assert.ok(ed("checkpoint"));
     }
-    edClick("close");
-    assert.equal(ed("frame"), undefined, "the close button closes the panel");
+    assert.equal(ed("close"), undefined, "no close button (E closes it)");
+    shortcuts["rctscreensaver.edit"](); tick();
+    assert.equal(ed("frame"), undefined, "E closes the panel");
     // The mouse on the park is the bar's again once the editor is closed.
     const c0 = JSON.stringify(viewport.centre);
     mouse("move", 1400, 700); mouse("down", 1400, 700); mouse("move", 1200, 700); mouse("up", 1200, 700);
@@ -1176,9 +1177,27 @@ console.log("ok: Import and Export playlist through the file dialogs");
     assert.equal(ed("pname.4").text, "Old Mill");
     edClick("pu.4"); tick();
     assert.equal(saved["RCTScreensaver.playlistProps"][playlist.sequence].use["old-mill.park"], true, "ticked on for the next build");
-    assert.equal(ed("pcount.4").text, "needs a build");
+    // Ticked on, it joins the order (after the rest) to be placed before the build (owner, 2026-11-12).
+    assert.equal(ed("pname.3").text, "Old Mill", "in the order");
+    assert.equal(ed("pcount.3").text, "needs a build");
+    assert.equal(ed("ph.3"), undefined, "nothing left under NOT IN THE BUILD");
+    {
+        const from = ed("park.3"), to = ed("park.0");
+        mouse("move", from.x + 6, from.y + 8); mouse("down", from.x + 6, from.y + 8);
+        mouse("move", from.x + 6, from.y - 10); mouse("move", to.x + 6, to.y + 2);
+        dump("parks-placing");
+        mouse("up", to.x + 6, to.y + 2);
+        tick();
+    }
+    assert.equal(ed("pname.0").text, "Old Mill", "dragged to the top");
+    const placed = saved["RCTScreensaver.playlistProps"][playlist.sequence].order;
+    assert.equal(placed[0], "old-mill.park", "its place saved with the order");
+    assert.equal(JSON.stringify([...placed.slice(1)].sort()), JSON.stringify([...keys].sort()), "the built parks after it");
+    assert.ok(JSON.parse(mode.files.get("Mini.json")).props.order[0] === "old-mill.park", "and in the live file for the build");
     dump("parks-ticks");
-    edClick("pu.4"); tick(); // (off again)
+    edClick("ptick.0"); tick(); // (off again: back under NOT IN THE BUILD)
+    assert.equal(ed("pname.4").text, "Old Mill");
+    assert.equal(ed("ph.3").text, "NOT IN THE BUILD");
     assert.ok(JSON.parse(mode.files.get("Mini.json")).props.use[second] === false, "and written to the live file for the next build");
     // The last park in use stays on.
     edClick("ptick.2"); tick();

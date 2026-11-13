@@ -3184,6 +3184,43 @@
       log2(`park ${key} ${on ? "ticked on" : "ticked off"}`);
       return true;
     }
+    /** The editor's Playlist order: the parks in play order (index into the playlist) with, where the saved
+     *  order puts them, the parks the build left out that are ticked on again (index -1: they play after
+     *  the next build, so they can be placed before it; owner, 2026-11-12), else after the rest. */
+    get orderRows() {
+      const rows = this.parkOrder.map((i) => ({ key: this.parkKeyOf(i), index: i, name: this.playlist.parks[i].name }));
+      const saved = this.props.order ?? [];
+      for (const park of this.unusedParks.filter((p) => p.on)) {
+        const at = saved.indexOf(park.key);
+        const next = at < 0 ? -1 : rows.findIndex((r) => {
+          const k = saved.indexOf(r.key);
+          return k > at;
+        });
+        rows.splice(next < 0 ? rows.length : next, 0, { key: park.key, index: -1, name: park.name });
+      }
+      return rows;
+    }
+    /** Moves a row of the editor's Playlist order (orderRows positions), parks waiting for a build too;
+     *  the park on screen stays; saved at once. */
+    moveOrderRow(from, to) {
+      const rows = this.orderRows;
+      const n = rows.length;
+      if (from === to || from < 0 || to < 0 || from >= n || to >= n) {
+        return;
+      }
+      const [moved] = rows.splice(from, 1);
+      rows.splice(to, 0, moved);
+      const current = this.parkOrder[this.parkPos];
+      this.parkOrder = rows.filter((r) => r.index >= 0).map((r) => r.index);
+      this.parkPos = this.parkOrder.indexOf(current);
+      this.unplayed.clear();
+      this.history = [];
+      this.pickNext();
+      const order = rows.map((r) => r.key);
+      this.props.order = order;
+      this.savedProps.order = order;
+      savePlaylistProps(this.playlist.sequence, this.savedProps);
+    }
     /** Moves a park in the play order (positions), keeping the park on screen; saved at once. */
     moveParkInOrder(from, to) {
       const n = this.parkOrder.length;
@@ -3198,6 +3235,11 @@
       this.history = [];
       this.pickNext();
       const order = this.parkOrder.map((i) => this.playlist.parks[i].key ?? this.playlist.parks[i].fileName);
+      const saved = this.props.order ?? [];
+      for (const park of this.unusedParks.filter((p) => p.on && saved.includes(p.key))) {
+        const after = saved.slice(saved.indexOf(park.key) + 1).find((k) => order.includes(k));
+        order.splice(after === void 0 ? order.length : order.indexOf(after), 0, park.key);
+      }
       this.props.order = order;
       this.savedProps.order = order;
       savePlaylistProps(this.playlist.sequence, this.savedProps);
@@ -6055,7 +6097,7 @@
       const dd = this.dropdown;
       if (down === "field" && dd && !dd.persistent) {
         if (hit?.startsWith("park.")) {
-          this.goToPark(Number(hit.slice(5)));
+          this.goToRow(Number(hit.slice(5)));
           this.dropdown = void 0;
         } else if (hit === "field" && this.now() - dd.downAt < EDITOR.holdOpen) {
           dd.persistent = true;
@@ -6069,7 +6111,7 @@
         if (r.list === "views") {
           ed.moveTo(r.from, to);
         } else {
-          ed.playback.moveParkInOrder(r.from, to);
+          ed.playback.moveOrderRow(r.from, to);
         }
         return true;
       }
@@ -6089,7 +6131,7 @@
       const rect = views ? this.listRect : this.parksRect;
       const rowH = views ? EDITOR.rowHeight : EDITOR.parkRow;
       const route = ed.routeIndices();
-      const count = views ? route.length : ed.parkNames.length;
+      const count = views ? route.length : this.orderRows(ed).length;
       const first = views ? this.views.first : this.parks.first;
       const gap = Math.max(0, Math.min(count, Math.round((this.mouse.y - rect.y - rowH) / rowH) + first));
       if (!views) {
@@ -6163,6 +6205,20 @@
         ed.goToPark(order[(pos % n + n) % n]);
       }
     }
+    /** The park list's order rows: the parks in play order; open as Playlist order, with the parks
+     *  waiting for a build where they will play (Player.orderRows). */
+    orderRows(e) {
+      const rows = e.playback.orderRows;
+      return this.dropdown?.persistent ? rows : rows.filter((row) => row.index >= 0);
+    }
+    /** Goes to the park of a row of the park list (a park waiting for a build has none yet). */
+    goToRow(d) {
+      const ed = this.editor;
+      const row = this.orderRows(ed)[d];
+      if (row && row.index >= 0) {
+        ed.goToPark(row.index);
+      }
+    }
     activate(id) {
       const e = this.editor;
       if (!e) {
@@ -6173,7 +6229,7 @@
         return;
       }
       if (id.startsWith("park.")) {
-        this.goToPark(Number(id.slice(5)));
+        this.goToRow(Number(id.slice(5)));
         return;
       }
       if (id.startsWith("parks.")) {
@@ -6209,9 +6265,6 @@
       }
       const pos = e.playback.playOrder.indexOf(e.parkIndex);
       switch (id) {
-        case "close":
-          e.close();
-          break;
         case "prevPark":
           this.goToPark(pos - 1);
           break;
@@ -6418,10 +6471,8 @@
       const pos = order.indexOf(e.parkIndex);
       const many = order.length > 1;
       this.place("prevPark", { x: x0, y, width: t, height: t }, "Previous park", !many || e.playback.isLoading);
-      const closeX = x0 + inner - t;
-      const nextX = closeX - s.groupGap - t;
+      const nextX = x0 + inner - t;
       this.place("nextPark", { x: nextX, y, width: t, height: t }, "Next park", !many || e.playback.isLoading);
-      this.place("close", { x: closeX, y, width: t, height: t }, "Close (E)");
       const field = this.place(
         "field",
         { x: x0 + t + s.gap, y, width: nextX - s.gap - (x0 + t + s.gap), height: t },
@@ -6488,7 +6539,6 @@
       scene.set("text.plparks", { ...scene.get("text.plparks"), colour: THEME.textDim });
       button(scene, "prevPark", this.boxes.get("prevPark"), this.state("prevPark"), { icon: "prev-view", iconSize: s.toolIcon }, overlay);
       button(scene, "nextPark", this.boxes.get("nextPark"), this.state("nextPark"), { icon: "next-view", iconSize: s.toolIcon }, overlay);
-      button(scene, "close", this.boxes.get("close"), this.state("close"), { icon: "close", iconSize: s.toolIcon }, overlay);
       const fieldOpen = this.dropdown !== void 0 && this.playlists === void 0;
       scene.set("field", { type: "rect", ...field, fill: fieldOpen ? THEME.faceDown : this.hit() === "field" ? THEME.faceHover : THEME.editorList, z: Z.face });
       bevel(scene, "field", field, THEME.bevelDark, THEME.bevelLight, THEME.bevel, Z.bevel);
@@ -6664,9 +6714,9 @@
      *  order: those, then the parks the build left out (ticked off) and Add park; or, switched over, the
      *  playlists the game knows, then New playlist and Duplicate. */
     parkItems(e) {
-      const order = e.playback.playOrder;
+      const rows = this.orderRows(e);
       if (!this.dropdown?.persistent) {
-        return order.map((_, p) => ({ kind: "park", p }));
+        return rows.map((_, p) => ({ kind: "park", p }));
       }
       if (this.playlists) {
         return [
@@ -6675,11 +6725,11 @@
           { kind: "copy" }
         ];
       }
-      const unused = e.playback.unusedParks;
+      const unused = e.playback.unusedParks.map((park, i) => ({ park, i })).filter((u) => !u.park.on);
       return [
-        ...order.map((_, p) => ({ kind: "park", p })),
+        ...rows.map((_, p) => ({ kind: "park", p })),
         ...unused.length ? [{ kind: "head", text: "NOT IN THE BUILD" }] : [],
-        ...unused.map((_, i) => ({ kind: "unused", i })),
+        ...unused.map((u) => ({ kind: "unused", i: u.i })),
         { kind: "add" }
       ];
     }
@@ -6687,9 +6737,9 @@
     parkListAction(e, what) {
       const p = e.playback;
       if (what.startsWith("tick.")) {
-        const index = p.playOrder[Number(what.slice(5))];
-        const park = index !== void 0 ? p.parkKeyOf(index) : void 0;
-        if (park !== void 0 && !p.setParkUse(park, !p.parkInUse(index))) {
+        const row = this.orderRows(e)[Number(what.slice(5))];
+        const on = row ? row.index >= 0 ? p.parkInUse(row.index) : true : false;
+        if (row && !p.setParkUse(row.key, !on)) {
           this.useNote = { text: "One park at least stays in use", at: this.now() };
         }
       } else if (what.startsWith("unused.")) {
@@ -6726,7 +6776,7 @@
     parkList(e, scene) {
       const s = EDITOR;
       const overlay = this.mode.overlay;
-      const order = e.playback.playOrder;
+      const rows = this.orderRows(e);
       const persistent = this.dropdown?.persistent === true;
       const items = this.parkItems(e);
       const plField = this.boxes.get("plfield");
@@ -6784,13 +6834,15 @@
         }
         if (item.kind === "park") {
           const p = item.p;
-          const index = order[p];
-          const used = e.playback.parkInUse(index);
+          const row2 = rows[p];
+          const index = row2.index;
+          const waiting = index < 0;
+          const used = waiting || e.playback.parkInUse(index);
           if (tickW) {
             const tick = this.place(
               `parks.tick.${p}`,
               { x: area.x + s.grip + 2, y: y + 4, width: 20, height: s.parkRow - 8 },
-              used ? "Playing: click to leave it out (it stays in the playlist)" : "Left out: click to play it again"
+              waiting ? "Plays after the next build: click to leave it out again" : used ? "Playing: click to leave it out (it stays in the playlist)" : "Left out: click to play it again"
             );
             this.tickBox(scene, `ptick.${i}`, tick, used, this.hit() === `parks.tick.${p}`, z + 2);
           }
@@ -6801,10 +6853,9 @@
           if (persistent) {
             grip(scene, `pgrip.${i}`, box.x + 5, box.y + box.height / 2, z + 2);
           }
-          const n = e.playback.viewCountOf(index);
-          const dim = used ? void 0 : THEME.textDim;
+          const dim = used && !waiting ? void 0 : THEME.textDim;
           text(`pn.${i}`, String(p + 1), box.x + s.grip + 4 + tickW, y, dim);
-          const name = (e.parkNames[index] ?? "") + (used ? "" : " (left out)");
+          const name = row2.name + (used ? "" : " (left out)");
           text(
             `pname.${i}`,
             fit(overlay, name, s.textSize, width - s.grip - 40 - tickW - countW - 16),
@@ -6813,8 +6864,9 @@
             dim,
             index === e.parkIndex
           );
-          const views = `${n} view${n === 1 ? "" : "s"}`;
-          text(`pcount.${i}`, views, box.x + width - 8 - measure(overlay, views, s.textSize).width, y, THEME.textDim);
+          const n = waiting ? 0 : e.playback.viewCountOf(index);
+          const views = waiting ? "needs a build" : `${n} view${n === 1 ? "" : "s"}`;
+          text(`pcount.${i}`, views, box.x + width - 8 - measure(overlay, views, s.textSize).width, y, waiting ? THEME.pending : THEME.textDim);
           if (r && r.from === p) {
             scene.set(`pdim.${i}`, { type: "rect", ...box, fill: THEME.rowDimmed, z: z + 3 });
           }
@@ -6869,8 +6921,8 @@
       }
       if (r) {
         const list = { ...area, width };
-        this.dragged(scene, list, s.parkRow, this.parks.first, order.length, r, (ghost) => {
-          label(scene, "ghost.name", e.parkNames[order[r.from]] ?? "", { x: ghost.x + s.grip + 34 + tickW, y: ghost.y, width: 0, height: ghost.height }, s.textSize, overlay, true);
+        this.dragged(scene, list, s.parkRow, this.parks.first, rows.length, r, (ghost) => {
+          label(scene, "ghost.name", rows[r.from]?.name ?? "", { x: ghost.x + s.grip + 34 + tickW, y: ghost.y, width: 0, height: ghost.height }, s.textSize, overlay, true);
         });
       }
     }

@@ -74,6 +74,12 @@ class LiveParks(unittest.TestCase):
         self.assertIn("# first park", text)
         self.assertIn("# the sequence", text)
 
+    def test_a_left_out_park_ticked_on_goes_where_the_order_places_it(self):
+        # (the editor places a park waiting for a build before it is built: owner, 2026-11-12)
+        mksequence.write_props(self.playlist, {"order": ["b.park", "a.park", "c.park"], "use": {"b.park": True}})
+        self.assertEqual([(e["file"], e.get("use", True)) for e in self.read()["park"]],
+                         [("b.park", True), ("a.park", True), ("c.park", True)])
+
     def test_ticks_are_listed_in_the_live_summary(self):
         self.assertTrue(livefile.summary({"props": {"use": {"a.park": False}}})["use"])
         self.assertEqual(livefile.summary({"props": {"use": {"a.park": False}}})["props"], [])

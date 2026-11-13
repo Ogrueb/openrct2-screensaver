@@ -214,8 +214,8 @@ playlist-wide properties there.
 
 The panel became three panes (round 8 of the mockups accepted, built the same day):
 
-- **Views pane, top left.** Previous park, the park field (name, "N / M ▾" its place in the play order),
-  next park, close. A press on the field held past 0.3 s opens the park list over the views and jumps to
+- **Views pane, top left.** The PLAYLIST field, then previous park, the park field (name, "N / M ▾" its place
+  in the play order), next park (no close button since 2026-11-12, owner: E and the pencil close the editor). A press on the field held past 0.3 s opens the park list over the views and jumps to
   the park the button is released on; a click opens it as **Playlist order**: rows with grips, Use ticks
   (2026-11-12, "Parks and playlists" below), numbers, names and view counts, dragged to reorder the parks (saved in the game at once, `RCTScreensaver.
   playlistProps.<sequence>.order`, and played in that order at once), clicked to go to a park (the list
@@ -404,7 +404,9 @@ click on the park field (Playlist order):
   can't be ticked off (the header says so for a moment). Ticks save at once (`RCTScreensaver.playlistProps.
   <sequence>.use`, park key → on/off, in the live file's `props`); a build bakes them into the playlist file
   (`[[park]] use = false`, removed when ticked on; comments kept). The build lists the parks it left out in the
-  playlist (`unused`: key and name), shown under NOT IN THE BUILD with their ticks: ticked on, "needs a build".
+  playlist (`unused`: key and name), shown under NOT IN THE BUILD with their ticks. Ticked on, a park moves up into the order (after the rest by default),
+  marked "needs a build", and can be dragged to where it should play before the build (owner, 2026-11-12); its
+  place is saved with the order (`order` names its key) and the build bakes it there.
 - **Add park…** (the list's last row) calls `screensaver.addPark(<sequence>)`: the engine shows the system's Open
   dialog (`*.park;*.zip`, starting where the last park or bundle was picked) and runs `mksequence.py --live-add
   <sequence> --park <file>`. The generator bakes the game's edits, appends a `[[park]]` with the file relative to
