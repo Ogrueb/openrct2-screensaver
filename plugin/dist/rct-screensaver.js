@@ -6800,11 +6800,7 @@
         return rows.map((_, p) => ({ kind: "park", p }));
       }
       if (this.playlists) {
-        return [
-          ...this.playlists.map((_, i) => ({ kind: "playlist", i })),
-          { kind: "new" },
-          { kind: "copy" }
-        ];
+        return [{ kind: "plbuttons" }, ...this.playlists.map((_, i) => ({ kind: "playlist", i }))];
       }
       if (this.draft) {
         return [...rows.map((_, p) => ({ kind: "park", p })), { kind: "build" }];
@@ -7010,7 +7006,27 @@
           text(`pcount.${i}`, right, area.x + width - 8 - rw, y, pl.missing ? THEME.warning : fresh ? THEME.pending : THEME.textDim);
           continue;
         }
-        const [label0, tip, icon] = item.kind === "add" ? ["Add park\u2026", "Pick a park file or download (.park, .zip); it is added and the playlist built", "add"] : item.kind === "new" ? ["New playlist from a folder\u2026", "Pick a folder of parks: a playlist of them is made, its parks listed to tick and order", "add"] : item.kind === "build" ? ["Build and play this playlist", "Build the new playlist with these parks, in this order, and play it", "build"] : ["Duplicate this playlist\u2026", "Name a copy of this playlist (with your edits); it is listed here, to pick", "import"];
+        if (item.kind === "plbuttons") {
+          const off2 = !parksOn || busy;
+          const why2 = !parksOn ? "needs the patched engine with these dialogs" : busy ? `wait for the ${builder.noun} to finish` : "";
+          const half = Math.floor((width - 12) / 2);
+          const pair = [
+            ["parks.new", "New playlist from a folder\u2026", "Pick a folder of parks: a playlist of them is made, its parks listed to tick and order", "add"],
+            ["parks.copy", "Duplicate this playlist\u2026", "Name a copy of this playlist (with your edits); the copy plays at once", "copy"]
+          ];
+          pair.forEach(([id2, text0, tip2, icon2], k2) => {
+            const box = this.place(
+              id2,
+              { x: area.x + 4 + k2 * (half + 4), y: y + 2, width: half, height: s.parkRow - 4 },
+              why2 ? `${text0.replace("\u2026", "")}: ${why2}` : tip2,
+              off2
+            );
+            button(scene, id2, box, this.state(id2), { icon: icon2, iconSize: 16, text: fit(overlay, text0, s.textSize, half - 34, true), textSize: s.textSize, left: true }, overlay);
+            lift(scene, id2, z);
+          });
+          continue;
+        }
+        const [label0, tip, icon] = item.kind === "add" ? ["Add park\u2026", "Pick a park file or download (.park, .zip); it is added and the playlist built", "add"] : ["Build and play this playlist", "Build the new playlist with these parks, in this order, and play it", "build"];
         const off = !parksOn && item.kind !== "build" || busy;
         const why = !parksOn ? "needs the patched engine with these dialogs" : busy ? `wait for the ${builder.noun} to finish` : "";
         const id = `parks.${item.kind}`;

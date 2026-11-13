@@ -422,6 +422,8 @@ click on the park field (Playlist order):
   on another builds it (`screensaver.build(<name>)`, only changed parks thanks to the park cache) and plays it as an
   import is played (`applyBuild` of a sequence that is not playing): its edits come from its live file, the
   playing playlist's edits leave the storage and stay in its own live file.
+- **New playlist…** and **Duplicate…** sit side by side at the top of the PLAYLIST list (owner, 2026-11-13; a
+  plus and a copy icon), above the playlists.
 - **New playlist from a folder…** calls `screensaver.newPlaylist()`: the system's folder dialog, then
   `mksequence.py --live-new <folder>`, which reads the folder as the settings page's scan does (`parkinfo.
   scan_folder`; parks and downloads in place, RCT saves and loose objects listed as warnings), writes

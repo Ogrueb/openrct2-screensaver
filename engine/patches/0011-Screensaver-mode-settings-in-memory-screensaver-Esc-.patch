@@ -24,7 +24,7 @@ enter, exit, configure, onChange, onMouse).
  src/openrct2-ui/input/MouseInput.cpp        |  10 +
  src/openrct2-ui/interface/Window.cpp        |   3 +
  src/openrct2-ui/libopenrct2ui.vcxproj       |   3 +
- src/openrct2-ui/screensaver/Screensaver.cpp | 404 ++++++++++++++++++++
+ src/openrct2-ui/screensaver/Screensaver.cpp | 408 ++++++++++++++++++++
  src/openrct2-ui/screensaver/Screensaver.h   |  94 +++++
  src/openrct2-ui/scripting/ScScreensaver.hpp | 280 ++++++++++++++
  src/openrct2-ui/scripting/UiExtensions.cpp  |   6 +
@@ -35,7 +35,7 @@ enter, exit, configure, onChange, onMouse).
  src/openrct2/config/Config.h                |   3 +
  src/openrct2/interface/Window.cpp           |   7 +
  src/openrct2/interface/WindowFlags.h        |   4 +
- 15 files changed, 836 insertions(+), 1 deletion(-)
+ 15 files changed, 840 insertions(+), 1 deletion(-)
  create mode 100644 src/openrct2-ui/screensaver/Screensaver.cpp
  create mode 100644 src/openrct2-ui/screensaver/Screensaver.h
  create mode 100644 src/openrct2-ui/scripting/ScScreensaver.hpp
@@ -133,10 +133,10 @@ index 54d0ec8..7ce5f80 100644
      <ClCompile Include="TextComposition.cpp" />
 diff --git a/src/openrct2-ui/screensaver/Screensaver.cpp b/src/openrct2-ui/screensaver/Screensaver.cpp
 new file mode 100644
-index 0000000..01b6650
+index 0000000..2f3f816
 --- /dev/null
 +++ b/src/openrct2-ui/screensaver/Screensaver.cpp
-@@ -0,0 +1,404 @@
+@@ -0,0 +1,408 @@
 +/*****************************************************************************
 + * Copyright (c) 2014-2026 OpenRCT2 developers
 + *
@@ -159,6 +159,7 @@ index 0000000..01b6650
 +#include <openrct2/audio/Audio.h>
 +#include <openrct2/config/Config.h>
 +#include <openrct2/drawing/Drawing.Screen.h>
++#include <openrct2/interface/Cursors.h>
 +#include <openrct2/interface/Window.h>
 +#include <openrct2/interface/WindowBase.h>
 +#include <openrct2/scenes/title/TitleScene.h>
@@ -477,6 +478,9 @@ index 0000000..01b6650
 +        if (_active)
 +        {
 +            HideWindows();
++            // The game's input handling, which sets the cursor each frame, is skipped while the mode is on, so a
++            // cursor the game set meanwhile (the wait cursor of a park load) would stay: back to the arrow.
++            ContextSetCurrentCursor(CursorID::arrow);
 +        }
 +    }
 +

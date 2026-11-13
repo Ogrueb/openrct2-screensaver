@@ -333,7 +333,8 @@ dropped for release (owner, 2026-10-27). The workflow builds on pushes to `main`
 ## Screensaver mode (patches 0011-0013, 2026-10-31)
 
 Design and progress in `docs/wallpaper-wrapper.md`. 0011: the mode (settings applied in memory,
-`--screensaver`, Esc, mouse to the plugin, the `screensaver` API); 0012: the main menu button;
+`--screensaver`, Esc, mouse to the plugin, the `screensaver` API; as the game's input handling is skipped in
+the mode, the mode puts the arrow cursor back each frame, or a park load's wait cursor would stay, 2026-11-13); 0012: the main menu button;
 0013: the overlay, composited in both drawing engines. New code is in `src/openrct2-ui/screensaver/`
 and `scripting/ScScreensaver.hpp`; upstream files get short hooks.
 

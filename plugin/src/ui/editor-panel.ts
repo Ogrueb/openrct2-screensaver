@@ -89,7 +89,7 @@ class Scroll {
 /** A row press that becomes a drag once the mouse moves (views or parks). */
 /** A row of the open park list. */
 type ParkItem = { kind: "park"; p: number } | { kind: "unused"; i: number } | { kind: "playlist"; i: number }
-    | { kind: "head"; text: string } | { kind: "add" } | { kind: "new" } | { kind: "copy" } | { kind: "build" };
+    | { kind: "head"; text: string } | { kind: "add" } | { kind: "new" } | { kind: "copy" } | { kind: "build" } | { kind: "plbuttons" };
 
 interface RowDrag {
     list: "views" | "parks";
@@ -943,8 +943,8 @@ export class EditorPanel implements EditorView {
             return rows.map((_, p) => ({ kind: "park", p }));
         }
         if (this.playlists) {
-            return [...this.playlists.map((_, i) => ({ kind: "playlist", i }) as ParkItem),
-                { kind: "new" }, { kind: "copy" }];
+            // New and Duplicate side by side on top (owner, 2026-11-13), then the playlists
+            return [{ kind: "plbuttons" }, ...this.playlists.map((_, i) => ({ kind: "playlist", i }) as ParkItem)];
         }
         if (this.draft) {
             return [...rows.map((_, p) => ({ kind: "park", p }) as ParkItem), { kind: "build" }];
@@ -1141,11 +1141,24 @@ export class EditorPanel implements EditorView {
                 text(`pcount.${i}`, right, area.x + width - 8 - rw, y, pl.missing ? THEME.warning : fresh ? THEME.pending : THEME.textDim);
                 continue;
             }
-            // The action rows: Add park; New playlist; Duplicate
+            if (item.kind === "plbuttons") {
+                const off = !parksOn || busy;
+                const why = !parksOn ? "needs the patched engine with these dialogs" : busy ? `wait for the ${builder.noun} to finish` : "";
+                const half = Math.floor((width - 12) / 2);
+                const pair: [string, string, string, string][] = [
+                    ["parks.new", "New playlist from a folder…", "Pick a folder of parks: a playlist of them is made, its parks listed to tick and order", "add"],
+                    ["parks.copy", "Duplicate this playlist…", "Name a copy of this playlist (with your edits); the copy plays at once", "copy"]];
+                pair.forEach(([id, text0, tip, icon], k) => {
+                    const box = this.place(id, { x: area.x + 4 + k * (half + 4), y: y + 2, width: half, height: s.parkRow - 4 },
+                        why ? `${text0.replace("…", "")}: ${why}` : tip, off);
+                    button(scene, id, box, this.state(id), { icon, iconSize: 16, text: fit(overlay, text0, s.textSize, half - 34, true), textSize: s.textSize, left: true }, overlay);
+                    lift(scene, id, z);
+                });
+                continue;
+            }
+            // The action rows: Add park; Build and play the new playlist
             const [label0, tip, icon] = item.kind === "add" ? ["Add park…", "Pick a park file or download (.park, .zip); it is added and the playlist built", "add"]
-                : item.kind === "new" ? ["New playlist from a folder…", "Pick a folder of parks: a playlist of them is made, its parks listed to tick and order", "add"]
-                : item.kind === "build" ? ["Build and play this playlist", "Build the new playlist with these parks, in this order, and play it", "build"]
-                : ["Duplicate this playlist…", "Name a copy of this playlist (with your edits); it is listed here, to pick", "import"];
+                : ["Build and play this playlist", "Build the new playlist with these parks, in this order, and play it", "build"];
             const off = (!parksOn && item.kind !== "build") || busy;
             const why = !parksOn ? "needs the patched engine with these dialogs" : busy ? `wait for the ${builder.noun} to finish` : "";
             const id = `parks.${item.kind}`;

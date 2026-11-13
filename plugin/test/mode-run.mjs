@@ -1247,13 +1247,15 @@ console.log("ok: Import and Export playlist through the file dialogs");
     edClick("plfield"); tick();
     assert.equal(scene.get("rcts.ed.parks.head").text, "Switch to another playlist");
     assert.equal(ed("text.plname").text, playlist.sequence, "the playlist field names the playing one");
-    assert.equal(ed("pname.0").text, "Evening");
-    assert.equal(ed("pcount.1").text, "playing", "the playing one is marked");
-    assert.equal(ed("pcount.2").text, "file missing");
-    assert.ok(ed("parks.new") && ed("parks.copy"), "New playlist and Duplicate under them");
+    assert.equal(ed("pname.1").text, "Evening");
+    assert.equal(ed("pcount.2").text, "playing", "the playing one is marked");
+    assert.equal(ed("pcount.3").text, "file missing");
+    assert.ok(ed("parks.new") && ed("parks.copy"), "New playlist and Duplicate");
+    assert.equal(ed("parks.new").y, ed("parks.copy").y, "side by side");
+    assert.ok(ed("parks.new").y < ed("ppl.1").y, "on top of the playlists");
     dump("parks-playlists");
     mode.builds.length = 0;
-    edClick("ppl.0"); tick(2);
+    edClick("ppl.1"); tick(2);
     assert.deepEqual(mode.builds, ["Evening"], "a click builds the other playlist");
     assert.equal(ed("build.state").text, "building");
     assert.equal(scene.get("rcts.ed.build.text")?.text, "Cancel switch");
@@ -1321,8 +1323,8 @@ console.log("ok: Import and Export playlist through the file dialogs");
     // (built: the playing build copied along; the mock can't play it, so the copy is listed to pick)
     finish("copy", "Mini copy", [{ name: "RCT Screensaver loose", file: "loose.toml", parks: 5 }, { name: "Mini copy", file: "mini copy.toml", parks: 3 }], { built: true });
     assert.equal(mode.applied.at(-1), "Mini copy", "the copy's build is applied, no rebuild");
-    assert.equal(ed("pname.3").text, "Mini copy");
-    assert.equal(ed("pcount.3").text, "new · 3 parks");
+    assert.equal(ed("pname.4").text, "Mini copy");
+    assert.equal(ed("pcount.4").text, "new · 3 parks");
     assert.equal(mode.builds.length, 0, "a copy needs no rebuild");
     edClick("plfield"); tick(); // (closes the list)
     // Back as it was for the tests below.
