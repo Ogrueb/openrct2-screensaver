@@ -269,12 +269,13 @@ and the ticks passed; Add park, New and Duplicate were inactive on an engine wit
       open; a click back switches back, the edits made in the first one still there.
 - [x] New playlist from a folder… opens the folder dialog; the new playlist ("RCT Screensaver <folder>") is
       written to `Documents\OpenRCT2\screensaver\playlists` (passed 2026-11-12, then built at once: changed).
-- [ ] New playlist: no build follows; the PLAYLIST list stays open with the new playlist marked "new · n parks",
-      the old playlist plays on, and picking the new one builds and plays it.
+- [ ] New playlist: no build follows; the park list opens on the new playlist's parks (PLAYLIST shows it, "not
+      built"); ticking one off and dragging another to the top, then Build and play this playlist, builds it with
+      those parks in that order and plays it.
 - [x] Duplicate this playlist… opens the Save dialog in that folder ("<name> copy.toml"); the copy is named after
       the file; the original keeps its file and edits (passed 2026-11-12, then built at once: changed).
-- [ ] Duplicate: no rebuild; the copy is listed "new" under PLAYLIST and the playlist plays on; picking the copy
-      builds it quickly (its parks from the cache), with the original's ticks and edits.
+- [ ] Duplicate: no rebuild; the copy plays at once (PLAYLIST shows its name; a dip through black, no build pane
+      progress), with the original's ticks and edits; switching back to the original shows it unchanged.
 - [ ] After a restart of the game, the last playlist built from the game plays.
 
 ### Live file (patch 0016, 2026-11-10)

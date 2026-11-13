@@ -17,6 +17,7 @@ import { EDITOR_COLUMNS, EVENT_COLUMNS } from "../editor";
 import { modeSettings } from "../mode";
 import type { MouseEvent, Overlay, ScreensaverApi } from "../mode";
 import type { PlaylistProps } from "../storage";
+import { saveOtherPlaylistProps } from "../storage";
 import { Layer, Rect, Scene, backing, bevel, button, contains, iconPath, iconPixels, label, measure, tooltip } from "./kit";
 import { CRAWL, EDITOR, THEME, TIMING, Z } from "./theme";
 import { ViewMap } from "./view-map";
@@ -88,7 +89,7 @@ class Scroll {
 /** A row press that becomes a drag once the mouse moves (views or parks). */
 /** A row of the open park list. */
 type ParkItem = { kind: "park"; p: number } | { kind: "unused"; i: number } | { kind: "playlist"; i: number }
-    | { kind: "head"; text: string } | { kind: "add" } | { kind: "new" } | { kind: "copy" };
+    | { kind: "head"; text: string } | { kind: "add" } | { kind: "new" } | { kind: "copy" } | { kind: "build" };
 
 interface RowDrag {
     list: "views" | "parks";
@@ -130,6 +131,9 @@ export class EditorPanel implements EditorView {
     private playlists: PlaylistInfo[] | undefined; // the open list is the playlist field's (read as it opens)
     private useNote: { text: string; at: number } | undefined; // why a tick did nothing, for a moment
     private seenMade = 0; // the last playlist New or Duplicate made that the list was opened on (builder.made.at)
+    // A playlist New just made, not built yet: the park list shows its parks to tick and order, and builds
+    // it on Build and play (owner, 2026-11-13); gone when the list closes
+    private draft: { sequence: string; source?: string; parks: { key: string; name: string }[]; props: PlaylistProps } | undefined;
     private picked: string | undefined; // the restore point highlighted
     private propsOpen = true; // the Playlist properties unfolded
     private clipShown = false; // a Copy/Paste note is on its button (it goes after a moment)
@@ -363,7 +367,7 @@ export class EditorPanel implements EditorView {
             if (r.list === "views") {
                 ed.moveTo(r.from, to);
             } else {
-                ed.playback.moveOrderRow(r.from, to);
+                this.moveRow(ed, r.from, to);
             }
             return true;
         }
@@ -468,9 +472,33 @@ export class EditorPanel implements EditorView {
 
     /** The park list's order rows: the parks in play order; open as Playlist order, with the parks
      *  waiting for a build where they will play (Player.orderRows). */
-    private orderRows(e: Editor): { key: string; index: number; name: string }[] {
+    private orderRows(e: Editor): { key: string; index: number; name: string; on?: boolean }[] {
+        const d = this.draft;
+        if (d) {
+            const order = d.props.order ?? [];
+            const rank = (key: string, i: number) => { const k = order.indexOf(key); return k < 0 ? order.length + i : k; };
+            return d.parks.map((p, i) => ({ ...p, i })).sort((a, b) => rank(a.key, a.i) - rank(b.key, b.i))
+                .map(p => ({ key: p.key, name: p.name, index: -1, on: d.props.use?.[p.key] !== false }));
+        }
         const rows = e.playback.orderRows;
         return this.dropdown?.persistent ? rows : rows.filter(row => row.index >= 0);
+    }
+
+    /** Moves a row of the open park list: the playing playlist's order, or the new playlist's. */
+    private moveRow(e: Editor, from: number, to: number): void {
+        const d = this.draft;
+        if (!d) {
+            e.playback.moveOrderRow(from, to);
+            return;
+        }
+        const keys = this.orderRows(e).map(row => row.key);
+        if (from === to || from < 0 || to < 0 || from >= keys.length || to >= keys.length) {
+            return;
+        }
+        const [moved] = keys.splice(from, 1);
+        keys.splice(to, 0, moved);
+        d.props = { ...d.props, order: keys };
+        saveOtherPlaylistProps(d.sequence, d.source, d.props);
     }
 
     /** Goes to the park of a row of the park list (a park waiting for a build has none yet). */
@@ -729,13 +757,23 @@ export class EditorPanel implements EditorView {
         this.frames.push(this.paneViews);
         backing(scene, "frame", this.paneViews, THEME.editorBacking);
         // A playlist New or Duplicate just made: its list opens (or reads again) with it, to pick
+        if (!this.dropdown) {
+            this.draft = undefined;
+        }
         const made = builder.made;
         if (made && made.at !== this.seenMade) {
             this.seenMade = made.at;
             this.dropdown = { persistent: true, downAt: this.now() };
-            this.playlists = readPlaylists();
-            const at = this.playlists.findIndex(pl => pl.name === made.sequence);
-            this.parks.first = Math.max(0, at - 3);
+            if (made.task === "new" && made.parks?.length) {
+                // Its parks, to tick and order before its first build
+                this.playlists = undefined;
+                this.draft = { sequence: made.sequence, source: made.playlist, parks: made.parks, props: {} };
+                this.parks.first = 0;
+            } else {
+                this.playlists = readPlaylists();
+                const at = this.playlists.findIndex(pl => pl.name === made.sequence);
+                this.parks.first = Math.max(0, at - 3);
+            }
         }
         // Playlist row
         const plOpen = this.dropdown !== undefined && this.playlists !== undefined;
@@ -749,9 +787,10 @@ export class EditorPanel implements EditorView {
         const plHeadW = measure(overlay, plHead, s.textSize - 2, true).width;
         label(scene, "text.plhead", plHead, { x: plField.x + 8, y: plField.y, width: 0, height: plField.height }, s.textSize - 2, overlay, true);
         scene.set("text.plhead", { ...scene.get("text.plhead")!, colour: THEME.textDim });
-        const parksN = `${order.length} park${order.length === 1 ? "" : "s"}`;
+        const shownN = this.draft ? this.draft.parks.length : order.length;
+        const parksN = `${shownN} park${shownN === 1 ? "" : "s"}${this.draft ? " · not built" : ""}`;
         const parksW = measure(overlay, parksN, s.textSize).width;
-        label(scene, "text.plname", fit(overlay, e.playback.sequenceName, s.textSize, plField.width - plHeadW - parksW - 70, true),
+        label(scene, "text.plname", fit(overlay, this.draft?.sequence ?? e.playback.sequenceName, s.textSize, plField.width - plHeadW - parksW - 70, true),
             { x: plField.x + 22 + plHeadW, y: plField.y, width: 0, height: plField.height }, s.textSize, overlay, true);
         label(scene, "text.plparks", parksN, { x: plField.x + plField.width - 36 - parksW, y: plField.y, width: 0, height: plField.height }, s.textSize, overlay);
         scene.set("text.plparks", { ...scene.get("text.plparks")!, colour: THEME.textDim });
@@ -907,6 +946,9 @@ export class EditorPanel implements EditorView {
             return [...this.playlists.map((_, i) => ({ kind: "playlist", i }) as ParkItem),
                 { kind: "new" }, { kind: "copy" }];
         }
+        if (this.draft) {
+            return [...rows.map((_, p) => ({ kind: "park", p }) as ParkItem), { kind: "build" }];
+        }
         // (a left-out park ticked on joins the order above, to be placed before the build)
         const unused = e.playback.unusedParks.map((park, i) => ({ park, i })).filter(u => !u.park.on);
         return [...rows.map((_, p) => ({ kind: "park", p }) as ParkItem),
@@ -917,7 +959,29 @@ export class EditorPanel implements EditorView {
     /** A click on a row or button of the open park list (its id after "parks."). */
     private parkListAction(e: Editor, what: string): void {
         const p = e.playback;
-        if (what.startsWith("tick.")) {
+        if (what.startsWith("tick.") && this.draft) {
+            const d = this.draft;
+            const row = this.orderRows(e)[Number(what.slice(5))];
+            const left = this.orderRows(e).filter(x => x.on).length;
+            if (row && row.on && left <= 1) {
+                this.useNote = { text: "One park at least stays in use", at: this.now() };
+            } else if (row) {
+                const use = { ...(d.props.use ?? {}) };
+                if (row.on) {
+                    use[row.key] = false;
+                } else {
+                    delete use[row.key];
+                }
+                d.props = { ...d.props, use };
+                saveOtherPlaylistProps(d.sequence, d.source, d.props);
+            }
+        } else if (what === "build" && this.draft) {
+            const name = this.draft.sequence;
+            this.draft = undefined;
+            this.dropdown = undefined;
+            this.messages.first = 0;
+            builder.openPlaylist(name);
+        } else if (what.startsWith("tick.")) {
             const row = this.orderRows(e)[Number(what.slice(5))];
             const on = row ? (row.index >= 0 ? p.parkInUse(row.index) : true) : false;
             if (row && !p.setParkUse(row.key, !on)) {
@@ -973,14 +1037,15 @@ export class EditorPanel implements EditorView {
         bevel(scene, "parks", area, THEME.bevelDark, THEME.bevelLight, THEME.bevel, z);
         // The open list carries the field's gold border (owner, 2026-11-10).
         scene.set("parks.open", { type: "rect", ...area, fill: "#00000000", border: THEME.fieldOpen, borderWidth: 2, z: z + 3 });
-        const head = !persistent ? "Release on a park to go there" : this.playlists ? "Switch to another playlist" : "Playlist order";
+        const head = !persistent ? "Release on a park to go there" : this.playlists ? "Switch to another playlist"
+            : this.draft ? "New playlist: its parks" : "Playlist order";
         label(scene, "parks.head", head, { x: area.x + 8, y: area.y, width: 0, height: s.parkRow }, s.textSize, overlay, true);
         scene.set("parks.head", { ...scene.get("parks.head")!, z: z + 2 });
         const parksOn = builder.parksAvailable;
         const busy = builder.running;
         if (persistent) {
             const note = this.useNote && this.now() - this.useNote.at < 2500 ? this.useNote.text
-                : this.playlists ? "" : "drag to reorder · tick to play";
+                : this.playlists ? "" : this.draft ? "tick, drag, then build" : "drag to reorder · tick to play";
             if (note) {
                 const hw = measure(overlay, note, s.textSize - 2).width;
                 const hx = area.x + area.width - bar - 8 - hw;
@@ -1017,11 +1082,12 @@ export class EditorPanel implements EditorView {
                 const row = rows[p];
                 const index = row.index;
                 const waiting = index < 0; // ticked on again, not built yet
-                const used = waiting || e.playback.parkInUse(index);
+                const used = waiting ? row.on !== false : e.playback.parkInUse(index);
                 // (the tick first: the row under it would take the click)
                 if (tickW) {
                     const tick = this.place(`parks.tick.${p}`, { x: area.x + s.grip + 2, y: y + 4, width: 20, height: s.parkRow - 8 },
-                        waiting ? "Plays after the next build: click to leave it out again"
+                        this.draft ? (used ? "In the playlist: click to leave it out" : "Left out: click to put it in")
+                        : waiting ? "Plays after the next build: click to leave it out again"
                         : used ? "Playing: click to leave it out (it stays in the playlist)" : "Left out: click to play it again");
                     this.tickBox(scene, `ptick.${i}`, tick, used, this.hit() === `parks.tick.${p}`, z + 2);
                 }
@@ -1034,13 +1100,13 @@ export class EditorPanel implements EditorView {
                 if (persistent) {
                     grip(scene, `pgrip.${i}`, box.x + 5, box.y + box.height / 2, z + 2);
                 }
-                const dim = used && !waiting ? undefined : THEME.textDim;
+                const dim = used && (!waiting || this.draft) ? undefined : THEME.textDim;
                 text(`pn.${i}`, String(p + 1), box.x + s.grip + 4 + tickW, y, dim);
                 const name = row.name + (used ? "" : " (left out)");
                 text(`pname.${i}`, fit(overlay, name, s.textSize, width - s.grip - 40 - tickW - countW - 16), box.x + s.grip + 40 + tickW, y,
                     dim, index === e.parkIndex);
                 const n = waiting ? 0 : e.playback.viewCountOf(index);
-                const views = waiting ? "needs a build" : `${n} view${n === 1 ? "" : "s"}`;
+                const views = this.draft ? "" : waiting ? "needs a build" : `${n} view${n === 1 ? "" : "s"}`;
                 text(`pcount.${i}`, views, box.x + width - 8 - measure(overlay, views, s.textSize).width, y, waiting ? THEME.pending : THEME.textDim);
                 if (r && r.from === p) {
                     scene.set(`pdim.${i}`, { type: "rect", ...box, fill: THEME.rowDimmed, z: z + 3 });
@@ -1077,9 +1143,10 @@ export class EditorPanel implements EditorView {
             }
             // The action rows: Add park; New playlist; Duplicate
             const [label0, tip, icon] = item.kind === "add" ? ["Add park…", "Pick a park file or download (.park, .zip); it is added and the playlist built", "add"]
-                : item.kind === "new" ? ["New playlist from a folder…", "Pick a folder of parks: a playlist of them is made and listed here, to pick", "add"]
+                : item.kind === "new" ? ["New playlist from a folder…", "Pick a folder of parks: a playlist of them is made, its parks listed to tick and order", "add"]
+                : item.kind === "build" ? ["Build and play this playlist", "Build the new playlist with these parks, in this order, and play it", "build"]
                 : ["Duplicate this playlist…", "Name a copy of this playlist (with your edits); it is listed here, to pick", "import"];
-            const off = !parksOn || busy;
+            const off = (!parksOn && item.kind !== "build") || busy;
             const why = !parksOn ? "needs the patched engine with these dialogs" : busy ? `wait for the ${builder.noun} to finish` : "";
             const id = `parks.${item.kind}`;
             const row = this.place(id, { x: area.x + 4, y: y + 2, width: width - 8, height: s.parkRow - 4 }, why ? `${label0.replace("…", "")}: ${why}` : tip, off);

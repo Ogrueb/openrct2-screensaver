@@ -178,6 +178,20 @@ export function savePlaylistProps(sequence: string, props: PlaylistProps): void 
     writeLive();
 }
 
+/** The Playlist properties of a playlist that is not playing (one New playlist just made, before its
+ *  first build): saved, and written to its own live file, which its build bakes in (owner, 2026-11-13). */
+export function saveOtherPlaylistProps(sequence: string, source: string | undefined, props: PlaylistProps): boolean {
+    const all = context.sharedStorage.get<Record<string, PlaylistProps>>(NAMESPACE + ".playlistProps", {});
+    all[sequence] = props;
+    context.sharedStorage.set(NAMESPACE + ".playlistProps", all);
+    const api = filesApi();
+    if (!api) {
+        return false;
+    }
+    const file: LiveFile = { version: 1, sequence, source, saved: Date.now(), edits: {}, props };
+    return api.writeFile(liveFileName(sequence), JSON.stringify(file, null, 1));
+}
+
 /** A park's saved views to go back to (the view editor's restore points), newest last. */
 export interface Checkpoint {
     n: number; // its number: "Checkpoint n"

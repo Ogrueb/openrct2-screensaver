@@ -426,13 +426,17 @@ click on the park field (Playlist order):
   `mksequence.py --live-new <folder>`, which reads the folder as the settings page's scan does (`parkinfo.
   scan_folder`; parks and downloads in place, RCT saves and loose objects listed as warnings), writes
   `screensaver/playlists/<slug>.toml` named "RCT Screensaver <folder>" (" 2" and so on when taken), registers it
-  and lists it (`live/task-new.json`). No build follows (owner's test, 2026-11-12): the PLAYLIST list stays open with
-  the new playlist marked "new", and picking it builds and plays it.
+  and lists it (`live/task-new.json`, with its parks: key and a name from the NE catalog or the file). No build
+  follows (owner's tests, 2026-11-12/13): the park list opens on the new playlist's parks ("New playlist: its parks",
+  PLAYLIST showing it "not built"), to tick off and drag into order (saved to its own live file), and **Build and play
+  this playlist** builds it with them and plays it. Closed without building, it stays in the PLAYLIST list.
 - **Duplicate this playlist…** calls `screensaver.copyPlaylist(<sequence>)`: the system's Save dialog in
   `screensaver/playlists` ("<name> copy.toml"), then `mksequence.py --live-copy <sequence> --to <file>`: the
   game's edits baked, the playlist copied with its views file, named after the file (another name than any other
-  playlist's), park paths following the new folder; registered and listed, not built (owner's test, 2026-11-12: a copy
-  needs no rebuild; the playlist plays on, and picking the copy builds it from the park cache); `live/task-copy.json`. The game has no
+  playlist's), park paths following the new folder; registered; no rebuild (owner's tests, 2026-11-12/13): the
+  installed sequence is copied to `screensaver/build/live/<copy>` and the plugin has the engine apply it, so the copy
+  plays at once with the playing playlist's edits and properties (without an installed folder, the copy is listed
+  to pick, which builds it); `live/task-copy.json`. The game has no
   text input of its own, so the dialog's file name is the name.
 - The build pane follows each as it follows a build: the header ("adding the park", "making the playlist",
   "copying the playlist", "building"), Cancel <task>, the squares and the messages; one task at a time.

@@ -30,7 +30,7 @@ Layouts:
 import argparse, collections, glob, hashlib, json, pickle, math, statistics, os, random, re, shutil, subprocess, sys, tempfile, time, tomllib
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import companions, livefile, parkinfo, profiles, userdata  # noqa: E402
+import companions, livefile, nedesigns, parkinfo, profiles, userdata  # noqa: E402
 
 VIEW_DEFAULTS = {
     "method": "spots",  # how views are generated when a park lists none: "spots" or "grid"
@@ -3711,6 +3711,18 @@ def live_add(name, park_path, user_dir):
     return live_build(name, user_dir)
 
 
+def draft_name(entry):
+    """A park's name before its first build, without reading the park: the NE catalogue's, else the
+    download's or file's."""
+    try:
+        ne = nedesigns.match(entry["file"])
+        if ne:
+            return ne["name"]
+        return parkinfo.fallback_name(entry["file"], entry.get("member"))[0]
+    except Exception:  # (a name is all this is for)
+        return os.path.splitext(os.path.basename(entry["file"]))[0]
+
+
 def live_new(folder, user_dir):
     """Make a new playlist of the parks in the folder the user picked in the game's folder dialog
     (screensaver.newPlaylist): every park and download read in place, as the settings page's scan does,
@@ -3734,7 +3746,10 @@ def live_new(folder, user_dir):
         note("ok", "Made \"%s\" of %d park%s in %s" % (name, len(entries), "s" if len(entries) != 1 else "", folder))
         for reason in reasons:
             note("warn", "%s: left out or incomplete; the settings page's folder scan converts and installs" % reason)
-        write(ok=True, finished=int(time.time() * 1000), sequence=name, playlist=path)
+        # Its parks for the game's park list, to tick and order before the first build (owner, 2026-11-13):
+        # names from the NE catalogue or the file, as reading every park would take seconds each
+        parks = [{"key": park_key(e), "name": draft_name(e)} for e in entries]
+        write(ok=True, finished=int(time.time() * 1000), sequence=name, playlist=path, parks=parks)
     except Exception as e:  # anything: the game shows it
         return task_failed(note, write, "New playlist", e)
     return 0
@@ -3776,8 +3791,19 @@ def live_copy(name, to, user_dir):
             shutil.copy2(edits_path(source), edits_path(to))
         forget_old_live(to, new_name, user_dir)
         register_generator(user_dir, new_name, to)
+        # The playing build goes along, so the game plays the copy at once without a rebuild (owner,
+        # 2026-11-13): the installed sequence, copied where the game takes builds from (applyBuild)
+        installed = os.path.join(user_dir, "sequence", name)
+        built = False
+        if os.path.isfile(os.path.join(installed, "script.txt")):
+            out_dir, _ = live_build_paths(new_name, user_dir)
+            target = os.path.join(out_dir, new_name)
+            if os.path.isdir(target):
+                shutil.rmtree(target)
+            shutil.copytree(installed, target)
+            built = True
         note("ok", "Copied \"%s\" to \"%s\" (%s)" % (name, new_name, to))
-        write(ok=True, finished=int(time.time() * 1000), sequence=new_name, playlist=to)
+        write(ok=True, finished=int(time.time() * 1000), sequence=new_name, playlist=to, built=built)
     except Exception as e:  # anything: the game shows it
         return task_failed(note, write, "Duplicating the playlist", e)
     return 0

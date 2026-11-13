@@ -1269,9 +1269,9 @@ console.log("ok: Import and Export playlist through the file dialogs");
     // (owner, 2026-11-12).
     const lists = extra => JSON.stringify({ playlistsVersion: 1, playlists: [
         { name: "Evening", file: "evening.toml", parks: 2 }, { name: playlist.sequence, file: "mini.toml", parks: 3 }, ...extra] });
-    const finish = (task, sequence, extra) => {
+    const finish = (task, sequence, extra, more = {}) => {
         mode.files.set(`task-${task}.json`, JSON.stringify({ taskVersion: 1, task, started: Date.now(), ok: true, finished: Date.now(),
-            sequence, playlist: `C:/x/${sequence}.toml`, messages: [{ level: "ok", text: `${task} line` }] }));
+            sequence, playlist: `C:/x/${sequence}.toml`, messages: [{ level: "ok", text: `${task} line` }], ...more }));
         mode.files.set("playlists.json", lists(extra));
         mode.buildStatus = { ...mode.buildStatus, state: "done", finished: Date.now() };
         tick(6);
@@ -1282,18 +1282,45 @@ console.log("ok: Import and Export playlist through the file dialogs");
     assert.equal(mode.made, 1);
     assert.equal(ed("build.state").text, "making the playlist");
     assert.ok(ed("parks.new"), "the list stays open");
-    finish("new", "RCT Screensaver loose", [{ name: "RCT Screensaver loose", file: "loose.toml", parks: 5 }]);
-    assert.equal(ed("pname.2").text, "RCT Screensaver loose", "the new playlist listed");
-    assert.equal(ed("pcount.2").text, "new · 5 parks", "marked new");
+    // New: the park list opens on the new playlist's parks, to tick and order before its first build
+    // (owner, 2026-11-13).
+    const loose = ["Dreamport", "Mandala", "Morow World"].map(name => ({ key: name.toLowerCase() + ".park", name }));
+    finish("new", "RCT Screensaver loose", [{ name: "RCT Screensaver loose", file: "loose.toml", parks: 3 }], { parks: loose });
+    assert.equal(scene.get("rcts.ed.parks.head").text, "New playlist: its parks");
+    assert.equal(ed("text.plname").text, "RCT Screensaver loose");
+    assert.equal(ed("text.plparks").text, "3 parks · not built");
+    assert.deepEqual([0, 1, 2].map(i => ed(`pname.${i}`).text), ["Dreamport", "Mandala", "Morow World"]);
     assert.match(ed("msgt.0").text, /^Made "RCT Screensaver loose"/, ed("msgt.0").text);
     assert.equal(mode.builds.length, 0, "no build");
-    assert.equal(ed("text.plname").text, playlist.sequence, "the playlist plays on");
+    edClick("ptick.1"); tick(); // (Mandala out)
+    assert.match(ed("pname.1").text, /\(left out\)$/);
+    {
+        const from = ed("park.2"), to = ed("park.0");
+        mouse("move", from.x + 6, from.y + 8); mouse("down", from.x + 6, from.y + 8);
+        mouse("move", from.x + 6, from.y - 10); mouse("move", to.x + 6, to.y + 2);
+        mouse("up", to.x + 6, to.y + 2); tick();
+    }
+    assert.equal(ed("pname.0").text, "Morow World", "dragged to the top");
+    const draftLive = JSON.parse(mode.files.get("RCT_Screensaver_loose.json"));
+    assert.equal(draftLive.sequence, "RCT Screensaver loose");
+    assert.equal(draftLive.source, "C:/x/RCT Screensaver loose.toml");
+    assert.equal(draftLive.props.use["mandala.park"], false, "the ticks in its live file, for its build");
+    assert.equal(draftLive.props.order[0], "morow world.park", "and the order");
     mouse("move", 900, 700);
     dump("parks-made");
+    edClick("parks.build"); tick(2);
+    assert.deepEqual(mode.builds, ["RCT Screensaver loose"], "Build and play builds the new playlist");
+    mode.buildStatus = { ...mode.buildStatus, state: "cancelled", finished: Date.now() };
+    mode.cancelBuild = function () { return true; };
+    tick(6);
+    mode.builds.length = 0;
+    edClick("plfield"); tick();
     edClick("parks.copy"); tick(2);
     assert.deepEqual(mode.copied, [playlist.sequence], "Duplicate copies the playing playlist");
     assert.equal(ed("build.state").text, "copying the playlist");
-    finish("copy", "Mini copy", [{ name: "RCT Screensaver loose", file: "loose.toml", parks: 5 }, { name: "Mini copy", file: "mini copy.toml", parks: 3 }]);
+    // (built: the playing build copied along; the mock can't play it, so the copy is listed to pick)
+    finish("copy", "Mini copy", [{ name: "RCT Screensaver loose", file: "loose.toml", parks: 5 }, { name: "Mini copy", file: "mini copy.toml", parks: 3 }], { built: true });
+    assert.equal(mode.applied.at(-1), "Mini copy", "the copy's build is applied, no rebuild");
     assert.equal(ed("pname.3").text, "Mini copy");
     assert.equal(ed("pcount.3").text, "new · 3 parks");
     assert.equal(mode.builds.length, 0, "a copy needs no rebuild");

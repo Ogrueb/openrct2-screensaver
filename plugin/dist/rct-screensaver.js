@@ -46,6 +46,17 @@
     liveProps[sequence] = props;
     writeLive();
   }
+  function saveOtherPlaylistProps(sequence, source, props) {
+    const all = context.sharedStorage.get(NAMESPACE + ".playlistProps", {});
+    all[sequence] = props;
+    context.sharedStorage.set(NAMESPACE + ".playlistProps", all);
+    const api = filesApi();
+    if (!api) {
+      return false;
+    }
+    const file = { version: 1, sequence, source, saved: Date.now(), edits: {}, props };
+    return api.writeFile(liveFileName(sequence), JSON.stringify(file, null, 1));
+  }
   var CHECKPOINTS_PER_PARK = 10;
   function loadCheckpoints() {
     return context.sharedStorage.get(NAMESPACE + ".checkpoints", {});
@@ -481,13 +492,25 @@
         log(`${NOUN[task]} ${status.state === "cancelled" ? "cancelled" : "failed: " + why}`);
         return;
       }
+      if (task === "copy" && imported.built && this.onCopied) {
+        const made = imported.sequence;
+        const error2 = this.onCopied(made, imported.playlist);
+        if (!error2) {
+          this.outcome = { phase: "done", text: `Copied to "${made}", now playing` };
+          this.notes = [{ level: "ok", text: `Copied to "${made}", now playing; the original keeps its own file` }];
+          this.earlier = [];
+          log(`copy "${made}" now playing`);
+          return;
+        }
+        log(`copy "${made}" not taken in: ${error2}`);
+      }
       if (FILE_ONLY.includes(task)) {
         const made = imported.sequence;
         const verb = task === "new" ? "Made" : "Copied";
         this.outcome = { phase: "idle", text: `${verb} "${made}"` };
-        this.notes = [{ level: "ok", text: `${verb} "${made}"; pick it above to play it` }];
+        this.notes = [{ level: "ok", text: task === "new" && imported.parks?.length ? `${verb} "${made}"; tick and order its parks, then build it` : `${verb} "${made}"; pick it above to play it` }];
         this.earlier = from(imported).filter((m) => m.level !== "ok");
-        this.made = { sequence: made, at: Date.now() };
+        this.made = { sequence: made, at: Date.now(), task, playlist: imported.playlist, parks: imported.parks };
         log(`${NOUN[task]} "${made}" made`);
         return;
       }
@@ -6126,7 +6149,7 @@
         if (r.list === "views") {
           ed.moveTo(r.from, to);
         } else {
-          ed.playback.moveOrderRow(r.from, to);
+          this.moveRow(ed, r.from, to);
         }
         return true;
       }
@@ -6223,8 +6246,33 @@
     /** The park list's order rows: the parks in play order; open as Playlist order, with the parks
      *  waiting for a build where they will play (Player.orderRows). */
     orderRows(e) {
+      const d = this.draft;
+      if (d) {
+        const order = d.props.order ?? [];
+        const rank = (key, i) => {
+          const k = order.indexOf(key);
+          return k < 0 ? order.length + i : k;
+        };
+        return d.parks.map((p, i) => ({ ...p, i })).sort((a, b) => rank(a.key, a.i) - rank(b.key, b.i)).map((p) => ({ key: p.key, name: p.name, index: -1, on: d.props.use?.[p.key] !== false }));
+      }
       const rows = e.playback.orderRows;
       return this.dropdown?.persistent ? rows : rows.filter((row) => row.index >= 0);
+    }
+    /** Moves a row of the open park list: the playing playlist's order, or the new playlist's. */
+    moveRow(e, from, to) {
+      const d = this.draft;
+      if (!d) {
+        e.playback.moveOrderRow(from, to);
+        return;
+      }
+      const keys = this.orderRows(e).map((row) => row.key);
+      if (from === to || from < 0 || to < 0 || from >= keys.length || to >= keys.length) {
+        return;
+      }
+      const [moved] = keys.splice(from, 1);
+      keys.splice(to, 0, moved);
+      d.props = { ...d.props, order: keys };
+      saveOtherPlaylistProps(d.sequence, d.source, d.props);
     }
     /** Goes to the park of a row of the park list (a park waiting for a build has none yet). */
     goToRow(d) {
@@ -6528,13 +6576,22 @@
       this.paneViews = { x: s.x, y: s.y, width: s.width, height: bottom + s.pad - s.y };
       this.frames.push(this.paneViews);
       backing(scene, "frame", this.paneViews, THEME.editorBacking);
+      if (!this.dropdown) {
+        this.draft = void 0;
+      }
       const made = builder.made;
       if (made && made.at !== this.seenMade) {
         this.seenMade = made.at;
         this.dropdown = { persistent: true, downAt: this.now() };
-        this.playlists = readPlaylists();
-        const at = this.playlists.findIndex((pl) => pl.name === made.sequence);
-        this.parks.first = Math.max(0, at - 3);
+        if (made.task === "new" && made.parks?.length) {
+          this.playlists = void 0;
+          this.draft = { sequence: made.sequence, source: made.playlist, parks: made.parks, props: {} };
+          this.parks.first = 0;
+        } else {
+          this.playlists = readPlaylists();
+          const at = this.playlists.findIndex((pl) => pl.name === made.sequence);
+          this.parks.first = Math.max(0, at - 3);
+        }
       }
       const plOpen = this.dropdown !== void 0 && this.playlists !== void 0;
       scene.set("plfield", { type: "rect", ...plField, fill: plOpen ? THEME.faceDown : this.hit() === "plfield" ? THEME.faceHover : THEME.editorList, z: Z.face });
@@ -6547,12 +6604,13 @@
       const plHeadW = measure(overlay, plHead, s.textSize - 2, true).width;
       label(scene, "text.plhead", plHead, { x: plField.x + 8, y: plField.y, width: 0, height: plField.height }, s.textSize - 2, overlay, true);
       scene.set("text.plhead", { ...scene.get("text.plhead"), colour: THEME.textDim });
-      const parksN = `${order.length} park${order.length === 1 ? "" : "s"}`;
+      const shownN = this.draft ? this.draft.parks.length : order.length;
+      const parksN = `${shownN} park${shownN === 1 ? "" : "s"}${this.draft ? " \xB7 not built" : ""}`;
       const parksW = measure(overlay, parksN, s.textSize).width;
       label(
         scene,
         "text.plname",
-        fit(overlay, e.playback.sequenceName, s.textSize, plField.width - plHeadW - parksW - 70, true),
+        fit(overlay, this.draft?.sequence ?? e.playback.sequenceName, s.textSize, plField.width - plHeadW - parksW - 70, true),
         { x: plField.x + 22 + plHeadW, y: plField.y, width: 0, height: plField.height },
         s.textSize,
         overlay,
@@ -6748,6 +6806,9 @@
           { kind: "copy" }
         ];
       }
+      if (this.draft) {
+        return [...rows.map((_, p) => ({ kind: "park", p })), { kind: "build" }];
+      }
       const unused = e.playback.unusedParks.map((park, i) => ({ park, i })).filter((u) => !u.park.on);
       return [
         ...rows.map((_, p) => ({ kind: "park", p })),
@@ -6759,7 +6820,29 @@
     /** A click on a row or button of the open park list (its id after "parks."). */
     parkListAction(e, what) {
       const p = e.playback;
-      if (what.startsWith("tick.")) {
+      if (what.startsWith("tick.") && this.draft) {
+        const d = this.draft;
+        const row = this.orderRows(e)[Number(what.slice(5))];
+        const left = this.orderRows(e).filter((x) => x.on).length;
+        if (row && row.on && left <= 1) {
+          this.useNote = { text: "One park at least stays in use", at: this.now() };
+        } else if (row) {
+          const use = { ...d.props.use ?? {} };
+          if (row.on) {
+            use[row.key] = false;
+          } else {
+            delete use[row.key];
+          }
+          d.props = { ...d.props, use };
+          saveOtherPlaylistProps(d.sequence, d.source, d.props);
+        }
+      } else if (what === "build" && this.draft) {
+        const name = this.draft.sequence;
+        this.draft = void 0;
+        this.dropdown = void 0;
+        this.messages.first = 0;
+        builder.openPlaylist(name);
+      } else if (what.startsWith("tick.")) {
         const row = this.orderRows(e)[Number(what.slice(5))];
         const on = row ? row.index >= 0 ? p.parkInUse(row.index) : true : false;
         if (row && !p.setParkUse(row.key, !on)) {
@@ -6815,13 +6898,13 @@
       scene.set("parks", { type: "rect", ...area, fill: "#0b170fff", z });
       bevel(scene, "parks", area, THEME.bevelDark, THEME.bevelLight, THEME.bevel, z);
       scene.set("parks.open", { type: "rect", ...area, fill: "#00000000", border: THEME.fieldOpen, borderWidth: 2, z: z + 3 });
-      const head = !persistent ? "Release on a park to go there" : this.playlists ? "Switch to another playlist" : "Playlist order";
+      const head = !persistent ? "Release on a park to go there" : this.playlists ? "Switch to another playlist" : this.draft ? "New playlist: its parks" : "Playlist order";
       label(scene, "parks.head", head, { x: area.x + 8, y: area.y, width: 0, height: s.parkRow }, s.textSize, overlay, true);
       scene.set("parks.head", { ...scene.get("parks.head"), z: z + 2 });
       const parksOn = builder.parksAvailable;
       const busy = builder.running;
       if (persistent) {
-        const note = this.useNote && this.now() - this.useNote.at < 2500 ? this.useNote.text : this.playlists ? "" : "drag to reorder \xB7 tick to play";
+        const note = this.useNote && this.now() - this.useNote.at < 2500 ? this.useNote.text : this.playlists ? "" : this.draft ? "tick, drag, then build" : "drag to reorder \xB7 tick to play";
         if (note) {
           const hw = measure(overlay, note, s.textSize - 2).width;
           const hx = area.x + area.width - bar2 - 8 - hw;
@@ -6858,12 +6941,12 @@
           const row2 = rows[p];
           const index = row2.index;
           const waiting = index < 0;
-          const used = waiting || e.playback.parkInUse(index);
+          const used = waiting ? row2.on !== false : e.playback.parkInUse(index);
           if (tickW) {
             const tick = this.place(
               `parks.tick.${p}`,
               { x: area.x + s.grip + 2, y: y + 4, width: 20, height: s.parkRow - 8 },
-              waiting ? "Plays after the next build: click to leave it out again" : used ? "Playing: click to leave it out (it stays in the playlist)" : "Left out: click to play it again"
+              this.draft ? used ? "In the playlist: click to leave it out" : "Left out: click to put it in" : waiting ? "Plays after the next build: click to leave it out again" : used ? "Playing: click to leave it out (it stays in the playlist)" : "Left out: click to play it again"
             );
             this.tickBox(scene, `ptick.${i}`, tick, used, this.hit() === `parks.tick.${p}`, z + 2);
           }
@@ -6874,7 +6957,7 @@
           if (persistent) {
             grip(scene, `pgrip.${i}`, box.x + 5, box.y + box.height / 2, z + 2);
           }
-          const dim = used && !waiting ? void 0 : THEME.textDim;
+          const dim = used && (!waiting || this.draft) ? void 0 : THEME.textDim;
           text(`pn.${i}`, String(p + 1), box.x + s.grip + 4 + tickW, y, dim);
           const name = row2.name + (used ? "" : " (left out)");
           text(
@@ -6886,7 +6969,7 @@
             index === e.parkIndex
           );
           const n = waiting ? 0 : e.playback.viewCountOf(index);
-          const views = waiting ? "needs a build" : `${n} view${n === 1 ? "" : "s"}`;
+          const views = this.draft ? "" : waiting ? "needs a build" : `${n} view${n === 1 ? "" : "s"}`;
           text(`pcount.${i}`, views, box.x + width - 8 - measure(overlay, views, s.textSize).width, y, waiting ? THEME.pending : THEME.textDim);
           if (r && r.from === p) {
             scene.set(`pdim.${i}`, { type: "rect", ...box, fill: THEME.rowDimmed, z: z + 3 });
@@ -6927,8 +7010,8 @@
           text(`pcount.${i}`, right, area.x + width - 8 - rw, y, pl.missing ? THEME.warning : fresh ? THEME.pending : THEME.textDim);
           continue;
         }
-        const [label0, tip, icon] = item.kind === "add" ? ["Add park\u2026", "Pick a park file or download (.park, .zip); it is added and the playlist built", "add"] : item.kind === "new" ? ["New playlist from a folder\u2026", "Pick a folder of parks: a playlist of them is made and listed here, to pick", "add"] : ["Duplicate this playlist\u2026", "Name a copy of this playlist (with your edits); it is listed here, to pick", "import"];
-        const off = !parksOn || busy;
+        const [label0, tip, icon] = item.kind === "add" ? ["Add park\u2026", "Pick a park file or download (.park, .zip); it is added and the playlist built", "add"] : item.kind === "new" ? ["New playlist from a folder\u2026", "Pick a folder of parks: a playlist of them is made, its parks listed to tick and order", "add"] : item.kind === "build" ? ["Build and play this playlist", "Build the new playlist with these parks, in this order, and play it", "build"] : ["Duplicate this playlist\u2026", "Name a copy of this playlist (with your edits); it is listed here, to pick", "import"];
+        const off = !parksOn && item.kind !== "build" || busy;
         const why = !parksOn ? "needs the patched engine with these dialogs" : busy ? `wait for the ${builder.noun} to finish` : "";
         const id = `parks.${item.kind}`;
         const row = this.place(id, { x: area.x + 4, y: y + 2, width: width - 8, height: s.parkRow - 4 }, why ? `${label0.replace("\u2026", "")}: ${why}` : tip, off);
@@ -7623,6 +7706,34 @@
     }
     player = void 0;
   }
+  function takeCopy(sequence, source) {
+    const api = buildApi();
+    const old = loadPlaylist();
+    if (!api || !player?.isRunning || !old) {
+      return "the screensaver is not playing";
+    }
+    try {
+      api.applyBuild(sequence);
+    } catch (e) {
+      return message(e);
+    }
+    const playlist = { ...old, sequence, source, installed: Date.now() };
+    const check = resolveSequence(playlist);
+    if (typeof check === "string") {
+      return check;
+    }
+    const props = loadPlaylistProps(old.sequence);
+    savePlaylist(playlist);
+    savePlaylistProps(sequence, props);
+    builder.forgetPlaylist();
+    const reopen = editor?.isOpen ?? false;
+    stopPlayer();
+    startPlayer();
+    if (reopen) {
+      editor?.open();
+    }
+    return player?.isRunning ? void 0 : "the copy could not start";
+  }
   function takeBuild(result, imported = false) {
     const api = buildApi();
     if (!api || !player?.isRunning || !result.playlist) {
@@ -7667,6 +7778,7 @@
     return player?.isRunning ? void 0 : "the imported playlist could not start";
   }
   builder.onReady = takeBuild;
+  builder.onCopied = takeCopy;
   builder.nameOf = (key) => {
     const park = player?.isRunning ? loadPlaylist()?.parks.find((p) => (p.key ?? p.fileName) === key) : void 0;
     return park?.name;

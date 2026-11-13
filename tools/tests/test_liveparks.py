@@ -152,6 +152,9 @@ class LiveParks(unittest.TestCase):
         self.assertEqual(len(data["park"]), 4)
         self.assertTrue(all(os.path.isfile(os.path.join(os.path.dirname(result["playlist"]), e["file"])) for e in data["park"]))
         self.assertEqual(mksequence.registered_playlists(self.user)["RCT Screensaver lib"], result["playlist"])
+        # its parks, for the game's park list before the first build
+        self.assertEqual([p["key"] for p in result["parks"]], ["a.park", "b.park", "c.park", "d.park"])
+        self.assertTrue(all(p["name"] for p in result["parks"]))
 
     def test_a_second_new_playlist_of_the_folder_gets_its_own_name(self):
         self.run_task(mksequence.live_new, self.lib, self.user)
@@ -180,7 +183,20 @@ class LiveParks(unittest.TestCase):
         self.assertEqual([e["file"] for e in data["park"]], ["../../../lib/a.park", "../../../lib/b.park", "../../../lib/c.park"])
         self.assertTrue(os.path.exists(mksequence.edits_path(to)))
         self.assertEqual(self.task("copy")["sequence"], "Evening")
+        self.assertFalse(self.task("copy")["built"], "no installed build to take along")
         self.assertEqual(self.read()["name"], "My List", "the original stays")
+
+    def test_copy_takes_the_playing_build_along(self):
+        installed = os.path.join(self.user, "sequence", "My List")
+        os.makedirs(installed)
+        for name in ("script.txt", "a.park"):
+            with open(os.path.join(installed, name), "w") as f:
+                f.write(name)
+        self.assertFalse(self.run_task(mksequence.live_copy, "My List", os.path.join(self.lib, "Evening.toml"), self.user)[0])
+        self.assertTrue(self.task("copy")["built"])
+        out_dir, _ = mksequence.live_build_paths("Evening", self.user)
+        self.assertEqual(sorted(os.listdir(os.path.join(out_dir, "Evening"))), ["a.park", "script.txt"],
+                         "where the game takes builds from (applyBuild)")
 
     def test_copy_over_the_playlist_itself_fails(self):
         code, _ = self.run_task(mksequence.live_copy, "My List", self.playlist, self.user)
