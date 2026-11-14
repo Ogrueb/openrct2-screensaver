@@ -158,7 +158,6 @@ export interface ParkEntry {
     load: number; // index of this park's LOAD command in the title sequence
     views: View[];
     handSet?: boolean; // views come from the editor (via the views file): shown exactly as set
-    listed?: boolean; // views listed in the playlist's [[park]] entry, not generated
     defaultViews?: View[]; // with handSet: the playlist's own views, for "Use playlist views"
     panTolerance?: [number, number]; // [px/s at zoom -2, less per level out]: the generator's (absent: settings)
     bounds?: Bounds; // absent: show views exactly as listed

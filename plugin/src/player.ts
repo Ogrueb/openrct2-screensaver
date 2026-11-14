@@ -822,13 +822,6 @@ export class Player {
         return this.parkSettingsChangedIn();
     }
 
-    /** The current park plays generated views (none set in the editor or the views file): the
-     *  generation settings make its views. */
-    get parkGenerated(): boolean {
-        const park = this.currentPark();
-        return !!park && !this.isEdited && park.handSet !== true && park.listed !== true;
-    }
-
     /** Changes one of the current park's settings, saved at once (and so in the live file; the next build's
      *  bake writes it into the park's profile). Back at the build's value it is no change. */
     setParkSetting<K extends keyof ParkValues>(key: K, value: ParkValues[K]): void {

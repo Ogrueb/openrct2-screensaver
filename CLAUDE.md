@@ -141,13 +141,12 @@ See README.md for usage.
   in `screensaver/python`), which the engine runs when `generator.json` is missing or stale (else a Python on the
   PATH); `screensaver.generator` says whether one can run and why not, so the plugin grays Build, New, Add park,
   Import/Export with the reason (`builder.unavailableReason`). With no playlist the mode shows a panel
-  (`ui/welcome.ts`: New playlist from a folder, built and played at once; Import; the known playlists). Settings split by what they apply to (owner, 2026-11-14,
-  `docs/screensaver-ui.md` "Settings: two gears and the Generation pane"): gears on the views pane's playlist and park
-  rows hold what applies to any views (motion feel, holds, titles, music, scripts and event views; a park's scripts,
-  event views, return pan, pan speed), and the Generation pane top right (the old Playlist properties' place) holds
-  everything only the automatic generation uses, the playlist's (motion, view order, variants, reverse, ride pans, park
-  times, time scale; saved as changes against the build's `generation` values, baked by `apply_generation`) and the
-  park's (towers, ride pans, view count, zooms, pan share, longest park; grayed for views set by hand). Park settings
+  (`ui/welcome.ts`: New playlist from a folder, built and played at once; Import; the known playlists). Settings and New playlist (owner, 2026-11-14, `docs/screensaver-ui.md`
+  "Settings and the New playlist pane"): a Settings foldout top right with a Playlist | Park switch holds what applies
+  to any views (motion feel, holds, titles, music, scripts and event views; a park's scripts, event views, return pan,
+  pan speed), and New playlist and Duplicate are icon buttons on the playlist row, New opening a pane top centre with
+  the generation options (motion, view order, variants, reverse, ride pans, park times, time scale), which matter only
+  when a playlist is made: saved in its draft's live file and baked by `apply_generation` at its first build. Park settings
   are baked into the park's profile in the user folder at the next build (`profiles.change`, shared with the settings page). New playlist and
   Add park take RCT saves and loose objects too (2026-11-14): converted with the game's own executable
   (`--openrct2`, patch 0020) and installed through `importparks.run`/`install_loose`.

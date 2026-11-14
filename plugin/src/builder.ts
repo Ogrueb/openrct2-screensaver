@@ -662,7 +662,7 @@ export class Builder {
         const order = this.orderOf?.() ?? [];
         // (a park the last build left out, as its file was missing, stays at the end)
         const shown = new Set(order);
-        const idle: (ParkState & { stale?: boolean })[] = order.length ? [...order.map(key => carried(key)), ...(this.last?.parkStates ?? []).filter(p => p.key && !shown.has(p.key))]
+        const idle: (ParkState & { stale?: boolean })[] = order.length ? [...order.map(key => carried(key)), ...(this.last?.parkStates ?? []).filter(p => p.key && !shown.has(p.key) && p.state === "missing")]
             : this.last?.parkStates ?? [];
         if (this.task === "build" || this.task === "add") {
             // Started, no progress yet: the first park needing a build is lit (the generator starts there)

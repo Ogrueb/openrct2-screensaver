@@ -2731,8 +2731,6 @@ def playlist_data(name, parks, screen=None, defaults=None, titles=None):
                                      for v in p["defaultViews"]]
         if p.get("settings"):
             entry["settings"] = p["settings"]  # the view editor's park settings
-        if p.get("source") == "explicit":
-            entry["listed"] = True  # views listed in the playlist (the editor grays the park's generation settings)
         if p.get("box"):
             entry["box"] = p["box"]  # the content box: the settings page's view drawing frames its renders on it
         if p["bounds"]:

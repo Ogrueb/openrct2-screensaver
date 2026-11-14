@@ -484,26 +484,26 @@ The handoff's items are done (2026-11-14): `.sv6` saves and loose objects now go
 park too (see "Parks and playlists"). A conversion runs OpenRCT2's `convert` with its own user folder (v0.5.6's
 convert takes no `--user-data-path`), so a portable install's objects are not seen by it.
 
-### Settings: two gears and the Generation pane (owner, 2026-11-14)
+### Settings and the New playlist pane (owner, 2026-11-14)
 
-The editor's settings are split by what they apply to (owner's review of the first layout, 2026-11-14: the
-generation options sat in two places, mixed with settings that also apply to views set by hand):
+The editor's settings are split by when they matter (the owner's third look, 2026-11-14: the generation
+options matter only when a playlist is made; a first layout had them in two places, a second on gears):
 
-- **The playlist row's gear** (right of the PLAYLIST field) shows the playlist's settings that apply to any
-  views in place of the park's views: MOTION (Inertia; Turns, zooms = `panChanges`), TIMING (Change, Arrival
-  and Return hold), PRESENTATION (Music, Titles) and PARK SCRIPTS (Scripts and Event views, `park_scripts` and
-  `park_plugins`: event views come on top of drawn views too). These were the Playlist properties; they save
-  as they change, the scripts for the next build.
-- **The park row's gear** (between the park field and Next park) shows the park's settings that apply to any
-  views: Park scripts and Scripts in pans (a park with scripts), Event views (a park with event views), Return
-  pan, Pan speed (`pan_tolerance`). Its Playlist's button resets only these.
-- **The Generation pane** (top right, in the Playlist properties' old place, open by default) holds every
-  setting only the automatic view generation uses: the playlist's (see "Generation" below) and, under PARK ·
-  <name>, the park's in two columns: Tower views, Ride pans, Most views; Closest and Widest zoom, Pan share
-  (auto, 0-100%), Longest park, with a Playlist's button of its own. A park whose views are set by hand (edited
-  in the game, from the views file, or listed in the playlist: `listed` on the park) has them grayed with "its
-  views are set by hand". The pane's header says "changed · next build" while any of them differs from the
-  build.
+- **Settings** (top right, in the Playlist properties' old place, a foldout open by default) shows the
+  playlist's or the park's settings, a Playlist | Park switch in its header. Playlist: MOTION (Inertia, Angle
+  and zoom change, the Change, Arrival and Return holds) and PRESENTATION (Title music, Show titles, Park
+  scripts and Event views, the last two `park_scripts` and `park_plugins`, for the next build). Park (under the
+  park's name): Park scripts and Scripts in pans (a park with scripts), Event views (a park with event views),
+  Return pan, Pan speed (`pan_tolerance`), with the park's profile, "changed · next build" and a Playlist's
+  button that resets these keys only.
+- **New playlist and Duplicate** are two icon buttons at the playlist row's end (no longer in the playlist
+  list). New playlist opens a pane top centre, between the views pane and the top-right box: GENERATION with
+  the settings page's playlist-wide generator options (see "Generation" below), starting from the playing
+  playlist's, then Choose folder… (the folder dialog) and Cancel. The playlist made gets the choices in its
+  draft's live file (`props.generation`), which its first build bakes in (`apply_generation`); its parks list
+  opens to tick and order as before.
+- The parks' generation settings (towers, ride pans, view count, zooms, pan share, longest park) are left to
+  the settings page.
 
 The park settings are the settings page's park switches and Edit parameters. As on the settings page they
 belong to the park, not the playlist: the next build's bake writes them into the park's profile in the user
@@ -525,11 +525,11 @@ own. `mksequence.py --user-dir` now also points the user's profiles and playlist
 
 ### Generation (2026-11-14)
 
-The Generation pane's PLAYLIST section holds the playlist-wide generator options the settings page sets,
-with its labels: Motion (Pans, Static), View order (Circuit, Random), Variants (1-10) and Include reverse
-(circuit only), Ride pans (Include, Exclude, Only; pans only), Shortest and Longest park (0-300 s and 10-300 s
-in 5 s steps, kept 5 s apart), Time scale (× 0.5-3 in 0.25 steps). Park scripts and Event views are stored with
-them but shown on the playlist's gear, as they apply to any views. Nothing plays differently until a build: the header says "changed · next build" in amber while a
+The New playlist pane holds the playlist-wide generator options the settings page sets, with its labels:
+Motion (Pans, Static), View order (Circuit, Random), Variants (1-10) and Include reverse (circuit only), Ride
+pans (Include, Exclude, Only; pans only), Shortest and Longest park (0-300 s and 10-300 s in 5 s steps, kept
+5 s apart), Time scale (× 0.5-3 in 0.25 steps). Park scripts and Event views are stored with them but shown in
+Settings, as they apply to any views. Nothing plays differently until a build: the header says "changed · next build" in amber while a
 value differs from the build, and the save marks the build pane "edits not built". Every build names the
 values it was made with (`generation` in the playlist, `generation_values`); the editor saves only what
 differs from them (`playlistProps.<sequence>.generation`, plugin keys), drops what a new build has made its
