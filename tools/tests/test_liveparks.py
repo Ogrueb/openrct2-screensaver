@@ -222,6 +222,31 @@ class LiveParks(unittest.TestCase):
         self.assertEqual([p["key"] for p in result["parks"]], ["a.park", "b.park", "c.park", "d.park"])
         self.assertTrue(all(p["name"] for p in result["parks"]))
 
+    def test_add_to_a_new_playlist_works(self):
+        """Add park on a playlist New playlist made (its parks as [[park]] tables)."""
+        os.remove(os.path.join(self.lib, "d.park"))
+        self.run_task(mksequence.live_new, self.lib, self.user)
+        made = self.task("new")
+        with open(made["playlist"], encoding="utf-8") as f:
+            self.assertIn("[[park]]", f.read())
+        self.park(os.path.join(self.lib, "d.park"))
+        code, _ = self.run_task(mksequence.live_add, made["sequence"], os.path.join(self.lib, "d.park"), self.user)
+        self.assertEqual(code, 0, self.task("add"))
+        self.assertEqual(len(self.read(made["playlist"])["park"]), 4)
+
+    def test_add_to_a_playlist_with_inline_parks_rewrites_them_as_tables(self):
+        """Playlists New playlist made before 2026-11-14 hold their parks as one inline list."""
+        with open(self.playlist, "w", encoding="utf-8") as f:
+            f.write('# Made from lib\n\nname = "My List"\npark = [\n    {file = "a.park"},\n    {file = "b.park", use = false},\n]\n\n[views]\nmotion = "pans"\n')
+        code, _ = self.run_task(mksequence.live_add, "My List", os.path.join(self.lib, "d.park"), self.user)
+        self.assertEqual(code, 0, self.task("add"))
+        data = self.read()
+        self.assertEqual([e["file"] for e in data["park"]], ["a.park", "b.park", "d.park"])
+        self.assertEqual((data["park"][1]["use"], data["views"]["motion"]), (False, "pans"))
+        with open(self.playlist, encoding="utf-8") as f:
+            text = f.read()
+        self.assertTrue(text.startswith("# Made from lib\n"), text)
+
     def test_a_second_new_playlist_of_the_folder_gets_its_own_name(self):
         self.run_task(mksequence.live_new, self.lib, self.user)
         self.run_task(mksequence.live_new, self.lib, self.user)

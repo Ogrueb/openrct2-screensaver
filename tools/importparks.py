@@ -30,7 +30,7 @@ a folder of several loose saves with no object files beside them (an RCT1/RCT2 P
 one park per save; any other folder is one download, unless --each says each of its entries is one. A download
 named again later on the command line (e.g. a folder of fixed re-releases) replaces the earlier.
 """
-import argparse, hashlib, json, os, re, shutil, struct, subprocess, sys, tempfile
+import argparse, hashlib, json, os, re, shutil, struct, subprocess, sys, tempfile, zipfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import parkinfo  # noqa: E402
@@ -320,6 +320,8 @@ def import_one(path, args, user_dir, library, previous):
         companions.append("%s/%s" % (stem, os.path.basename(name)))
     record["companions"] = companions
     record["authors"] = parkinfo.download_authors(folder, member, record.get("savedName"))
+    # A bare RCT save or scenario (no download around it) has no builders to find: noted, so builds don't warn
+    record["noAuthors"] = not record["authors"] and kind == "legacy" and os.path.isfile(path) and not zipfile.is_zipfile(path)
     record["names"] = [f[0] for f in archive.files]
     return record
 
@@ -368,6 +370,8 @@ def write_playlist(path, name, records):
         lines += ["file = %s" % toml_string(r["file"]), "name = %s" % toml_string(r["name"])]
         if r["authors"]:
             lines.append("author = %s" % toml_string(", ".join(r["authors"])))
+        elif r.get("noAuthors"):
+            lines.append("author = false  # an RCT save: no builders to credit")
         if r["companions"]:
             lines.append("companions = [%s]" % ", ".join(toml_string(c) for c in r["companions"]))
     with open(path, "w", encoding="utf-8", newline="\n") as f:

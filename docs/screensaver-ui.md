@@ -306,7 +306,11 @@ closed.
 - **Squares:** one per park in play order, as the generator lists them (`parkStates`, the playlist file's
   order with the game's edits baked in), so a rebuild of one park keeps its square's place; between builds
   they follow the playing order, so reordering parks moves the squares at once. The generator lists every
-  park first, and while a build runs a park not reached yet shows its state from the build before. Only a
+  park first, and while a build runs a park not reached yet shows its state from the build before. The
+  squares react the moment a task starts, before the generator writes anything (owner, 2026-11-14): Build
+  and play lights the first park that needs a build, Add park adds an empty lit square for the park being
+  added, and New playlist, Import, Duplicate and a switch to a playlist never built show one lit bar in place
+  of the playing playlist's squares (a playlist New made shows its own parks). Only a
   park edited since the last build (or the install) is dimmed, with "edited, needs a build" in its tooltip,
   and it dims as soon as the edit is saved; Playlist properties dim none, as no park needs building for
   them (owner's test, 2026-11-11). The plugin keeps the edits each build took in (`RCTScreensaver.builtEdits`;

@@ -642,16 +642,34 @@ export class Builder {
             const base = old && old.state !== "pending" && old.state !== "building" ? old : { key, name: p?.name, state: "built" as const };
             return { ...base, stale: dirty.has(key) };
         };
-        if (this.building) {
-            return (this.progress?.parkStates ?? []).map(p => p.state === "pending" && p.key ? carried(p.key, p) : p);
+        // The squares react the moment a task starts (owner, 2026-11-14), before the generator writes any
+        // progress: a park being added gets an empty square, lit; a playlist not known yet (New, Import, a
+        // switch to a playlist never built) one lit bar in place of the playing playlist's squares.
+        const adding: ParkState[] = this.task === "add" ? [{ name: "The park being added", state: "building" }] : [];
+        const unknown: ParkState[] = [{ name: this.task === "import" ? "The imported playlist" : "The new playlist", state: "building" }];
+        const states = this.progress?.parkStates;
+        if (this.building && states?.length) {
+            return states.map(p => p.state === "pending" && p.key ? carried(p.key, p) : p);
+        }
+        if (this.task === "new" || this.task === "import" || this.task === "copy" && !this.sequence) {
+            return unknown;
+        }
+        if (this.task === "open") {
+            // (a playlist New made lists its parks; another's squares come with the build's first progress)
+            const made = this.made?.sequence === this.sequence ? this.made?.parks : undefined;
+            return made?.length ? made.map((p, i) => ({ key: p.key, name: p.name, state: i ? "pending" as const : "building" as const })) : unknown;
         }
         const order = this.orderOf?.() ?? [];
-        if (!order.length) {
-            return this.last?.parkStates ?? [];
-        }
         // (a park the last build left out, as its file was missing, stays at the end)
         const shown = new Set(order);
-        return [...order.map(key => carried(key)), ...(this.last?.parkStates ?? []).filter(p => p.key && !shown.has(p.key))];
+        const idle: (ParkState & { stale?: boolean })[] = order.length ? [...order.map(key => carried(key)), ...(this.last?.parkStates ?? []).filter(p => p.key && !shown.has(p.key))]
+            : this.last?.parkStates ?? [];
+        if (this.task === "build" || this.task === "add") {
+            // Started, no progress yet: the first park needing a build is lit (the generator starts there)
+            const first = this.task === "build" ? Math.max(0, idle.findIndex(p => p.stale)) : -1;
+            return [...idle.map((p, i) => i === first ? { ...p, state: "building" as const, stale: false } : p), ...adding];
+        }
+        return idle;
     }
 
     /** The messages of the running build, else of the last one, newest first (the plugin's own lines

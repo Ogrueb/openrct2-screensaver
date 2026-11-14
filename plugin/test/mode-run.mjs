@@ -1304,6 +1304,9 @@ console.log("ok: Import and Export playlist through the file dialogs");
     assert.ok(!ed("parks"), "the list closes");
     assert.equal(ed("build.state").text, "adding the park");
     assert.equal(scene.get("rcts.ed.build.text")?.text, "Cancel park");
+    // The squares react at once (owner, 2026-11-14): the park being added gets one, lit
+    assert.equal(ed("sq.3")?.fill, "#6fcf8a", "an empty square, lit, for the park being added");
+    assert.notEqual(ed("sq.0").fill, "#6fcf8a", "the playlist's own squares as they were");
     mode.files.set("task-add.json", JSON.stringify({ taskVersion: 1, task: "add", started: now, ok: false, finished: now,
         sequence: playlist.sequence, error: "a.park is in the playlist already",
         messages: [{ level: "error", text: "Adding the park failed: a.park is in the playlist already" }] }));
@@ -1330,6 +1333,7 @@ console.log("ok: Import and Export playlist through the file dialogs");
     assert.deepEqual(mode.builds, ["Evening"], "a click builds the other playlist");
     assert.equal(ed("build.state").text, "building");
     assert.equal(scene.get("rcts.ed.build.text")?.text, "Cancel switch");
+    assert.ok(ed("sq.0")?.fill === "#6fcf8a" && !ed("sq.1"), "the playing playlist's squares give way to one lit bar");
     mode.files.set("build-Evening.json", JSON.stringify({ buildVersion: 1, sequence: "Evening", started: now, ok: null, park: 1, parks: 2,
         parkName: "Harbor", parkStates: [{ key: "h.park", name: "Harbor", state: "building" }, { state: "pending" }] }));
     tick(6);
@@ -1354,6 +1358,7 @@ console.log("ok: Import and Export playlist through the file dialogs");
     edClick("parks.new"); tick(2);
     assert.equal(mode.made, 1);
     assert.equal(ed("build.state").text, "making the playlist");
+    assert.ok(ed("sq.0")?.fill === "#6fcf8a" && !ed("sq.1"), "New: one lit bar in place of the playing playlist's squares");
     assert.ok(ed("parks.new"), "the list stays open");
     // New: the park list opens on the new playlist's parks, to tick and order before its first build
     // (owner, 2026-11-13).

@@ -2280,7 +2280,9 @@ def resolve_park(entry, index, base_dir, defaults, layout, edits=None, library=N
     # The builders for the caption's byline: the entry's (written at import or scan), else checked against the
     # New Element Designs catalogue and the download's name now (owner, 2026-11-03).
     author, author_note = entry.get("author"), None
-    if not author:
+    if author is False:  # (none to credit: an RCT save, as importparks.py marks it)
+        author = None
+    elif not author:
         found = parkinfo.download_authors(path, member, saved_name)
         if found:
             author = ", ".join(found)
@@ -3848,7 +3850,18 @@ def add_park_entry(playlist_path, park_path):
     block = "[[park]]\nfile = %s\n" % toml_string(new["file"])
     if entry.get("author"):
         block += "author = %s\n" % toml_string(entry["author"])
-    text = raw.rstrip("\n") + "\n\n" + block if raw.strip() else block
+        new["author"] = entry["author"]
+    if data.get("park") and not re.search(r"(?m)^\s*\[\[\s*park\s*\]\]", raw):
+        # Parks written as one inline list (New playlist did that before 2026-11-14): TOML can't extend it
+        # with a [[park]], so the file is written anew with its parks as tables, its header comment kept
+        import tomlwrite
+        changed = json.loads(json.dumps(data))
+        changed["park"].append(new)
+        header = "\n".join(line[1:].lstrip(" ") if line.startswith("#") else "" for line in
+                           re.match(r"(?:[ \t]*#[^\n]*\n)*", raw).group(0).splitlines())
+        text = tomlwrite.dumps(changed, header.strip("\n"))
+    else:
+        text = raw.rstrip("\n") + "\n\n" + block if raw.strip() else block
     write_playlist_text(playlist_path, text)
     return "Added %s to %s" % (os.path.basename(park_path), os.path.basename(playlist_path)), reason
 

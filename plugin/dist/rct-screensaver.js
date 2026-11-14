@@ -678,15 +678,27 @@
         const base = old && old.state !== "pending" && old.state !== "building" ? old : { key, name: p?.name, state: "built" };
         return { ...base, stale: dirty.has(key) };
       };
-      if (this.building) {
-        return (this.progress?.parkStates ?? []).map((p) => p.state === "pending" && p.key ? carried(p.key, p) : p);
+      const adding = this.task === "add" ? [{ name: "The park being added", state: "building" }] : [];
+      const unknown = [{ name: this.task === "import" ? "The imported playlist" : "The new playlist", state: "building" }];
+      const states = this.progress?.parkStates;
+      if (this.building && states?.length) {
+        return states.map((p) => p.state === "pending" && p.key ? carried(p.key, p) : p);
+      }
+      if (this.task === "new" || this.task === "import" || this.task === "copy" && !this.sequence) {
+        return unknown;
+      }
+      if (this.task === "open") {
+        const made = this.made?.sequence === this.sequence ? this.made?.parks : void 0;
+        return made?.length ? made.map((p, i) => ({ key: p.key, name: p.name, state: i ? "pending" : "building" })) : unknown;
       }
       const order = this.orderOf?.() ?? [];
-      if (!order.length) {
-        return this.last?.parkStates ?? [];
-      }
       const shown = new Set(order);
-      return [...order.map((key) => carried(key)), ...(this.last?.parkStates ?? []).filter((p) => p.key && !shown.has(p.key))];
+      const idle = order.length ? [...order.map((key) => carried(key)), ...(this.last?.parkStates ?? []).filter((p) => p.key && !shown.has(p.key))] : this.last?.parkStates ?? [];
+      if (this.task === "build" || this.task === "add") {
+        const first = this.task === "build" ? Math.max(0, idle.findIndex((p) => p.stale)) : -1;
+        return [...idle.map((p, i) => i === first ? { ...p, state: "building", stale: false } : p), ...adding];
+      }
+      return idle;
     }
     /** The messages of the running build, else of the last one, newest first (the plugin's own lines
      *  about the last task on top, an import's unpacking lines last). */
