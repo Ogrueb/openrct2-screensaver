@@ -8,7 +8,7 @@ import { measureLoaded } from "./measure";
 import { Pan, PanChanges, Pose, panTolerance } from "./pan";
 import { DESIGN_SCREEN, NO_SCALING, Scaling, Screen, scaleTolerance, scaleViews, scalingFor, screenOf } from "./scale";
 import {
-    Cue, Edits, GENERATION_DEFAULTS, Generation, ParkEntry, Playlist, PlaylistProps, Settings, View, Visits, isPinned, placeCuts, loadEdits, loadPlaylistProps, loadVisits,
+    Cue, Edits, GENERATION_DEFAULTS, Generation, ParkEntry, ParkSettings, ParkSettingsChange, ParkValues, Playlist, PlaylistProps, Settings, View, Visits, isPinned, placeCuts, loadEdits, loadPlaylistProps, loadVisits,
     saveEdits, savePlaylistProps, saveSettings, saveVisits,
 } from "./storage";
 
@@ -185,6 +185,7 @@ export class Player {
         const current = this.running && this.parkOrder.length ? keyOf(this.currentPark()) : undefined;
         this.playlist = playlist;
         this.pruneGeneration();
+        this.pruneParkSettings();
         if (!this.running) {
             return;
         }
@@ -674,7 +675,7 @@ export class Player {
     }
 
     /** The playlist's own values for the editor's Playlist properties, as built. */
-    get playlistDefaults(): Required<Omit<PlaylistProps, "order" | "use" | "generation">> {
+    get playlistDefaults(): Required<Omit<PlaylistProps, "order" | "use" | "generation" | "parks">> {
         const p = this.playlist;
         return {
             inertia: p.inertia ?? this.settings.inertia,
@@ -695,7 +696,7 @@ export class Player {
     }
 
     /** The Playlist properties in force: the editor's over the playlist's own. */
-    get playlistProps(): Required<Omit<PlaylistProps, "order" | "use" | "generation">> {
+    get playlistProps(): Required<Omit<PlaylistProps, "order" | "use" | "generation" | "parks">> {
         const d = this.playlistDefaults;
         const p = this.props;
         return {
@@ -775,6 +776,127 @@ export class Player {
         }
         savePlaylistProps(this.playlist.sequence, this.savedProps);
         log(`generation ${key} = ${value}`);
+    }
+
+    /** The current park's settings as built (undefined: a build before builds listed them). */
+    get parkSettingsBuilt(): ParkSettings | undefined {
+        return this.currentPark()?.settings;
+    }
+
+    /** The current park's settings as the editor shows them: its changes over the build's, a change back to the
+     *  playlist's showing the playlist's value. */
+    get parkSettings(): ParkValues | undefined {
+        const park = this.currentPark();
+        const built = park?.settings;
+        if (!park || !built) {
+            return undefined;
+        }
+        const set = this.props.parks?.[park.key ?? park.fileName]?.set ?? {};
+        const out = { ...built } as ParkValues;
+        const defaults = this.playlist.parkDefaults;
+        for (const [k, v] of Object.entries(set) as [keyof ParkValues, ParkValues[keyof ParkValues] | null][]) {
+            (out as unknown as Record<string, unknown>)[k] = v === null ? defaults?.[k] ?? built[k] : v;
+        }
+        return out;
+    }
+
+    /** The current park's settings changes (null: back to the playlist's). */
+    get parkSettingsSet(): ParkSettingsChange["set"] {
+        const park = this.currentPark();
+        return (park && this.props.parks?.[park.key ?? park.fileName]?.set) ?? {};
+    }
+
+    /** The current park's settings differ from its build: the next build applies them. */
+    get parkSettingsChanged(): boolean {
+        const park = this.currentPark();
+        return !!park && Object.keys(this.props.parks?.[park.key ?? park.fileName]?.set ?? {}).length > 0;
+    }
+
+    /** Changes one of the current park's settings, saved at once (and so in the live file; the next build's
+     *  bake writes it into the park's profile). Back at the build's value it is no change. */
+    setParkSetting<K extends keyof ParkValues>(key: K, value: ParkValues[K]): void {
+        const park = this.currentPark();
+        const built = park?.settings;
+        if (!park || !built || built.locked.includes(key)) {
+            return;
+        }
+        const pk = park.key ?? park.fileName;
+        const change = this.parkChange(pk, park, built);
+        const back = built[key] === value;
+        if (back) {
+            delete change.set[key];
+        } else {
+            change.set[key] = value;
+        }
+        this.saveParkChange(pk, change);
+        log(`park setting ${key} = ${value} (${park.name})`);
+    }
+
+    /** The current park's settings back to the playlist's: its profile's keys go at the next build. */
+    resetParkSettings(): void {
+        const park = this.currentPark();
+        const built = park?.settings;
+        if (!park || !built) {
+            return;
+        }
+        const pk = park.key ?? park.fileName;
+        const change = this.parkChange(pk, park, built);
+        change.set = {};
+        for (const k of built.adjusted.filter(k => !built.locked.includes(k))) {
+            change.set[k] = null;
+        }
+        this.saveParkChange(pk, change);
+        log(`park settings back to the playlist's (${park.name})`);
+    }
+
+    private parkChange(pk: string, park: ParkEntry, built: ParkSettings): ParkSettingsChange {
+        const was = this.savedProps.parks?.[pk];
+        return { name: park.name, profile: built.profile, savedName: built.savedName, mapSize: built.mapSize, set: { ...(was?.set ?? {}) } };
+    }
+
+    private saveParkChange(pk: string, change: ParkSettingsChange): void {
+        const parks = { ...(this.savedProps.parks ?? {}) };
+        if (Object.keys(change.set).length) {
+            parks[pk] = change;
+        } else {
+            delete parks[pk];
+        }
+        if (Object.keys(parks).length) {
+            this.props.parks = parks;
+            this.savedProps.parks = parks;
+        } else {
+            delete this.props.parks;
+            delete this.savedProps.parks;
+        }
+        savePlaylistProps(this.playlist.sequence, this.savedProps);
+    }
+
+    /** Drops the park settings changes a new build has made its own. */
+    private pruneParkSettings(): void {
+        const parks = this.savedProps.parks;
+        if (!parks) {
+            return;
+        }
+        const left: Record<string, ParkSettingsChange> = {};
+        for (const [pk, change] of Object.entries(parks)) {
+            const built = this.playlist.parks.find(p => (p.key ?? p.fileName) === pk)?.settings;
+            if (!built) {
+                left[pk] = change; // (left out of this build: kept for the next)
+                continue;
+            }
+            const set = Object.fromEntries(Object.entries(change.set).filter(([k, v]) =>
+                v === null ? built.adjusted.includes(k as keyof ParkValues) : built[k as keyof ParkValues] !== v));
+            if (Object.keys(set).length) {
+                left[pk] = { ...change, profile: built.profile, set };
+            }
+        }
+        if (Object.keys(left).length) {
+            this.savedProps.parks = left;
+            this.props.parks = { ...left };
+        } else {
+            delete this.savedProps.parks;
+            delete this.props.parks;
+        }
     }
 
     /** The Playlist properties differ from what is saved in the game's storage. */

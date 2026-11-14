@@ -16,7 +16,7 @@ import type { Editor, EditorView, RestorePoint } from "../editor";
 import { EDITOR_COLUMNS, EVENT_COLUMNS } from "../editor";
 import { modeSettings } from "../mode";
 import type { MouseEvent, Overlay, ScreensaverApi } from "../mode";
-import type { Generation, PlaylistProps } from "../storage";
+import type { Generation, ParkValues, PlaylistProps } from "../storage";
 import { saveOtherPlaylistProps } from "../storage";
 import { Layer, Rect, Scene, backing, bevel, button, contains, iconPath, iconPixels, label, measure, tooltip } from "./kit";
 import { CRAWL, EDITOR, THEME, TIMING, Z } from "./theme";
@@ -57,6 +57,29 @@ const GEN_STEPS: Record<GenStep, { step: number; min: number; max: number; text:
     parkCap: { step: 5, min: 10, max: 300, text: v => `${v} s` },
     timeScale: { step: 0.25, min: 0.5, max: 3, text: v => `× ${v.toFixed(2)}` },
 };
+
+/** The park settings (the views pane's settings button): the switches' choices, and the steppers' values. */
+type ParkSeg = "scripts" | "companionPans" | "events" | "towers" | "rides" | "returnPan";
+const OFF_ON = (off: string, on: string): Choice[] => [["Off", false, off], ["On", true, on]];
+const PARK_CHOICES: Record<ParkSeg, Choice[]> = {
+    scripts: OFF_ON("The park's own scripts stay off", "Run the park's own scripts (companion plugins)"),
+    companionPans: [["Run", "run", "Its scripts run while the camera pans"], ["Pause", "pause", "Its scripts pause while the camera pans"]],
+    events: OFF_ON("No views on its scripted events", "Views on its scripted animations and shows"),
+    towers: OFF_ON("No tower views", "Views on its tall structures"),
+    rides: OFF_ON("No ride pans", "A pan along a ride's track"),
+    returnPan: OFF_ON("The last view cuts to the next park", "The last view pans back to the first"),
+};
+type ParkStep = "count" | "zoomMin" | "zoomMax" | "pan" | "panTolerance" | "parkCap";
+const PAN_STEPS: (number | "auto")[] = ["auto", 0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1];
+const PARK_STEPS: Record<ParkStep, { label: string; tip: string; text: (v: number | "auto") => string }> = {
+    count: { label: "Most views", tip: "Most views in the park, the overview included", text: v => `${v}` },
+    zoomMin: { label: "Closest zoom", tip: "The closest close-up zoom (-2 is closest)", text: v => `${v}` },
+    zoomMax: { label: "Widest zoom", tip: "The widest close-up zoom", text: v => `${v}` },
+    pan: { label: "Pan share", tip: "Share of each hold spent panning (auto: from the pan's length)", text: v => (v === "auto" ? "auto" : `${Math.round(v * 100)}%`) },
+    panTolerance: { label: "Pan speed", tip: "How fast pans may move, px/s at zoom -2: lower is smoother but drops views", text: v => `${v}` },
+    parkCap: { label: "Longest park", tip: "Longest time in the park: the lowest-scoring views drop to fit", text: v => `${v} s` },
+};
+const LOCKED_TIP = "Set in the playlist's own entry for this park";
 
 /** A list that scrolls: its first row shown, and the thumb's drag. */
 class Scroll {
@@ -155,6 +178,7 @@ export class EditorPanel implements EditorView {
     private picked: string | undefined; // the restore point highlighted
     private propsOpen = true; // the Playlist properties unfolded
     private genOpen = false; // and their Generation section
+    private settingsOpen = false; // the views pane shows the park's settings in place of its views
     private clipShown = false; // a Copy/Paste note is on its button (it goes after a moment)
     private buildShown = ""; // the build pane's state as last drawn (buildSignature)
     private buildOpen: boolean | undefined; // the build pane unfolded by hand (undefined: when there is room)
@@ -567,6 +591,25 @@ export class EditorPanel implements EditorView {
             }
             return;
         }
+        if (id.startsWith("pseg.")) {
+            const [, key, i] = id.split(".");
+            const choice = PARK_CHOICES[key as ParkSeg]?.[Number(i)];
+            if (choice) {
+                e.playback.setParkSetting(key as ParkSeg, choice[1] as never);
+            }
+            return;
+        }
+        if (id.startsWith("pstep.")) {
+            const [, key, sign] = id.split(".");
+            const v = e.playback.parkSettings;
+            if (v) {
+                const next = parkStep(key as ParkStep, v, sign === "more" ? 1 : -1);
+                if (next !== undefined) {
+                    e.playback.setParkSetting(key as ParkStep, next as never);
+                }
+            }
+            return;
+        }
         if (id.startsWith("gseg.")) {
             const [, key, i] = id.split(".");
             const choice = GEN_CHOICES[key as keyof Generation]?.[Number(i)];
@@ -626,6 +669,8 @@ export class EditorPanel implements EditorView {
             case "boxHead": this.boxOpen = this.boxFolded(); break;
             case "propsHead": this.propsOpen = !this.propsOpen; break;
             case "genHead": this.genOpen = !this.genOpen; break;
+            case "parkSet": this.settingsOpen = !this.settingsOpen; break;
+            case "parkReset": e.playback.resetParkSettings(); break;
             case "buildHead": this.buildOpen = this.buildFolded(); break;
             case "build": this.toggleBuild(); break;
             case "import": this.bundle("import"); break;
@@ -758,7 +803,14 @@ export class EditorPanel implements EditorView {
         // (no Close button: E and the bar's edit button close the editor; owner, 2026-11-12)
         const nextX = x0 + inner - t;
         this.place("nextPark", { x: nextX, y, width: t, height: t }, "Next park", !many || e.playback.isLoading);
-        const field = this.place("field", { x: x0 + t + s.gap, y, width: nextX - s.gap - (x0 + t + s.gap), height: t },
+        const setX = nextX - s.gap - t;
+        const hasSettings = e.playback.parkSettings !== undefined;
+        this.place("parkSet", { x: setX, y, width: t, height: t }, !hasSettings ? "Park settings: build the playlist first"
+            : this.settingsOpen ? "Back to the park's views" : "Park settings: views, zoom, pans, scripts", !hasSettings);
+        if (!hasSettings) {
+            this.settingsOpen = false;
+        }
+        const field = this.place("field", { x: x0 + t + s.gap, y, width: setX - s.gap - (x0 + t + s.gap), height: t },
             many ? "Hold: jump to a park. Click: reorder" : undefined);
         y += t + s.gap;
         // The views list: a header row, then up to visibleRows rows, a scroll bar past that.
@@ -784,7 +836,7 @@ export class EditorPanel implements EditorView {
         this.listRect = { x: x0, y, width: inner - bar, height: listH };
         this.views.layout({ x: x0 + inner - s.scrollBar, y: y + s.rowHeight, width: s.scrollBar, height: s.visibleRows * s.rowHeight }, route.length, s.visibleRows);
         let bottom = y + listH;
-        if (events.length) {
+        if (events.length && !this.settingsOpen) {
             const shown = Math.min(events.length, s.eventRows);
             const top = bottom + s.eventsGap + s.rowHeight; // under the list's title
             const ebar = events.length > s.eventRows ? s.scrollBar + 2 : 0;
@@ -839,6 +891,7 @@ export class EditorPanel implements EditorView {
         // Park row
         button(scene, "prevPark", this.boxes.get("prevPark")!, this.state("prevPark"), { icon: "prev-view", iconSize: s.toolIcon }, overlay);
         button(scene, "nextPark", this.boxes.get("nextPark")!, this.state("nextPark"), { icon: "next-view", iconSize: s.toolIcon }, overlay);
+        button(scene, "parkSet", this.boxes.get("parkSet")!, this.state("parkSet", this.settingsOpen), { icon: "settings", iconSize: s.toolIcon }, overlay);
         const fieldOpen = this.dropdown !== undefined && this.playlists === undefined;
         scene.set("field", { type: "rect", ...field, fill: fieldOpen ? THEME.faceDown : this.hit() === "field" ? THEME.faceHover : THEME.editorList, z: Z.face });
         bevel(scene, "field", field, THEME.bevelDark, THEME.bevelLight, THEME.bevel, Z.bevel);
@@ -855,7 +908,11 @@ export class EditorPanel implements EditorView {
         if (count) {
             label(scene, "text.count", count, { x: field.x + field.width - 6 - countW, y: field.y, width: 0, height: field.height }, s.textSize, overlay, true);
         }
-        this.viewsList(e, scene, rows, route);
+        if (this.settingsOpen) {
+            this.parkSettings(e, scene);
+        } else {
+            this.viewsList(e, scene, rows, route);
+        }
         if (this.eventsRect) {
             this.eventsList(e, scene, events);
         }
@@ -863,6 +920,90 @@ export class EditorPanel implements EditorView {
             this.parkList(e, scene);
         } else {
             this.parksRect = undefined;
+        }
+    }
+
+    /** The park's settings in place of its views (the settings page's park switches and parameters): saved as
+     *  they change into the park's profile at the next build; in two columns, a header row with Reset. */
+    private parkSettings(e: Editor, scene: Scene): void {
+        const s = EDITOR;
+        const overlay = this.mode.overlay;
+        const area = { ...this.listRect, width: this.paneViews.width - 2 * s.pad };
+        const v = e.playback.parkSettings!;
+        const built = e.playback.parkSettingsBuilt!;
+        const changed = e.playback.parkSettingsChanged;
+        const set = e.playback.parkSettingsSet;
+        const rowH = 26;
+        // Header: what the settings are and where they go, and Reset
+        this.sectionLabel(scene, "pset.head", "PARK SETTINGS", area.x, area.y + 5);
+        const resetW = 92;
+        const reset = this.place("parkReset", { x: area.x + area.width - resetW, y: area.y, width: resetW, height: s.segHeight },
+            "Back to the playlist's values (the park's profile changes go at the next build)", !built.adjusted.length && !changed);
+        button(scene, "parkReset", reset, this.state("parkReset"), { text: "Playlist's", textSize: 13 }, overlay);
+        const note = changed ? "changed · next build" : built.profile ? `profile ${built.profile}` : "the playlist's values";
+        const nw = measure(overlay, note, 12).width;
+        label(scene, "pset.note", note, { x: reset.x - 10 - nw, y: area.y, width: 0, height: s.segHeight }, 12, overlay);
+        scene.set("pset.note", { ...scene.get("pset.note")!, colour: changed ? THEME.pending : THEME.textDim });
+        const colW = Math.floor((area.width - 16) / 2);
+        const cols = [area.x, area.x + colW + 16];
+        const ys = [area.y + rowH + 4, area.y + rowH + 4];
+        const rowLabel = (c: number, key: keyof ParkValues, text: string) => {
+            const id = `pset.label.${key}`;
+            label(scene, id, text, { x: cols[c], y: ys[c], width: 0, height: rowH }, 13, overlay);
+            const colour = built.locked.includes(key) ? THEME.textDim : key in set ? THEME.pending : undefined;
+            if (colour) {
+                scene.set(id, { ...scene.get(id)!, colour });
+            }
+        };
+        const segments = (c: number, key: ParkSeg, text: string) => {
+            rowLabel(c, key, text);
+            const choices = PARK_CHOICES[key];
+            const widths = choices.map(([t]) => Math.ceil(measure(overlay, t, 12, true).width) + 16);
+            let sx = cols[c] + colW - widths.reduce((a, w) => a + w, 0) - s.gap * (choices.length - 1);
+            const sy = ys[c] + Math.round((rowH - 22) / 2);
+            const locked = built.locked.includes(key);
+            choices.forEach(([t, value, tip], i) => {
+                const id = `pseg.${key}.${i}`;
+                const r = this.place(id, { x: sx, y: sy, width: widths[i], height: 22 }, locked ? LOCKED_TIP : tip, locked);
+                button(scene, id, r, this.state(id, v[key] === value), { text: t, textSize: 12 }, overlay);
+                sx += widths[i] + s.gap;
+            });
+            ys[c] += rowH;
+        };
+        const stepper = (c: number, key: ParkStep) => {
+            const st = PARK_STEPS[key];
+            rowLabel(c, key, st.label);
+            const w = 22;
+            const sy = ys[c] + Math.round((rowH - w) / 2);
+            const locked = built.locked.includes(key);
+            const tip = locked ? LOCKED_TIP : st.tip;
+            const more = this.place(`pstep.${key}.more`, { x: cols[c] + colW - w, y: sy, width: w, height: w }, tip,
+                locked || parkStep(key, v, 1) === undefined);
+            const value = { x: more.x - s.gap - 52, y: sy, width: 52, height: w };
+            const less = this.place(`pstep.${key}.less`, { x: value.x - s.gap - w, y: sy, width: w, height: w }, tip,
+                locked || parkStep(key, v, -1) === undefined);
+            button(scene, `pstep.${key}.less`, less, this.state(`pstep.${key}.less`), { icon: "less", iconSize: 16 }, overlay);
+            button(scene, `pstep.${key}.more`, more, this.state(`pstep.${key}.more`), { icon: "add", iconSize: 16 }, overlay);
+            scene.set(`pstepv.${key}`, { type: "rect", ...value, fill: THEME.editorList, z: Z.face });
+            const vid = `pstept.${key}`;
+            label(scene, vid, st.text(v[key]), { x: value.x + value.width / 2, y: sy, width: 0, height: w }, 13, overlay);
+            scene.set(vid, { ...scene.get(vid)!, align: "center" });
+            ys[c] += rowH;
+        };
+        if (v.scripts !== undefined) {
+            segments(0, "scripts", "Park scripts");
+            if (v.scripts) {
+                segments(0, "companionPans", "Scripts in pans");
+            }
+        }
+        if (v.events !== undefined) {
+            segments(0, "events", "Event views");
+        }
+        segments(0, "towers", "Tower views");
+        segments(0, "rides", "Ride pans");
+        segments(0, "returnPan", "Return pan");
+        for (const key of ["count", "zoomMin", "zoomMax", "pan", "panTolerance", "parkCap"] as ParkStep[]) {
+            stepper(1, key);
         }
     }
 
@@ -1887,4 +2028,18 @@ function columnStarts(width: number, rows: string[][], overlay: Overlay, headers
         starts.push(starts[starts.length - 1] + Math.round(w));
     }
     return starts;
+}
+
+/** A park setting's stepper value one step up or down, or undefined at its end. */
+function parkStep(key: ParkStep, v: ParkValues, dir: number): number | "auto" | undefined {
+    if (key === "pan") {
+        const i = PAN_STEPS.findIndex(p => p === v.pan || (typeof p === "number" && typeof v.pan === "number" && Math.abs(p - v.pan) < 0.05));
+        const at = i < 0 ? 0 : i;
+        return PAN_STEPS[at + dir];
+    }
+    const cur = v[key] as number;
+    const [step, min, max] = key === "count" ? [1, 1, 30] : key === "zoomMin" ? [1, -2, v.zoomMax] : key === "zoomMax" ? [1, v.zoomMin, 3]
+        : key === "panTolerance" ? [50, 100, 1000] : [10, 30, 300];
+    const next = Math.round((cur + dir * step) * 100) / 100;
+    return next < min || next > max ? undefined : next;
 }

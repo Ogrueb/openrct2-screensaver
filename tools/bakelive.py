@@ -48,6 +48,8 @@ def bake(playlist_path, live, user_dir=None):
     changed = mksequence.write_props(playlist_path, live["props"])
     if changed:
         lines.append("%s -> %s (the old file in %s.bak)" % (", ".join(changed), playlist_path, playlist_path))
+    for park in mksequence.write_park_settings(playlist_path, live["props"]):
+        lines.append("park settings of %s -> its profile in the user folder" % park)
     livefile.mark_baked(live, user_dir)
     return lines or ["nothing to change: the playlist files already hold these edits"]
 

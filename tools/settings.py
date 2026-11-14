@@ -411,84 +411,12 @@ def inside(path, folder):
 
 
 def change_profile(park, changes):
-    """Applies the page's changes to a park's profile, creating one when it has none:
+    """Applies the page's changes to a park's profile, creating one when it has none (profiles.change):
     changes = {views: {k: v|None}, extras: {...}, companions: False|None,
     animation: {name: {off, hold}|None}, show: {name: {view, path, hold}}}; None deletes a key."""
-    stem = park.get("profile")
-    created = False
-    if stem:
-        path = profile_path(stem)
-        if not os.path.exists(path):  # the repository's profile: its copy in the user folder replaces it
-            os.makedirs(USER_PARKS, exist_ok=True)
-            shutil.copy2(profiles.load()[stem]["path"], path)
-            created = True
-        with open(path, "rb") as f:
-            data = tomllib.load(f)
-    else:
-        stem = mksequence.slug(park["savedName"]) or "park"
-        taken = set(profiles.load())
-        n = 2
-        while stem in taken:
-            stem, n = "%s-%d" % (mksequence.slug(park["savedName"]), n), n + 1
-        path = profile_path(stem)
-        created = True
-        data = {"match": {"name": park["savedName"], "map": list(park["mapSize"])}}
-    if "companions" in changes:
-        if changes["companions"] is False:
-            data["companions"] = False
-        else:
-            data.pop("companions", None)
-    for section in ("views", "extras"):
-        for k, v in (changes.get(section) or {}).items():
-            table = data.setdefault(section, {})
-            if v is None:
-                table.pop(k, None)
-            else:
-                table[k] = v
-            if not table:
-                data.pop(section)
-    for name, change in (changes.get("animation") or {}).items():
-        table = data.setdefault("animation", {})
-        entry = {**table.get(name, {}), **{k: v for k, v in (change or {}).items() if v is not None}}
-        for k, v in (change or {}).items():
-            if v is None:
-                entry.pop(k, None)
-        if entry and change is not None:
-            table[name] = entry
-        else:
-            table.pop(name, None)
-        if not table:
-            data.pop("animation")
-    for name, change in (changes.get("show") or {}).items():
-        shows = data.get("show", {})
-        if name not in shows:
-            raise ValueError("show %r is not defined in parks/%s.toml" % (name, stem))
-        for k, v in change.items():
-            if v is None:
-                shows[name].pop(k, None)
-            else:
-                shows[name][k] = v
-    # Profiles must still load (and keep their spots and shows valid)
-    order = ["companions", "match", "views", "extras", "companion", "spot", "animation", "show"]
-    data = {k: data[k] for k in sorted(data, key=lambda k: order.index(k) if k in order else len(order))}
-    write_toml(path, data, in_place=True)
     try:
-        loaded = profiles.load()
-        companions.SPOTS, companions.SHOWS = profiles.definitions(loaded)
-    except ValueError:
-        backups = sorted(f for f in os.listdir(BACKUPS) if f.startswith(os.path.basename(path) + ".")) \
-            if os.path.isdir(BACKUPS) else []
-        if created or not backups:
-            os.remove(path)
-        else:
-            shutil.copy2(os.path.join(BACKUPS, backups[-1]), path)
-        raise
-    # A copy that no longer differs from what ships (or a new one left with only its [match]) is
-    # removed, so the user folder holds only real changes and later fixes to the shipped profile apply
-    shipped = profiles.load(user=False).get(stem)
-    plain = lambda p: {k: v for k, v in p.items() if k not in ("id", "path", "source")}
-    if (shipped and plain(shipped) == data) or (not shipped and set(data) == {"match"}):
-        os.remove(path)
+        profiles.change(park, changes, lambda path, data: write_toml(path, data, in_place=True), USER_PARKS)
+    finally:
         companions.SPOTS, companions.SHOWS = profiles.definitions(profiles.load())
     return None
 

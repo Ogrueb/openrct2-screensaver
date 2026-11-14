@@ -114,8 +114,44 @@ export interface Bounds {
     zm?: number; // and world height
 }
 
+/** A park's settings as the view editor shows them (the settings page's park switches and parameters),
+ *  kept in the park's profile (parks/<stem>.toml in the user folder): the values in force at the build. */
+export interface ParkValues {
+    scripts?: boolean; // the park's own scripts run (absent: it has none)
+    events?: boolean; // its event views (absent: it has none)
+    towers: boolean;
+    rides: boolean;
+    count: number; // most views, overview included
+    zoomMin: number; // closest close-up zoom
+    zoomMax: number; // widest
+    pan: number | "auto"; // pan share of each hold
+    panTolerance: number; // px/s at zoom -2
+    parkCap: number; // longest park time, s
+    returnPan: boolean;
+    companionPans: "run" | "pause";
+}
+
+export interface ParkSettings extends ParkValues {
+    profile: string | null; // the profile's stem (null: none yet; the bake makes one)
+    savedName: string; // and how a new one finds the park
+    mapSize: [number, number];
+    adjusted: (keyof ParkValues)[]; // set by the profile
+    locked: (keyof ParkValues)[]; // set by the playlist's own entry for the park: a profile change would not show
+}
+
+/** The view editor's changes to a park's settings, by park key: `set` holds the changed values (null: back to
+ *  the playlist's), the rest says which profile they go into at the next build's bake. */
+export interface ParkSettingsChange {
+    name: string;
+    profile: string | null;
+    savedName: string;
+    mapSize: [number, number];
+    set: Partial<Record<keyof ParkValues, ParkValues[keyof ParkValues] | null>>;
+}
+
 export interface ParkEntry {
     key?: string; // stable id of the park in the playlist (file, plus member), for edits
+    settings?: ParkSettings; // the view editor's park settings, as built
     name: string;
     author?: string; // credit, from the playlist (not shown yet)
     fileName: string;
@@ -147,6 +183,7 @@ export interface Playlist {
     source?: string; // the playlist file it was installed from (mksequence.py --install), for the live file
     parks: ParkEntry[];
     generation?: Generation; // the playlist-wide generator options it was built with (the editor's Generation section)
+    parkDefaults?: ParkValues; // the park settings' playlist values (a park's without its profile)
     unused?: { key: string; name: string }[]; // parks ticked off (use = false): listed in the editor to tick on again
 }
 
@@ -165,6 +202,7 @@ export interface PlaylistProps {
     titleMusic?: "ride" | "theme" | "keep";
     titles?: Titles | null;
     generation?: Partial<Generation>; // the Generation section's changes: they take effect at the next build
+    parks?: Record<string, ParkSettingsChange>; // park settings changes by park key: into the profiles at the next build
 }
 
 /** The playlist-wide generator options (mksequence.py GENERATION; the settings page sets the same ones),

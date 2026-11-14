@@ -102,7 +102,8 @@ def summary(live):
     props = live.get("props", {})
     return {"saved": live.get("saved"), "views": sorted(k for k, v in edits.items() if isinstance(v, dict) and not v.get("reset")),
             "resets": sorted(k for k, v in edits.items() if isinstance(v, dict) and v.get("reset")),
-            "props": sorted(k for k in props if k not in ("order", "use")), "order": isinstance(props.get("order"), list),
+            "props": sorted(k for k in props if k not in ("order", "use", "parks")), "order": isinstance(props.get("order"), list),
+            "parks": sorted(props["parks"]) if isinstance(props.get("parks"), dict) else [],
             "use": isinstance(props.get("use"), dict) and bool(props["use"])}
 
 

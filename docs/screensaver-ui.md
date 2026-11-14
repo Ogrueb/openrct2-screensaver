@@ -471,8 +471,31 @@ stock sequence with nothing on top, and every build button failed after a click 
   on a click), the running task's line, and "Esc leaves the screensaver". No controls bar until a playlist
   plays; the build that finishes starts the player and the panel goes.
 
-Still open from the handoff: per-park settings in the views pane, and `.sv6` saves and loose objects through
-New playlist and Add park (the settings page's folder scan still does those).
+Still open from the handoff: `.sv6` saves and loose objects through New playlist and Add park (the settings
+page's folder scan still does those).
+
+### Park settings (2026-11-14)
+
+The views pane's park row has a settings button (between the park field and Next park): it shows the park's
+settings in place of its views, the settings page's park switches and Edit parameters in two columns: Park
+scripts and Scripts in pans (for a park with scripts), Event views (a park with event views), Tower views, Ride
+pans, Return pan; Most views, Closest and Widest zoom, Pan share (auto, 0-100%), Pan speed (`pan_tolerance`),
+Longest park. As on the settings page they belong to the park, not the playlist: the next build's bake writes
+them into the park's profile in the user folder (`profiles.change`, which the settings page now shares; a park
+without one gets a new profile matched by its saved name and map size; a copy left equal to the shipped profile,
+or a new one left with only its match, is removed), so they apply in every playlist that plays the park. The
+header says "profile <stem>", "the playlist's values" or, in amber, "changed · next build"; the Playlist's
+button sets every key the profile sets back to the playlist's (null in the change, the key removed at the bake).
+A key the playlist's own `[[park]]` entry sets is gray with "Set in the playlist's own entry for this park", as
+the entry wins over any profile.
+
+Every build lists each park's settings (`settings` on the park: the values in force, `profile`, `savedName`,
+`mapSize`, `adjusted` keys the profile sets, `locked` keys the entry sets) and the playlist's values
+(`parkDefaults`). The editor saves the changes in Playlist properties (`parks`: park key -> {name, profile,
+savedName, mapSize, set}), so they travel in the live file; a build applying a live file that is not baked yet
+applies them to the profiles in memory (`park_settings_profiles`), and a new build drops the changes it made its
+own. `mksequence.py --user-dir` now also points the user's profiles and playlists at that OpenRCT2 folder
+(`RCT_SCREENSAVER_HOME`), so a portable install's builds read and write its own.
 
 ### Generation (2026-11-14)
 
