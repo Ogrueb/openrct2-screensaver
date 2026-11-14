@@ -51,9 +51,11 @@ class ParkCache(unittest.TestCase):
         self.assertEqual(mksequence.changed_parks(self.playlist, self.cache, use_profiles=False), [])
         again, log = self.build()
         self.assertIn("rebuilt 0 of 1", log)
-        self.assertEqual(again["playlist"], first["playlist"])
+        # (each build stamps its own time: the rest must match)
+        same = lambda r: {k: v for k, v in r["playlist"].items() if k != "built"}
+        self.assertEqual(same(again), same(first))
         plain, _ = self.build(cache=False)
-        self.assertEqual(plain["playlist"], first["playlist"])
+        self.assertEqual(same(plain), same(first))
 
     def test_edited_park_is_rebuilt_with_its_drawn_views(self):
         first, _ = self.build()
