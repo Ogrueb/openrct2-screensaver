@@ -313,3 +313,24 @@ class LiveParks(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AtomicWrite(unittest.TestCase):
+    def test_a_busy_file_is_retried_and_no_temp_file_stays(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "build-x.json")
+            real, calls = os.replace, []
+
+            def flaky(a, b):
+                calls.append(a)
+                if len(calls) < 3:
+                    raise PermissionError(5, "Access is denied")
+                real(a, b)
+            with mock.patch.object(mksequence.os, "replace", side_effect=flaky):
+                mksequence.write_json_atomic(path, {"ok": True})
+            with open(path) as f:
+                self.assertEqual(json.load(f), {"ok": True})
+            with mock.patch.object(mksequence.os, "replace", side_effect=PermissionError(5, "Access is denied")):
+                with self.assertRaises(PermissionError):
+                    mksequence.write_json_atomic(path, {"ok": False}, wait=0.1)
+            self.assertEqual(os.listdir(d), ["build-x.json"], "no temporary file stays behind")
