@@ -443,6 +443,38 @@ click on the park field (Playlist order):
 - The build pane follows each as it follows a build: the header ("adding the park", "making the playlist",
   "copying the playlist", "building"), Cancel <task>, the squares and the messages; one task at a time.
 
+### Standalone: a fresh install (engine patch 0020, 2026-11-13)
+
+From the readiness check of the previous thread (the project files' `handoffs/standalone-live-editor-gaps.md`):
+on a fresh install, with only the patched engine and OpenRCT2's own title sequences, the mode played the
+stock sequence with nothing on top, and every build button failed after a click ("no generator registered").
+
+- **The engine carries the screensaver.** Every engine build's artifact holds a `data` folder for the
+  install's own (`tools/mkshipped.py`, the workflow's "Screensaver files" job): `data/plugin/rct-screensaver.js`
+  with its icons, which the engine loads unless the user plugin folder has a file of the same name (so an
+  `--install` from a source checkout still wins), and `data/screensaver/` with the generator (the tools it
+  imports, `tools/data`, the shipped profiles, the companion host). On Windows `data/screensaver/python/` is
+  Python 3.14's embeddable package; on Linux the generator runs with the PATH's `python3`.
+- **Which generator runs.** The one `screensaver/generator.json` names (an install or the generator itself
+  writes it); when there is none, or its Python or script is gone, the shipped one with the Python beside it,
+  else the first Python on the PATH (Windows: `python.exe` outside WindowsApps, whose stub only opens the
+  Store, `python3.exe`, then the `py` launcher). `mksequence.py` stops at once with a message on Python
+  older than 3.11.
+- **The plugin knows before a click.** `screensaver.generator` (`available`, `shipped`, `python`, `script`,
+  `reason`), asked every 5 s (`builder.generator`): without one, Build and play, New playlist, Duplicate, Add
+  park, Import and Export are gray and their tooltips give the engine's reason ("Python 3.11 or newer is
+  needed ..."); the build pane's header says "needs Python" or "no generator".
+- **No playlist.** The mode shows a panel in the middle of the window (`ui/welcome.ts`) over the stock title
+  sequence: "No playlist yet" (or "Playlist not found" when the installed one's sequence is gone), New
+  playlist from a folder of parks (made, then built and played at once: there is nothing to keep playing
+  while its parks are ticked), Import playlist, the playlists `live/playlists.json` lists (built and played
+  on a click), the running task's line, and "Esc leaves the screensaver". No controls bar until a playlist
+  plays; the build that finishes starts the player and the panel goes.
+
+Still open from the handoff: a Generation section in Playlist properties, per-park settings in the views
+pane, and `.sv6` saves and loose objects through New playlist and Add park (the settings page's folder scan
+still does those).
+
 ### Live file (2026-11-10, owner's go-ahead in "Explore saving playlists without the Generator")
 
 On the patched engine (patch 0016's files API), every save of the editor (view edits, a reset, the park

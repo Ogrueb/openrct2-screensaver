@@ -1,0 +1,332 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: RCT Screensaver <noreply@example.invalid>
+Date: Fri, 13 Nov 2026 04:04:02 +0000
+Subject: [PATCH] Screensaver: a generator and plugins shipped in the data
+ folder
+
+Plugins in <data folder>/plugin/*.js load with the user's, unless the user
+plugin folder holds a file of the same name, which replaces it; overlay images
+under the user plugin folder fall back to the shipped plugin folder.
+
+When no generator is registered in <user directory>/screensaver/generator.json,
+or the registered one's Python or script is gone, builds and the playlist
+dialogs run the generator shipped in <data folder>/screensaver/tools with a
+Python shipped beside it (Windows: screensaver/python/python.exe) or else the
+first on the PATH (Windows: python.exe outside WindowsApps, python3.exe, then
+the py launcher; elsewhere python3, then python).
+
+screensaver.generator ({ available, shipped, python, script, reason }) tells
+a plugin whether a generator can run and why not, so it can gray out its
+build buttons before a click.
+---
+ src/openrct2-ui/screensaver/Build.cpp       | 158 ++++++++++++++++----
+ src/openrct2-ui/screensaver/Build.h         |  13 ++
+ src/openrct2-ui/screensaver/Overlay.cpp     |   6 +-
+ src/openrct2-ui/scripting/ScScreensaver.hpp |  15 ++
+ src/openrct2/scripting/ScriptEngine.cpp     |  20 +++
+ 5 files changed, 184 insertions(+), 28 deletions(-)
+
+diff --git a/src/openrct2-ui/screensaver/Build.cpp b/src/openrct2-ui/screensaver/Build.cpp
+index 2cf6083..107aa70 100644
+--- a/src/openrct2-ui/screensaver/Build.cpp
++++ b/src/openrct2-ui/screensaver/Build.cpp
+@@ -112,49 +112,139 @@ namespace OpenRCT2::Ui::Screensaver::Build
+         {
+             std::string python;
+             std::string script;
++            bool shipped = false; // the copy in the game's data folder, not a registered one
+         };
+ 
+-        // The generator registered by its installer, or nullopt with the reason.
+-        std::optional<Generator> ReadGenerator(std::string& error)
++        // A Python interpreter found where it is acceptable: absolute, existing, not a folder. Not
++        // is_regular_file: the Microsoft Store's python.exe is an app execution alias.
++        bool IsPython(const fs::path& python)
+         {
+-            auto path = Path::Combine(ScreensaverFolder(), "generator.json");
+             std::error_code ec;
+-            if (!fs::is_regular_file(fs::u8path(path), ec))
+-            {
+-                error = "No generator registered (" + path + "): install the playlist once with mksequence.py --install";
+-                return std::nullopt;
+-            }
+-            Generator generator;
+-            try
++            return python.is_absolute() && fs::exists(python, ec) && !fs::is_directory(python, ec);
++        }
++
++        // The generator shipped with the game: <data folder>/screensaver/tools/mksequence.py.
++        u8string ShippedFolder()
++        {
++            auto data = GetContext()->GetPlatformEnvironment().GetDirectoryPath(DirBase::openrct2);
++            return Path::Combine(data, "screensaver");
++        }
++
++        // A Python 3 for the shipped generator: one shipped beside it (Windows: python\python.exe), else
++        // the first on the PATH. On Windows the PATH's python.exe in WindowsApps is skipped (without a
++        // Store Python installed it only opens the Store), and the py launcher comes last.
++        std::optional<std::string> FindPython(const u8string& shipped)
++        {
++#ifdef _WIN32
++            auto beside = fs::u8path(Path::Combine(shipped, "python", "python.exe"));
++            const std::vector<std::wstring> names = { L"python.exe", L"python3.exe", L"py.exe" };
++            const wchar_t separator = L';';
++            const wchar_t* raw = _wgetenv(L"PATH");
++            std::wstring path = raw != nullptr ? raw : L"";
++#else
++            auto beside = fs::u8path(Path::Combine(shipped, "python", "bin", "python3"));
++            const std::vector<std::string> names = { "python3", "python" };
++            const char separator = ':';
++            const char* raw = std::getenv("PATH");
++            std::string path = raw != nullptr ? raw : "";
++#endif
++            if (IsPython(beside))
++                return beside.u8string();
++            for (const auto& name : names)
+             {
+-                auto json = Json::ReadFromFile(path, 64 * 1024);
+-                if (!json.is_object() || !json["python"].is_string() || !json["script"].is_string())
++                size_t from = 0;
++                while (from <= path.size())
+                 {
+-                    error = path + " names no python and script";
+-                    return std::nullopt;
++                    auto to = path.find(separator, from);
++                    if (to == decltype(path)::npos)
++                        to = path.size();
++                    auto dir = path.substr(from, to - from);
++                    from = to + 1;
++                    if (dir.empty())
++                        continue;
++                    fs::path candidate = fs::path(dir) / name;
++#ifdef _WIN32
++                    if (dir.find(L"WindowsApps") != std::wstring::npos)
++                        continue;
++#else
++                    if (access(candidate.c_str(), X_OK) != 0)
++                        continue;
++#endif
++                    if (IsPython(candidate))
++                        return candidate.u8string();
+                 }
+-                generator.python = json["python"].get<std::string>();
+-                generator.script = json["script"].get<std::string>();
+             }
+-            catch (const std::exception& e)
++            return std::nullopt;
++        }
++
++        // The generator shipped with the game, or nullopt with the reason.
++        std::optional<Generator> ShippedGenerator(std::string& error)
++        {
++            auto folder = ShippedFolder();
++            auto script = fs::u8path(Path::Combine(folder, "tools", "mksequence.py"));
++            std::error_code ec;
++            if (!fs::is_regular_file(script, ec))
+             {
+-                error = path + ": " + e.what();
++                error = "No generator: none shipped with the game (" + script.u8string()
++                    + ") and none registered (install a playlist once with mksequence.py --install)";
+                 return std::nullopt;
+             }
+-            auto python = fs::u8path(generator.python);
+-            auto script = fs::u8path(generator.script);
+-            // Not is_regular_file: the Microsoft Store's python.exe is an app execution alias.
+-            if (!python.is_absolute() || !fs::exists(python, ec) || fs::is_directory(python, ec))
++            auto python = FindPython(folder);
++            if (!python)
+             {
+-                error = "Python not found: " + generator.python;
++                error = "Python 3.11 or newer is needed to build playlists: none found on the PATH";
+                 return std::nullopt;
+             }
+-            if (!script.is_absolute() || !fs::is_regular_file(script, ec) || script.filename() != fs::u8path("mksequence.py"))
++            return Generator{ *python, script.u8string(), true };
++        }
++
++        // The generator registered by its installer (screensaver/generator.json), else the one shipped
++        // with the game when there is one; or nullopt with the reason. A registered generator whose
++        // Python or script is gone (an install moved or removed) gives way to the shipped one.
++        std::optional<Generator> ReadGenerator(std::string& error)
++        {
++            auto path = Path::Combine(ScreensaverFolder(), "generator.json");
++            std::error_code ec;
++            std::string registeredError;
++            if (fs::is_regular_file(fs::u8path(path), ec))
+             {
+-                error = "Generator not found: " + generator.script;
+-                return std::nullopt;
++                Generator generator;
++                try
++                {
++                    auto json = Json::ReadFromFile(path, 64 * 1024);
++                    if (json.is_object() && json["python"].is_string() && json["script"].is_string())
++                    {
++                        generator.python = json["python"].get<std::string>();
++                        generator.script = json["script"].get<std::string>();
++                    }
++                    else
++                    {
++                        registeredError = path + " names no python and script";
++                    }
++                }
++                catch (const std::exception& e)
++                {
++                    registeredError = path + ": " + e.what();
++                }
++                if (registeredError.empty())
++                {
++                    auto script = fs::u8path(generator.script);
++                    if (!IsPython(fs::u8path(generator.python)))
++                        registeredError = "Python not found: " + generator.python;
++                    else if (
++                        !script.is_absolute() || !fs::is_regular_file(script, ec)
++                        || script.filename() != fs::u8path("mksequence.py"))
++                        registeredError = "Generator not found: " + generator.script;
++                    else
++                        return generator;
++                }
+             }
+-            return generator;
++            auto shipped = ShippedGenerator(error);
++            if (shipped)
++                return shipped;
++            if (!registeredError.empty())
++                error = registeredError;
++            return std::nullopt;
+         }
+ 
+         void Finish(int32_t exitCode, const std::string& error)
+@@ -444,6 +534,20 @@ namespace OpenRCT2::Ui::Screensaver::Build
+         }
+     } // namespace
+ 
++    Availability GetAvailability()
++    {
++        Availability result;
++        auto generator = ReadGenerator(result.reason);
++        result.available = generator.has_value();
++        if (generator)
++        {
++            result.shipped = generator->shipped;
++            result.python = generator->python;
++            result.script = generator->script;
++        }
++        return result;
++    }
++
+     bool Start(const std::string& sequence, std::string& error)
+     {
+         if (!IsSequenceName(sequence))
+diff --git a/src/openrct2-ui/screensaver/Build.h b/src/openrct2-ui/screensaver/Build.h
+index a1741c3..77eb82b 100644
+--- a/src/openrct2-ui/screensaver/Build.h
++++ b/src/openrct2-ui/screensaver/Build.h
+@@ -56,6 +56,19 @@ namespace OpenRCT2::Ui::Screensaver::Build
+ 
+     const char* StateName(State state);
+ 
++    // Whether a generator can run: the registered one (screensaver/generator.json) or the one shipped
++    // with the game (<data folder>/screensaver, with a Python found beside it or on the PATH).
++    struct Availability
++    {
++        bool available = false;
++        bool shipped = false; // the shipped generator, not a registered one
++        std::string python;
++        std::string script;
++        std::string reason; // why none can run
++    };
++
++    Availability GetAvailability();
++
+     // Starts the generator for the title sequence of that name. False (with the reason in `error`)
+     // when no generator is registered, the name is not acceptable or a build is running already.
+     bool Start(const std::string& sequence, std::string& error);
+diff --git a/src/openrct2-ui/screensaver/Overlay.cpp b/src/openrct2-ui/screensaver/Overlay.cpp
+index 552e626..b059a43 100644
+--- a/src/openrct2-ui/screensaver/Overlay.cpp
++++ b/src/openrct2-ui/screensaver/Overlay.cpp
+@@ -130,7 +130,11 @@ namespace OpenRCT2::Ui::Screensaver::Overlay
+         if (path.empty() || Path::IsAbsolute(path))
+             return path;
+         auto& env = GetContext()->GetPlatformEnvironment();
+-        return Path::Combine(env.GetDirectoryPath(DirBase::user, DirId::plugins), path);
++        auto user = Path::Combine(env.GetDirectoryPath(DirBase::user, DirId::plugins), path);
++        // Else under the plugin folder shipped with the game (<data>/plugin), whose plugins load when the
++        // user folder has none of the same name.
++        auto shipped = Path::Combine(env.GetDirectoryPath(DirBase::openrct2), "plugin", path);
++        return !File::Exists(user) && File::Exists(shipped) ? shipped : user;
+     }
+ 
+     static std::vector<std::string> SystemFontDirectories()
+diff --git a/src/openrct2-ui/scripting/ScScreensaver.hpp b/src/openrct2-ui/scripting/ScScreensaver.hpp
+index 664d1fb..afc620b 100644
+--- a/src/openrct2-ui/scripting/ScScreensaver.hpp
++++ b/src/openrct2-ui/scripting/ScScreensaver.hpp
+@@ -539,6 +539,7 @@ namespace OpenRCT2::Scripting
+                 JS_CGETSET_DEF("clipboard", ScScreensaver::clipboard_get, ScScreensaver::clipboard_set),
+                 JS_CFUNC_DEF("build", 1, ScScreensaver::build),
+                 JS_CGETSET_DEF("buildStatus", ScScreensaver::buildStatus_get, nullptr),
++                JS_CGETSET_DEF("generator", ScScreensaver::generator_get, nullptr),
+                 JS_CFUNC_DEF("cancelBuild", 0, ScScreensaver::cancelBuild),
+                 JS_CFUNC_DEF("applyBuild", 1, ScScreensaver::applyBuild),
+                 JS_CFUNC_DEF("exportPlaylist", 1, ScScreensaver::exportPlaylist),
+@@ -704,6 +705,20 @@ namespace OpenRCT2::Scripting
+             return obj;
+         }
+ 
++        // { available, shipped, python, script, reason }: whether build() and the dialogs can run a
++        // generator (the registered one, else the one shipped with the game), and why not.
++        static JSValue generator_get(JSContext* ctx, JSValue)
++        {
++            auto availability = Ui::Screensaver::Build::GetAvailability();
++            JSValue obj = JS_NewObject(ctx);
++            JS_SetPropertyStr(ctx, obj, "available", JS_NewBool(ctx, availability.available));
++            JS_SetPropertyStr(ctx, obj, "shipped", JS_NewBool(ctx, availability.shipped));
++            JS_SetPropertyStr(ctx, obj, "python", JSFromStdString(ctx, availability.python));
++            JS_SetPropertyStr(ctx, obj, "script", JSFromStdString(ctx, availability.script));
++            JS_SetPropertyStr(ctx, obj, "reason", JSFromStdString(ctx, availability.reason));
++            return obj;
++        }
++
+         // Whether a running build was stopped.
+         static JSValue cancelBuild(JSContext* ctx, JSValue, int, JSValue*)
+         {
+diff --git a/src/openrct2/scripting/ScriptEngine.cpp b/src/openrct2/scripting/ScriptEngine.cpp
+index bb88d98..9d6af5b 100644
+--- a/src/openrct2/scripting/ScriptEngine.cpp
++++ b/src/openrct2/scripting/ScriptEngine.cpp
+@@ -26,6 +26,7 @@
+     #include "../core/FileScanner.h"
+     #include "../core/FileWatcher.h"
+     #include "../core/Path.hpp"
++    #include "../core/String.hpp"
+     #include "../interface/InteractiveConsole.h"
+     #include "../platform/Platform.h"
+     #include "../ride/ted/PitchAndRoll.h"
+@@ -854,6 +855,25 @@ std::vector<std::string> ScriptEngine::GetPluginFiles() const
+             }
+         }
+     }
++    // Plugins shipped with the game in its data folder (<data>/plugin/*.js, top level only), unless the
++    // user folder holds a file of the same name, which then replaces it.
++    auto shipped = Path::Combine(_env.GetDirectoryPath(DirBase::openrct2), u8"plugin");
++    if (Path::DirectoryExists(shipped))
++    {
++        auto scanner = Path::scanDirectory(Path::Combine(shipped, u8"*.js"), false);
++        while (scanner->next())
++        {
++            auto path = std::string(scanner->getPath());
++            auto name = Path::GetFileName(path);
++            auto replaced = std::any_of(pluginFiles.begin(), pluginFiles.end(), [&](const std::string& user) {
++                return String::iequals(Path::GetFileName(user), name);
++            });
++            if (!replaced && ShouldLoadScript(path))
++            {
++                pluginFiles.push_back(path);
++            }
++        }
++    }
+     return pluginFiles;
+ }
+ 

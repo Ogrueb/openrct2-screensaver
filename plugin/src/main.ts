@@ -8,6 +8,7 @@ import { loadPlaylist, loadPlaylistProps, loadSettings, Playlist, resolveSequenc
 import { Captions } from "./ui/captions";
 import { ControlsBar } from "./ui/controls";
 import { EditorPanel } from "./ui/editor-panel";
+import { Welcome } from "./ui/welcome";
 
 const UPDATE_INTERVAL_MS = 100;
 const DEBUG_INTERVAL_MS = 1000;
@@ -18,6 +19,7 @@ let editor: Editor | undefined;
 let bar: ControlsBar | undefined; // the screensaver mode's controls (patched engine)
 let captions: Captions | undefined; // and its park name captions
 let editorPanel: EditorPanel | undefined; // the editor's overlay view in the mode
+let welcome: Welcome | undefined; // the mode with no playlist to play: how to get one
 let onTitleScreen = false;
 let lastDebug = 0;
 // The patched engine's screensaver mode: playback runs only while it is on (the stock title
@@ -36,7 +38,8 @@ function startPlayer(): void {
     const settings = loadSettings();
     const playlist = loadPlaylist();
     if (!playlist) {
-        log("no playlist installed; run tools/mksequence.py --install");
+        log("no playlist installed: make one in the screensaver mode (New playlist, Import) or with tools/mksequence.py --install");
+        showWelcome("");
         return;
     }
     // The playlist's Show titles (owner, 2026-11-03) holds until the viewer picks on the bar.
@@ -46,6 +49,7 @@ function startPlayer(): void {
     const sequence = resolveSequence(playlist);
     if (typeof sequence === "string") {
         log(sequence);
+        showWelcome(sequence);
         return;
     }
     player = new Player(playlist, sequence, settings, mode?.active ? mode.overlay : undefined);
@@ -67,7 +71,17 @@ function startPlayer(): void {
     }
 }
 
+/** In the mode, a playlist that cannot play shows how to get one (a fresh install has none). */
+function showWelcome(problem: string): void {
+    if (mode?.active && mode.overlay) {
+        welcome = new Welcome(mode, problem);
+        welcome.open();
+    }
+}
+
 function stopPlayer(release = false): void {
+    welcome?.close();
+    welcome = undefined;
     bar?.close();
     bar = undefined;
     captions?.close();
@@ -120,12 +134,14 @@ function takeCopy(sequence: string, source: string | undefined): string | undefi
 
 function takeBuild(result: BuildResult, imported = false): string | undefined {
     const api = buildApi();
-    if (!api || !player?.isRunning || !result.playlist) {
+    // With nothing playing (the mode's welcome panel), an import or a switch starts the player on its build.
+    const fresh = !player?.isRunning && imported && welcome !== undefined;
+    if (!api || (!player?.isRunning && !fresh) || !result.playlist) {
         return "the screensaver is not playing";
     }
-    const other = result.playlist.sequence !== player.sequenceName;
+    const other = fresh || result.playlist.sequence !== player!.sequenceName;
     if (other && !imported) {
-        return `another playlist is playing ("${player.sequenceName}")`;
+        return `another playlist is playing ("${player!.sequenceName}")`;
     }
     try {
         api.applyBuild(result.sequence);
@@ -145,13 +161,13 @@ function takeBuild(result: BuildResult, imported = false): string | undefined {
     }
     // The playlist's title music, as an install sets it (applied by the mode on its next entry).
     if (result.titleMusic) {
-        const settings = player.liveSettings;
+        const settings = player?.liveSettings ?? loadSettings();
         settings.titleMusic = result.titleMusic;
         saveSettings(settings);
-        player.noteInstalledMusic(result.titleMusic);
+        player?.noteInstalledMusic(result.titleMusic);
     }
     if (!other && !imported) {
-        player.swapPlaylist(playlist);
+        player!.swapPlaylist(playlist);
         return undefined;
     }
     // Another sequence, or an import over the playing one: the engine plays it from its first park already;
@@ -193,6 +209,7 @@ function update(): void {
         modeStarted = true;
         startPlayer();
     }
+    welcome?.update();
     if (!player?.isRunning) {
         return;
     }
@@ -349,6 +366,10 @@ function main(): void {
             }
             // The editor panel takes the mouse over it, and the park around it while the editor is open
             // (a drag that started there keeps it to the end); the bar gets the rest.
+            if (welcome) {
+                welcome.onMouse(e);
+                return;
+            }
             const onPark = editorPanel?.isOpen === true && (editorPanel.dragging ||
                 (!bar?.covers(e.x, e.y) && !bar?.panelOpen));
             if (editorPanel?.onMouse(e) || (onPark && editorPanel!.onPark(e))) {

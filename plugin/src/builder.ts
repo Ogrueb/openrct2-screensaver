@@ -69,6 +69,18 @@ export interface BuildApi {
     addPark?(sequence: string): boolean;
     newPlaylist?(): boolean;
     copyPlaylist?(sequence: string): boolean;
+    // Whether a generator can run (the registered one, else the one shipped with the game) and why not
+    // (absent: an engine that only tells when a build fails to start).
+    readonly generator?: GeneratorInfo;
+}
+
+/** The engine's answer to "can a generator run": screensaver.generator. */
+export interface GeneratorInfo {
+    available: boolean;
+    shipped: boolean; // the generator shipped with the game (no generator.json, or a stale one)
+    python: string;
+    script: string;
+    reason: string; // why none can run
 }
 
 /** A playlist the game can build and play (live/playlists.json, which the generator writes). */
@@ -189,6 +201,7 @@ export interface BuildLine {
 }
 
 const POLL_MS = 500;
+const GENERATOR_MS = 5000; // how often the engine is asked whether a generator can run
 const STALE_MS = 5000; // a result file older than the build it should belong to (clocks agree: same PC)
 
 function log(message: string): void {
@@ -236,8 +249,52 @@ export class Builder {
 
     constructor(private readonly api: BuildApi | undefined = buildApi()) {}
 
-    get available(): boolean {
+    private generatorRead = 0;
+    private generatorInfo: GeneratorInfo | undefined;
+
+    /** The engine has the build API (the patched engine). */
+    get engineAvailable(): boolean {
         return this.api !== undefined && filesApi() !== undefined;
+    }
+
+    /** What the engine says about the generator (asked at most every few seconds: it looks on the PATH);
+     *  undefined on an engine that does not tell. */
+    get generator(): GeneratorInfo | undefined {
+        if (!this.engineAvailable) {
+            return undefined;
+        }
+        if (Date.now() - this.generatorRead >= GENERATOR_MS || this.generatorRead === 0) {
+            this.generatorRead = Date.now();
+            try {
+                const info = this.api!.generator;
+                this.generatorInfo = info && typeof info.available === "boolean" ? info : undefined;
+            } catch {
+                this.generatorInfo = undefined;
+            }
+        }
+        return this.generatorInfo;
+    }
+
+    /** Builds and the dialogs can run: the patched engine and a generator it can start. */
+    get available(): boolean {
+        return this.engineAvailable && this.generator?.available !== false;
+    }
+
+    /** Why building is unavailable (empty when it is available). */
+    get unavailableReason(): string {
+        if (!this.engineAvailable) {
+            return "Building from the game needs the patched engine";
+        }
+        const g = this.generator;
+        return g && !g.available ? g.reason || "No generator found" : "";
+    }
+
+    /** A short state for the build pane's header while building is unavailable. */
+    get unavailableShort(): string {
+        if (!this.engineAvailable) {
+            return "needs the patched engine";
+        }
+        return /python/i.test(this.unavailableReason) ? "needs Python" : "no generator";
     }
 
     /** Export and Import: an engine with the file dialogs. */
@@ -517,7 +574,7 @@ export class Builder {
     /** The line the editor shows (the controls bar's chip and the pane's header take theirs from it). */
     get line(): BuildLine {
         if (!this.available) {
-            return { phase: "unavailable", text: "Building from the game needs the patched engine" };
+            return { phase: "unavailable", text: this.unavailableReason };
         }
         if (this.task === "export") {
             return { phase: "running", text: "Exporting the playlist" };

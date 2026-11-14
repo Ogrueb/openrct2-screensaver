@@ -44,7 +44,7 @@ The standalone tool builds became a potential enhancement.
 - License: GPLv3 (owner, 2026-11-03; `LICENSE`, the plugin's `package.json`).
 - The example parks left the repository (owner, 2026-11-03): `ExampleParks/README.md` lists their
   downloads; the public repository starts from a fresh history without them.
-- Package the patched OpenRCT2 builds without the diagnostics patch (0020: load timings, perf log):
+- Package the patched OpenRCT2 builds without the diagnostics patch (0021: load timings, perf log):
   the Engine build workflow's "Release build" input (2026-11-03); v0.1.0 carries the two
   executables, so users need no Actions login.
 - The stock-engine stopgaps are gone (owner, 2026-11-03): the generator's palette index 10 rewrite
@@ -319,7 +319,7 @@ them afterward; no hybrid format is planned) and the palette (the wallpaper wrap
 
 ### Engine patches (2026-10-26 to 10-27; `engine/`, `docs/engine-patches.md`)
 
-- 0003-0008 background loading (load timings in the test-only 0020): the next park is read, imported
+- 0003-0008 background loading (load timings in the test-only 0021): the next park is read, imported
   into a second game state and registered while the current one plays, so a switch costs about
   15-30 ms; `TitleSequence.backgroundLoading` lets the plugin skip the fade.
 - 0001 palette split: the void takes the park's color and the interface keeps its black
@@ -524,7 +524,10 @@ owner saw on 2026-10-30. `perf/soak.toml` is ready: `full` (9 h) first, then `no
 
 ### Standalone tool builds (split out of the release step; an enhancement, owner, 2026-11-07)
 
-The tools still need a Python 3.11+ install (`Settings.cmd`, `./settings.sh`). Left from the
+The settings page and drawing page still need a Python 3.11+ install (`Settings.cmd`, `./settings.sh`).
+The game's own builds no longer do on Windows (2026-11-13, engine patch 0020): every engine build ships the
+generator in its data folder with Python's embeddable package, so the screensaver mode makes, builds and
+imports playlists without a source checkout (`docs/screensaver-ui.md`, "Standalone"). Left from the
 release step:
 
 - Package `tools/drawviews.py` (with its page) as a standalone Windows `.exe` (PyInstaller or

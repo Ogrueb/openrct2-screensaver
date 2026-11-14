@@ -318,7 +318,7 @@ Revisit with that presentation if any interface stays on screen.
 
 ## Status (2026-10-27)
 
-The background loading patches (now 0003 to 0008, with the load timings in 0020) are built by the
+The background loading patches (now 0003 to 0008, with the load timings in 0021) are built by the
 workflow and were tested on the owner's PC: stage 0 (timings), stage 1 (approach B), stage 2
 (approach A) and the registration slicing. Patch 0001 (interface black, third version) was confirmed by the owner on the PC: Gardens of Light shows its
 white world, the interface stays black, other parks keep their dark backdrop. Local Visual Studio
@@ -350,7 +350,7 @@ the overlay to black, clears the hold, and fades in once the new park shows. A h
 stop the sequence. Upstream code touched: `ITitleSequencePlayer` (three virtuals with defaults), the
 LOAD branch of `TitleSequencePlayer::Update`, and `ScTitleSequence`.
 
-## Perf log (patch 0020, 2026-11-02; 0016 until 2026-11-10, 0017 until 2026-11-11, 0018 until 2026-11-12, 0019 until later that day)
+## Perf log (patch 0021, 2026-11-02; 0016 until 2026-11-10, 0017 until 2026-11-11, 0018 until 2026-11-12, 0019 until later that day, 0020 until 2026-11-13)
 
 For performance tests (`docs/performance-testing.md`). `--perf-log <file>` turns on
 `src/openrct2/PerfLog.{h,cpp}`. Scoped timers in `Context::Tick`, `RunFixedFrame`/`RunVariableFrame`
@@ -412,7 +412,7 @@ view editor reached the playlist's files only through `mksequence.py --install` 
 The plugin writes the live file on every save of the editor (`plugin/src/storage.ts` `writeLive`);
 the tools' side is `tools/livefile.py` and `tools/bakelive.py` (`docs/screensaver-ui.md`, "Live file").
 The game uses the folder of its own user directory, which on a portable install is not
-`Documents\OpenRCT2`: the tools then need `--user-dir`. The diagnostics patch moved to 0017 (on 2026-11-11 to 0018, on 2026-11-12 to 0019, then 0020).
+`Documents\OpenRCT2`: the tools then need `--user-dir`. The diagnostics patch moved to 0017 (on 2026-11-11 to 0018, on 2026-11-12 to 0019, then 0020, on 2026-11-13 to 0021).
 
 ## Plan (as made before building)
 
