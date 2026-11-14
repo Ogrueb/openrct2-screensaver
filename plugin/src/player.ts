@@ -530,6 +530,21 @@ export class Player {
     }
 
     /** How many views each park has (by playlist index): its edits', else the playlist's. */
+    /** A park's orders (circuit_variants, circuit_reverse) for the park list: how many, how many of them
+     *  reversed, and which (1-based) plays now (the playing park) or on its next visit; undefined with one
+     *  order, or with its views set by hand. */
+    ordersOf(index: number): { count: number; reversed: number; order: number; now: boolean } | undefined {
+        const park = this.playlist.parks[index];
+        const count = 1 + (park?.variants?.length ?? 0);
+        if (!park || count < 2 || park.handSet || (park.key !== undefined && this.edits[park.key]?.views)) {
+            return undefined;
+        }
+        const visit = this.visits[park.key ?? park.fileName];
+        const now = index === this.parkIndex && !this.loadingPark;
+        const order = visit === undefined ? 0 : now ? visit % count : (visit + 1) % count;
+        return { count, reversed: park.variants!.filter(v => v.reverse).length, order: order + 1, now };
+    }
+
     viewCountOf(index: number): number {
         if (index === this.parkIndex && !this.loadingPark) {
             return this.views.length;

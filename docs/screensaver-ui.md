@@ -217,7 +217,9 @@ The panel became three panes (round 8 of the mockups accepted, built the same da
 - **Views pane, top left.** The PLAYLIST field, then previous park, the park field (name, "N / M ▾" its place
   in the play order), next park (no close button since 2026-11-12, owner: E and the pencil close the editor). A press on the field held past 0.3 s opens the park list over the views and jumps to
   the park the button is released on; a click opens it as **Playlist order**: rows with grips, Use ticks
-  (2026-11-12, "Parks and playlists" below), numbers, names and view counts, dragged to reorder the parks (saved in the game at once, `RCTScreensaver.
+  (2026-11-12, "Parks and playlists" below), numbers, names and view counts (a park built with alternative orders,
+  `circuit_variants`/`circuit_reverse`, says "3 orders (1 rev.)" beside them, the build marking reversed ones `reverse`
+  in the playlist's `variants`; its row's tooltip says which order plays now or on its next visit; owner, 2026-11-14), dragged to reorder the parks (saved in the game at once, `RCTScreensaver.
   playlistProps.<sequence>.order`, and played in that order at once), clicked to go to a park (the list
   stays); a click anywhere else closes it (Esc is the engine's: it leaves the mode). The views list has a
   grip column: a row dragged 5 px lifts (the dragged row follows the mouse, its place dims, an orange line

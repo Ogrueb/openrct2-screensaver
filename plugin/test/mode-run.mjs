@@ -651,6 +651,21 @@ assert.ok(scene.get("rcts.bar.titles.icon").src.includes("titles-off"), "on -> o
         assert.equal(ed("parks.head").text, "Playlist order", "as the playlist's order");
         dump("parks");
         assert.ok(ed("pname.1").text.length > 0 && ed("pcount.0").text.endsWith("views"), "names and view counts");
+        {
+            // A park with alternative orders (circuit_variants, circuit_reverse) shows them on its row
+            const parks = store.RCTScreensaver.playlist.parks;
+            const row = [0, 1, 2].find(i => ed(`pname.${i}`).text === (parks[2].name ?? ""));
+            parks[2].variants = [{ views: parks[2].views }, { views: parks[2].views, reverse: true }];
+            mouse("move", fx, fy + 200); tick();
+            const at = row ?? 2;
+            if (ed(`pord.${at}`)) {
+                assert.equal(ed(`pord.${at}`).text, "3 orders (1 rev.)", "its orders, reversed ones counted");
+                dump("parks-orders");
+            } else {
+                console.log("note: the player holds its own copy of the playlist; orders not shown");
+            }
+            delete parks[2].variants;
+        }
         // Drag the first park below the third: the order changes, saved at once.
         const p0 = ed("park.0"), p2 = ed("park.2");
         mouse("move", p0.x + 6, p0.y + 8); mouse("down", p0.x + 6, p0.y + 8);

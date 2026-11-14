@@ -1918,6 +1918,7 @@ def circuit_order(views, opts):
             orders.append(order)
     if opts["circuit_reverse"] and all(len(leg) == 1 for leg in legs):  # a reversed loop would run a ride pair backwards
         orders += [[o[0]] + o[1:][::-1] for o in list(orders)]
+        views[0]["_reversed"] = [i >= len(orders) // 2 for i in range(1, len(orders))]
     if len(orders) > 1:
         views[0].setdefault("_variants", []).extend(first + [close[i] for i in o] + rest for o in orders[1:])
     return first + [close[i] for i in orders[0]] + rest
@@ -2346,8 +2347,11 @@ def resolve_park(entry, index, base_dir, defaults, layout, edits=None, library=N
         elif opts["circuit_reverse"] and len(views) > 2:
             # The pick order has no alternatives to offer (circuit_variants), but its reverse is one
             views[0]["_variants"] = [views[:1] + views[:0:-1]]
+            views[0]["_reversed"] = [True]
         pool = views[0].pop("_pool", None) if views else None
         variants = [views] + (views[0].pop("_variants", []) if views else [])
+        reversed_orders = [False] + (views[0].pop("_reversed", []) if views else [])
+        reversed_orders += [False] * (len(variants) - len(reversed_orders))
         for i, vs in enumerate(variants):
             vs = [dict(v, why=dict(v.get("why", {}))) for v in vs]  # each order places and times its own copies
             vs = nudge_pans(vs, pool, opts)
@@ -2446,8 +2450,9 @@ def resolve_park(entry, index, base_dir, defaults, layout, edits=None, library=N
         timed.append((place_cuts(d) if source != "explicit" else d, stretched_pans))
     defaults, stretched = timed[0]
     # Alternative circuit orders (circuit_variants): the plugin plays a different one per visit.
-    alternatives = [{"views": d, "parkTime": round(sum(v["hold"] for v in d if in_route(v)), 1)}
-                    for d, _ in timed[1:]]
+    alternatives = [dict({"views": d, "parkTime": round(sum(v["hold"] for v in d if in_route(v)), 1)},
+                         **({"reverse": True} if source != "explicit" and reversed_orders[i + 1] else {}))
+                    for i, (d, _) in enumerate(timed[1:])]
     # Views on companion animations and shows play as placed, on top of the park's own time; route
     # stops on continuous animations count with the park's views.
     unpinned = [v for v in defaults if in_route(v)]
@@ -2746,7 +2751,8 @@ def playlist_data(name, parks, screen=None, defaults=None, titles=None):
         if p.get("variants") and p["defaultViews"] is None:
             # Alternative circuit orders, played in turn on each visit (circuit_variants)
             entry["variants"] = [{"views": [{k: v[k] for k in ("x", "y", "z", "rotation", "zoom", "hold", "overview", "animation", "show", "fixed", "pan", "panChanges", "inertia", "zoomThreshold", "path", "pathStep", "showAt", "cue") if k in v}
-                                            for v in alt["views"]], "parkTime": alt["parkTime"]} for alt in p["variants"]]
+                                            for v in alt["views"]], "parkTime": alt["parkTime"], **({"reverse": True} if alt.get("reverse") else {})}
+                                for alt in p["variants"]]
         entries.append(entry)
     data = {"version": 1, "sequence": name, "parks": entries}
     if defaults:
@@ -3475,12 +3481,30 @@ def write_playlists_list(user_dir, playlists):
                       {"playlistsVersion": 1, "written": int(time.time() * 1000), "playlists": out}, indent=1)
 
 
-def write_json_atomic(path, data, **kwargs):
-    """Write JSON beside the file and rename it over, so a reader (the game) never sees half a file."""
+def write_json_atomic(path, data, wait=5.0, **kwargs):
+    """Write JSON beside the file and rename it over, so a reader (the game) never sees half a file. On
+    Windows the rename is refused while the game has the file open to read it (WinError 5, a build of the
+    owner's that stopped after 70 ms, 2026-11-14): it is tried again for up to `wait` seconds; the
+    temporary file never stays behind."""
     fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=os.path.basename(path) + ".", suffix=".tmp")
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        json.dump(data, f, **kwargs)
-    os.replace(tmp, path)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, **kwargs)
+        deadline = time.monotonic() + wait
+        while True:
+            try:
+                os.replace(tmp, path)
+                return
+            except PermissionError:
+                if time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.05)
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def live_build_paths(name, user_dir):
@@ -3519,7 +3543,14 @@ def live_build(name, user_dir, imported=False):
         messages.append(dict({"level": level, "text": text}, **({"park": park} if park else {})))
 
     def write(**fields):
-        write_json_atomic(result_path, dict(base, parkStates=states, messages=messages, **fields))
+        data = dict(base, parkStates=states, messages=messages, **fields)
+        if fields.get("ok") is not None:
+            write_json_atomic(result_path, data)  # (the outcome: tried for longer, and it must get there)
+            return
+        try:
+            write_json_atomic(result_path, data, wait=1.0)
+        except OSError as e:  # a progress update the game kept open: the next one, or the outcome, follows
+            print("progress not written: %s" % e, file=sys.stderr)
 
     def progress(i, n, park):
         while len(states) < n:

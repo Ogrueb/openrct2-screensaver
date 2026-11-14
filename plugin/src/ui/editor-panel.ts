@@ -1377,7 +1377,13 @@ export class EditorPanel implements EditorView {
                         : used ? "Playing: click to leave it out (it stays in the playlist)" : "Left out: click to play it again");
                     this.tickBox(scene, `ptick.${i}`, tick, used, this.hit() === `parks.tick.${p}`, z + 2);
                 }
-                const box = this.place(`park.${p}`, rowRect);
+                // Its orders (circuit_variants, circuit_reverse; owner, 2026-11-14): how many and how many reversed,
+                // and the row's tooltip says which plays when
+                const orders = waiting || this.draft ? undefined : e.playback.ordersOf(index);
+                const ordersTip = orders ? `${orders.count} view orders, one per visit${orders.reversed
+                    ? ` (${orders.reversed === orders.count - 1 && orders.count === 2 ? "the circuit and its reverse" : `${orders.reversed} reversed`})` : ""}: `
+                    + `order ${orders.order} ${orders.now ? "plays now" : "plays on its next visit"}` : undefined;
+                const box = this.place(`park.${p}`, rowRect, ordersTip);
                 // Held to jump, the park under the mouse is the one a release goes to: gold (owner, 2026-11-10).
                 const jump = !persistent && hover === `park.${p}`;
                 const fill = jump ? THEME.faceAltHover : index === e.parkIndex ? THEME.faceOn
@@ -1388,8 +1394,15 @@ export class EditorPanel implements EditorView {
                 }
                 const dim = used && (!waiting || this.draft) ? undefined : THEME.textDim;
                 text(`pn.${i}`, String(p + 1), box.x + s.grip + 4 + tickW, y, dim);
+                let ordersW = 0;
+                if (orders) {
+                    const t = `${orders.count} orders${orders.reversed ? ` (${orders.reversed} rev.)` : ""}`;
+                    ordersW = measure(overlay, t, s.textSize - 1).width + 12;
+                    label(scene, `pord.${i}`, t, { x: box.x + width - 8 - countW - ordersW, y, width: 0, height: s.parkRow }, s.textSize - 1, overlay);
+                    scene.set(`pord.${i}`, { ...scene.get(`pord.${i}`)!, z: z + 2, colour: THEME.textDim });
+                }
                 const name = row.name + (used ? "" : " (left out)");
-                text(`pname.${i}`, fit(overlay, name, s.textSize, width - s.grip - 40 - tickW - countW - 16), box.x + s.grip + 40 + tickW, y,
+                text(`pname.${i}`, fit(overlay, name, s.textSize, width - s.grip - 40 - tickW - countW - ordersW - 16), box.x + s.grip + 40 + tickW, y,
                     dim, index === e.parkIndex);
                 const n = waiting ? 0 : e.playback.viewCountOf(index);
                 const views = this.draft ? "" : waiting ? "needs a build" : `${n} view${n === 1 ? "" : "s"}`;
