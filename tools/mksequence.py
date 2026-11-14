@@ -3970,19 +3970,19 @@ def import_downloads(paths, library, title, user_dir, openrct2, note):
 OBJECTS_NOTE = "Restart the game to load the objects just installed in your object folder, then build again"
 
 
-def objects_notes(note, new, had):
+def objects_notes(note, new, had, park=None):
     """The restart note for a download's loose objects: new files need a restart; files installed earlier
     (an earlier try, Starpointe on the owner's PC, 2026-11-14) need one only if the game started before them,
     so files from the last day get a note with when they were installed (`installed`, ms), which the game
     leaves out when it started after that."""
     if new:
-        note("warn", OBJECTS_NOTE)
+        note("warn", OBJECTS_NOTE, park)  # (about the park: the game flags its square)
         return
     times = [t for t in (os.path.getmtime(f) for f in had if os.path.isfile(f)) if t > time.time() - 86400]
     if times:
         when = time.strftime("%Y-%m-%d %H:%M", time.localtime(max(times)))
         note("warn", "Restart the game to load its objects (installed in your object folder at %s), then build again"
-             % when, installed=int(max(times) * 1000))
+             % when, park, installed=int(max(times) * 1000))
 
 
 def needs_import(reason):
@@ -4007,7 +4007,7 @@ def live_add(name, park_path, user_dir, openrct2=None):
             # A download that ships loose objects: they go into the object folder, the park is read in place
             import importparks
             line, _ = add_park_entry(source, park_path)
-            objects_notes(note, *importparks.install_loose(park_path, user_dir))
+            objects_notes(note, *importparks.install_loose(park_path, user_dir), park=park_key({"file": park_path}))
         elif needs_import(reason):
             # An RCT save: converted into a library of its own
             library = os.path.join(user_dir, "screensaver", "library", "added", slug(os.path.splitext(os.path.basename(park_path))[0]))
@@ -4015,7 +4015,7 @@ def live_add(name, park_path, user_dir, openrct2=None):
             if not entries:
                 raise ValueError("%s could not be imported%s" % (os.path.basename(park_path), "" if openrct2 else " (no OpenRCT2 to convert it with)"))
             line, _ = add_park_entry(source, entries[0]["file"], entries[0].get("author"))
-            objects_notes(note, new, had)
+            objects_notes(note, new, had, park=park_key(entries[0]))
         else:
             line, reason = add_park_entry(source, park_path)
         note("ok", line)

@@ -1325,14 +1325,21 @@ console.log("ok: Import and Export playlist through the file dialogs");
         mode.files.set("task-add.json", JSON.stringify({ taskVersion: 1, task: "add", started: now, ok: true, finished: now,
             sequence: playlist.sequence, playlist: "C:/x/mini.toml", messages: [
                 { level: "info", text: "Star: converted from SV6" },
-                { level: "warn", text: "Restart the game to load its objects (installed in your object folder at 2026-11-14 10:00), then build again", installed: -1 }, // (before the mock clock started)
-                { level: "warn", text: "Restart the game to load the objects just installed in your object folder, then build again" },
+                { level: "warn", text: "Restart the game to load its objects (installed in your object folder at 2026-11-14 10:00), then build again", installed: -1, park: "star.park" }, // (before the mock clock started)
+                { level: "warn", text: "Restart the game to load the objects just installed in your object folder, then build again", park: "star.park" },
                 { level: "ok", text: "Added star.park to mini.toml" }] }));
         mode.files.set(addFile, JSON.stringify({ buildVersion: 1, sequence: playlist.sequence, started: Date.now(), ok: null, park: 1, parks: 4,
             parkName: "A", parkStates: [{ key: keys[0], name: "A", state: "building" }, { key: keys[1], state: "pending" },
                 { key: keys[2], state: "pending" }, { key: "star.park", name: "Star", state: "pending" }] }));
         tick(6);
         assert.ok(ed("sq.3") && !ed("sqi.3") && ed("sq.3").fill === ed("build.list").fill, "the added park's square is empty until it is built");
+        assert.ok([1, 2].every(i => !ed(`sqi.${i}`)), "and so are the parks still to come");
+        mode.files.set(addFile, JSON.stringify({ buildVersion: 1, sequence: playlist.sequence, started: Date.now(), ok: null, park: 4, parks: 4,
+            parkName: "Star", parkStates: [...keys.map(k => ({ key: k, state: "cached", warnings: 0 })), { key: "star.park", name: "Star", state: "built", warnings: 0 }] }));
+        tick(6);
+        assert.equal(ed("sq.3").fill, "#c8962a", "built, the added park's square is flagged by the add's restart note");
+        assert.match(ed("sqi.3").src, /alert/, "with the warning mark, not a check");
+        assert.ok([0, 1, 2].every(i => /check/.test(ed(`sqi.${i}`).src)), "the others built");
         mode.files.set(addFile, JSON.stringify({ buildVersion: 1, sequence: playlist.sequence, started: Date.now(), ok: true, finished: Date.now(),
             playlist: JSON.parse(JSON.stringify(store.RCTScreensaver.playlist)),
             parkStates: keys.map(k => ({ key: k, state: "cached", warnings: 0 })).concat([{ key: "star.park", name: "Star", state: "built", warnings: 0 }]),
@@ -1341,6 +1348,7 @@ console.log("ok: Import and Export playlist through the file dialogs");
         tick(6);
         assert.match(ed("msgt.0").text, /^Built .* now playing/, ed("msgt.0").text);
         assert.match(ed("msgt.1").text, /^Restart the game to load the objects just/, "the restart note right under it");
+
         assert.ok(![0, 1, 2, 3, 4, 5].some(i => ed(`msgt.${i}`)?.text.startsWith("Restart the game to load its objects")), "not the one from before the game started");
     }
     // The playlists: the playing one marked, another built and played on a click.

@@ -197,7 +197,8 @@ class LiveParks(unittest.TestCase):
         self.assertEqual(code, 0, self.task("add"))
         self.assertEqual(self.read()["park"][-1]["file"], "../pack.zip")
         self.assertIn("WALL1.DAT", os.listdir(os.path.join(self.user, "object", "rct-screensaver")))
-        self.assertTrue(any("restart the game" in m["text"].lower() for m in self.task("add")["messages"]))
+        self.assertTrue(any("restart the game" in m["text"].lower() and m.get("park") == "pack.zip" for m in self.task("add")["messages"]),
+                        "about the park, so the game flags its square")
         # Added again elsewhere (an earlier try installed its objects): still the restart note
         other = os.path.join(self.lib, "other.toml")
         with open(other, "w") as f:

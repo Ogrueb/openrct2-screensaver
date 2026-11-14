@@ -328,6 +328,8 @@
       this.started = 0;
       this.lastPoll = 0;
       // the last build's result (its squares and messages stay shown)
+      this.flags = {};
+      // the last task's warnings about parks (Add park's restart): on their squares
       this.gameStarted = Date.now();
       // the plugin's load, the game's start near enough: objects installed before it are loaded
       this.notes = [];
@@ -494,6 +496,11 @@
       this.outcome = void 0;
       this.notes = [];
       this.earlier = [];
+      this.flags = {};
+    }
+    /** A task's message counts here: not a note about objects installed before this game started. */
+    current(m) {
+      return !(m.installed && m.installed < this.gameStarted);
     }
     cancel() {
       if (this.api && this.running && this.api.cancelBuild()) {
@@ -518,6 +525,14 @@
       let imported;
       if (this.task !== "build" && this.task !== "open") {
         imported = fresh(readTaskResult(this.task));
+        this.flags = {};
+        for (const m of imported?.messages ?? []) {
+          if (m.park && (m.level === "warn" || m.level === "error") && this.current(m)) {
+            const f = this.flags[m.park] ?? (this.flags[m.park] = { warnings: 0, restart: false });
+            f.warnings += 1;
+            f.restart || (f.restart = /restart the game/i.test(m.text));
+          }
+        }
         if (imported?.ok && imported.sequence && !this.sequence) {
           this.sequence = imported.sequence;
           if (!FILE_ONLY.includes(this.task)) {
@@ -536,7 +551,7 @@
       this.sequence = void 0;
       this.progress = void 0;
       const took = Date.now() - this.started;
-      const from = (r) => [...r?.messages ?? []].filter((m) => !(m.installed && m.installed < this.gameStarted)).reverse();
+      const from = (r) => [...r?.messages ?? []].filter((m) => this.current(m)).reverse();
       const what = { build: "Build", open: "Switch", import: "Import", add: "Adding the park", new: "New playlist", copy: "Duplicate", export: "Export" }[task];
       if (task !== "build" && task !== "open" && !(imported?.ok && sequence)) {
         const why = status.state === "cancelled" ? "cancelled" : imported?.error || status.error || "the generator failed";
@@ -678,6 +693,12 @@
      *  not reached yet keeping its state from before, dimmed only when it needs a build (owner,
      *  2026-11-11). */
     get parks() {
+      return this.squareStates().map((p) => {
+        const f = p.key ? this.flags[p.key] : void 0;
+        return f && (p.state === "built" || p.state === "cached") ? { ...p, warnings: (p.warnings ?? 0) + f.warnings, restart: (p.restart ?? 0) + (f.restart ? 1 : 0) } : p;
+      });
+    }
+    squareStates() {
       const dirty = this.dirty();
       const before = new Map((this.last?.parkStates ?? []).filter((p) => p.key).map((p) => [p.key, p]));
       const carried = (key, p) => {
@@ -8174,7 +8195,7 @@
       const side = px / overlay.scale;
       parks.forEach((p, i) => {
         const r = { x: Math.round(x0 + i * (w + gap)), y, width: Math.max(1, Math.round(w)), height };
-        const what = p.state === "missing" ? "file missing" : p.state === "failed" ? "failed" : p.state === "building" ? "building" : p.state === "pending" ? "waiting" : `${p.state === "cached" ? "unchanged" : "built"}${p.warnings ? `, ${p.warnings} warning${p.warnings > 1 ? "s" : ""}` : ""}`;
+        const what = p.state === "missing" ? "file missing" : p.state === "failed" ? "failed" : p.state === "building" ? "building" : p.state === "pending" ? "waiting" : `${p.state === "cached" ? "unchanged" : "built"}${p.warnings ? `, ${p.warnings} warning${p.warnings > 1 ? "s" : ""}` : ""}` + (p.restart ? "; restart the game to load what was installed for it, then build again" : "");
         const name = p.key && builder.nameOf?.(p.key) || p.name || `Park ${i + 1}`;
         this.place(`sq.${i}`, r, `${name}: ${p.stale ? "edited, needs a build" : what}`);
         scene.set(`sq.${i}`, { type: "rect", ...r, fill: colourOf(p), z: Z.face, ...p.stale ? { opacity: 0.35 } : {} });

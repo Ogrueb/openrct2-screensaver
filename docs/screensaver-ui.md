@@ -315,7 +315,8 @@ closed.
   of the playing playlist's squares (a playlist New made shows its own parks). While a build runs, a park the
   build before did not have (one just added, or any of another playlist's) stays empty until the generator
   reaches it. A task's warnings (Add park's restart for objects it installed) sit right under the build's
-  "Built" line, and the header says to restart; a restart note about objects installed before the game
+  "Built" line, and the header says to restart; a task's warning about a park (its message's `park` key) flags
+  that park's square amber with the warning mark once it is built, its tooltip saying to restart; a restart note about objects installed before the game
   started is left out (the message's `installed` time against the plugin's load). Only a
   park edited since the last build (or the install) is dimmed, with "edited, needs a build" in its tooltip,
   and it dims as soon as the edit is saved; Playlist properties dim none, as no park needs building for

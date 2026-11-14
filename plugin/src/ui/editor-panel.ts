@@ -1908,7 +1908,8 @@ export class EditorPanel implements EditorView {
         parks.forEach((p, i) => {
             const r = { x: Math.round(x0 + i * (w + gap)), y, width: Math.max(1, Math.round(w)), height };
             const what = p.state === "missing" ? "file missing" : p.state === "failed" ? "failed" : p.state === "building" ? "building"
-                : p.state === "pending" ? "waiting" : `${p.state === "cached" ? "unchanged" : "built"}${p.warnings ? `, ${p.warnings} warning${p.warnings > 1 ? "s" : ""}` : ""}`;
+                : p.state === "pending" ? "waiting" : `${p.state === "cached" ? "unchanged" : "built"}${p.warnings ? `, ${p.warnings} warning${p.warnings > 1 ? "s" : ""}` : ""}`
+                + (p.restart ? "; restart the game to load what was installed for it, then build again" : "");
             const name = (p.key && builder.nameOf?.(p.key)) || p.name || `Park ${i + 1}`;
             this.place(`sq.${i}`, r, `${name}: ${p.stale ? "edited, needs a build" : what}`);
             // A park with edits since the last build: its colour dimmed until the build reaches it
