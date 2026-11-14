@@ -35,6 +35,18 @@
     }
     return [...rest.flatMap((v, i) => [v, ...after.get(i) ?? []]), ...after.get(-1) ?? []];
   }
+  var GENERATION_DEFAULTS = {
+    motion: "pans",
+    route: "circuit",
+    variants: 1,
+    reverse: false,
+    ridePans: "include",
+    parkMin: 30,
+    parkCap: 150,
+    timeScale: 1,
+    parkScripts: true,
+    parkViews: false
+  };
   function loadPlaylistProps(sequence) {
     const all = context.sharedStorage.get(NAMESPACE + ".playlistProps", {});
     return { ...all[sequence] ?? {} };
@@ -2886,6 +2898,7 @@
       const keyOf = (p) => p.key ?? p.fileName;
       const current = this.running && this.parkOrder.length ? keyOf(this.currentPark()) : void 0;
       this.playlist = playlist;
+      this.pruneGeneration();
       if (!this.running) {
         return;
       }
@@ -3365,6 +3378,57 @@
         return;
       }
       this.clearPan();
+    }
+    /** The generator options the playlist was built with (the editor's Generation section). */
+    get generationBuilt() {
+      return { ...GENERATION_DEFAULTS, ...this.playlist.generation ?? {} };
+    }
+    /** The Generation section's values: the editor's changes over the build's. */
+    get generation() {
+      return { ...this.generationBuilt, ...this.props.generation ?? {} };
+    }
+    /** The Generation section differs from the build: the next build applies it. */
+    get generationChanged() {
+      const built = this.generationBuilt;
+      return Object.entries(this.props.generation ?? {}).some(([k, v]) => built[k] !== v);
+    }
+    /** Drops the Generation changes a new build has made its own (equal to the build, they change nothing). */
+    pruneGeneration() {
+      const changes = this.savedProps.generation;
+      if (!changes || !this.playlist.generation) {
+        return;
+      }
+      const built = this.generationBuilt;
+      const left = Object.fromEntries(Object.entries(changes).filter(([k, v]) => built[k] !== v));
+      if (Object.keys(left).length === Object.keys(changes).length) {
+        return;
+      }
+      if (Object.keys(left).length) {
+        this.savedProps.generation = left;
+        this.props.generation = { ...left };
+      } else {
+        delete this.savedProps.generation;
+        delete this.props.generation;
+      }
+    }
+    /** Changes a generator option, saved at once (and so in the live file, which the next build bakes into
+     *  the playlist); back at the build's value it is no change. Nothing plays differently before a build. */
+    setGeneration(key, value) {
+      const changes = { ...this.savedProps.generation ?? {} };
+      if (this.generationBuilt[key] === value) {
+        delete changes[key];
+      } else {
+        changes[key] = value;
+      }
+      const generation = Object.keys(changes).length ? changes : void 0;
+      this.props.generation = generation;
+      this.savedProps.generation = generation;
+      if (generation === void 0) {
+        delete this.props.generation;
+        delete this.savedProps.generation;
+      }
+      savePlaylistProps(this.playlist.sequence, this.savedProps);
+      log2(`generation ${key} = ${value}`);
     }
     /** The Playlist properties differ from what is saved in the game's storage. */
     get playlistPropsUnsaved() {
@@ -5913,6 +5977,24 @@
       ["Unset", null, "Viewer's setting"]
     ]
   };
+  var GEN_CHOICES = {
+    motion: [["Pans", "pans", "Glide from view to view"], ["Static", "static", "Hold each view, then cut"]],
+    route: [["Circuit", "circuit", "Loop around the park"], ["Random", "random", "The generator's pick order, varying angle and zoom"]],
+    reverse: [["Off", false, "Orders as found"], ["On", true, "Each order reversed too"]],
+    ridePans: [
+      ["Include", "include", "Adds a pan along a ride's track"],
+      ["Exclude", "exclude", "No ride pans"],
+      ["Only", "only", "Overview and ride pans only"]
+    ],
+    parkScripts: [["Off", false, "The parks' own scripts stay off"], ["On", true, "Run the parks' own scripts (companion plugins)"]],
+    parkViews: [["Off", false, "No views on scripted events"], ["On", true, "Views on the parks' scripted animations and shows"]]
+  };
+  var GEN_STEPS = {
+    variants: { step: 1, min: 1, max: 10, text: (v) => `${v}` },
+    parkMin: { step: 5, min: 0, max: 300, text: (v) => v ? `${v} s` : "none" },
+    parkCap: { step: 5, min: 10, max: 300, text: (v) => `${v} s` },
+    timeScale: { step: 0.25, min: 0.5, max: 3, text: (v) => `\xD7 ${v.toFixed(2)}` }
+  };
   var Scroll = class {
     constructor() {
       this.first = 0;
@@ -5981,6 +6063,8 @@
       // the restore point highlighted
       this.propsOpen = true;
       // the Playlist properties unfolded
+      this.genOpen = false;
+      // and their Generation section
       this.clipShown = false;
       // a Copy/Paste note is on its button (it goes after a moment)
       this.buildShown = "";
@@ -6358,6 +6442,27 @@
         }
         return;
       }
+      if (id.startsWith("gseg.")) {
+        const [, key, i] = id.split(".");
+        const choice = GEN_CHOICES[key]?.[Number(i)];
+        if (choice) {
+          e.playback.setGeneration(key, choice[1]);
+        }
+        return;
+      }
+      if (id.startsWith("gstep.")) {
+        const [, key, sign] = id.split(".");
+        const k = key;
+        const g = e.playback.generation;
+        const st = GEN_STEPS[k];
+        let v = Math.round((g[k] + (sign === "more" ? st.step : -st.step)) * 100) / 100;
+        v = Math.max(st.min, Math.min(st.max, v));
+        v = k === "parkMin" ? Math.min(v, g.parkCap - 5) : k === "parkCap" ? Math.max(v, g.parkMin + 5) : v;
+        if (v !== g[k]) {
+          e.playback.setGeneration(k, v);
+        }
+        return;
+      }
       if (id.startsWith("step.")) {
         const [, key, sign] = id.split(".");
         const k = key;
@@ -6447,6 +6552,9 @@
           break;
         case "propsHead":
           this.propsOpen = !this.propsOpen;
+          break;
+        case "genHead":
+          this.genOpen = !this.genOpen;
           break;
         case "buildHead":
           this.buildOpen = this.buildFolded();
@@ -7641,7 +7749,79 @@
       section("PRESENTATION");
       segments("titleMusic", "Title music");
       segments("titles", "Show titles");
-      return y + 6;
+      return this.generation(e, scene, x0, y + 4, inner) + 6;
+    }
+    /** The playlist-wide generator options, folded under their header: saved as they change, they take
+     *  effect at the next build (the Build pane shows "edits not built"); returns the y below them. */
+    generation(e, scene, x0, y, inner) {
+      const s = EDITOR;
+      const overlay = this.mode.overlay;
+      const g = e.playback.generation;
+      const changed = e.playback.generationChanged;
+      const head = this.place(
+        "genHead",
+        { x: x0, y, width: inner, height: s.labelHeight + 6 },
+        this.genOpen ? "Fold" : "How the next build makes the views"
+      );
+      scene.set("genHead", { type: "rect", ...head, fill: this.hit() === "genHead" ? THEME.faceHover : "#00000000", z: Z.face });
+      foldMark(scene, "gen.mark", this.genOpen, x0, y + head.height / 2, overlay);
+      this.sectionLabel(scene, "sec.GENERATION", "GENERATION", x0 + 20, y + 3);
+      const note = changed ? "changed \xB7 next build" : "at the next build";
+      const nw = measure(overlay, note, 12).width;
+      label(scene, "gen.note", note, { x: x0 + inner - nw, y: y + 3, width: 0, height: s.labelHeight }, 12, overlay);
+      scene.set("gen.note", { ...scene.get("gen.note"), colour: changed ? THEME.pending : THEME.textDim });
+      y += head.height + 3;
+      if (!this.genOpen) {
+        return y;
+      }
+      const rowLabel = (key, text) => label(scene, `gprop.${key}`, text, { x: x0, y, width: 0, height: s.propRow }, s.textSize, overlay);
+      const segments = (key, text) => {
+        rowLabel(key, text);
+        const choices = GEN_CHOICES[key];
+        const widths = choices.map(([t]) => Math.ceil(measure(overlay, t, 13, true).width) + 2 * s.segPad);
+        let sx = x0 + inner - widths.reduce((a, w) => a + w, 0) - s.gap * (choices.length - 1);
+        const sy = y + Math.round((s.propRow - s.segHeight) / 2);
+        choices.forEach(([t, value, tip], i) => {
+          const id = `gseg.${key}.${i}`;
+          const r = this.place(id, { x: sx, y: sy, width: widths[i], height: s.segHeight }, tip);
+          button(scene, id, r, this.state(id, g[key] === value), { text: t, textSize: 13 }, overlay);
+          sx += widths[i] + s.gap;
+        });
+        y += s.propRow;
+      };
+      const stepper = (key, text, tip) => {
+        rowLabel(key, text);
+        const st = GEN_STEPS[key];
+        const w = s.stepButton;
+        const sy = y + Math.round((s.propRow - w) / 2);
+        const more = this.place(`gstep.${key}.more`, { x: x0 + inner - w, y: sy, width: w, height: w }, tip, g[key] >= st.max);
+        const value = { x: more.x - s.gap - s.stepValueBox, y: sy, width: s.stepValueBox, height: w };
+        const less = this.place(`gstep.${key}.less`, { x: value.x - s.gap - w, y: sy, width: w, height: w }, tip, g[key] <= st.min);
+        button(scene, `gstep.${key}.less`, less, this.state(`gstep.${key}.less`), { icon: "less", iconSize: 16 }, overlay);
+        button(scene, `gstep.${key}.more`, more, this.state(`gstep.${key}.more`), { icon: "add", iconSize: 16 }, overlay);
+        scene.set(`gstepv.${key}`, { type: "rect", ...value, fill: THEME.editorList, z: Z.face });
+        const vid = `gstept.${key}`;
+        label(scene, vid, st.text(g[key]), { x: value.x + value.width / 2, y: sy, width: 0, height: w }, 13, overlay);
+        scene.set(vid, { ...scene.get(vid), align: "center" });
+        y += s.propRow;
+      };
+      segments("motion", "Motion");
+      segments("route", "View order");
+      if (g.route === "circuit") {
+        stepper("variants", "Variants", "Most orders per park, one per visit");
+        segments("reverse", "Include reverse");
+      }
+      if (g.motion === "pans") {
+        segments("ridePans", "Ride pans");
+      }
+      stepper("parkMin", "Shortest park", "Shortest time per park");
+      stepper("parkCap", "Longest park", "Longest time per park: the lowest-scoring views drop to fit");
+      stepper("timeScale", "Time scale", "Multiplies every hold and pan: above 1 is slower");
+      segments("parkScripts", "Park scripts");
+      if (g.parkScripts) {
+        segments("parkViews", "Event views");
+      }
+      return y;
     }
   };
   function foldMark(scene, id, open, x, cy, overlay) {

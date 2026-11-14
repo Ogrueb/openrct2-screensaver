@@ -2925,6 +2925,8 @@ def build(playlist_path, out_dir, seed=None, layout=None, use_edits=True, overri
         raise ValueError("titles must be one of: %s" % ", ".join(TITLES))
     data = playlist_data(name, parks, defaults["window"], defaults, titles) if layout == "plugin" else None
     if data:
+        # The playlist-wide generator options, as the view editor's Playlist properties show them
+        data["generation"] = generation_values(defaults, playlist)
         # Parks ticked off (`use = false`): the view editor lists them to tick on again
         known = cache.names if cache else {}
         unused = []
@@ -3064,6 +3066,57 @@ PROPS = (("inertia", "views", "inertia"), ("panChanges", "views", "pan_changes")
          ("returnHold", "views", "return_hold"), ("titleMusic", None, "title_music"), ("titles", None, "titles"))
 
 
+# The view editor's Generation section (Playlist properties, `generation`): the playlist-wide generator
+# options the settings page sets, by the plugin's key: (table or None for the top level, playlist key, check).
+GENERATION = {
+    "motion": ("views", "motion", lambda v: v in ("pans", "static")),
+    "route": ("views", "route", lambda v: v in ("circuit", "random", "picks")),
+    "variants": ("views", "circuit_variants", lambda v: isinstance(v, int) and not isinstance(v, bool) and 1 <= v <= 10),
+    "reverse": ("views", "circuit_reverse", lambda v: isinstance(v, bool)),
+    "ridePans": ("views", "ride_pans", lambda v: v in ("include", "exclude", "only")),
+    "parkMin": ("views", "park_min", lambda v: isinstance(v, (int, float)) and not isinstance(v, bool) and 0 <= v <= 3600),
+    "parkCap": ("views", "park_cap", lambda v: isinstance(v, (int, float)) and not isinstance(v, bool) and 10 <= v <= 3600),
+    "timeScale": ("views", "time_scale", lambda v: isinstance(v, (int, float)) and not isinstance(v, bool) and 0.25 <= v <= 4),
+    "parkScripts": (None, "park_scripts", lambda v: isinstance(v, bool)),
+    "parkViews": (None, "park_plugins", lambda v: isinstance(v, bool)),
+}
+
+
+def generation_values(defaults, playlist):
+    """The playlist's generation options as the editor's Generation section names them (defaults: the
+    playlist's [views] over VIEW_DEFAULTS)."""
+    ride = "only" if defaults.get("only") == "rides" else "include" if int(defaults.get("ride_pans") or 0) > 0 else "exclude"
+    return {"motion": defaults["motion"], "route": defaults["route"], "variants": int(defaults["circuit_variants"]),
+            "reverse": bool(defaults["circuit_reverse"]), "ridePans": ride, "parkMin": float(defaults["park_min"]),
+            "parkCap": float(defaults["park_cap"]), "timeScale": float(defaults["time_scale"]),
+            "parkScripts": playlist.get("park_scripts", True) is not False, "parkViews": playlist.get("park_plugins") is True}
+
+
+def apply_generation(data, generation):
+    """The editor's Generation values (plugin key -> value) set in the playlist `data` (in place)."""
+    views = data.setdefault("views", {})
+    for key, value in generation.items():
+        if key not in GENERATION:
+            continue
+        table, opt, ok = GENERATION[key]
+        if not ok(value):
+            raise ValueError("generation %s: %r is not acceptable" % (key, value))
+        target = views if table == "views" else data
+        if key == "ridePans":
+            if value == "exclude":
+                views["ride_pans"] = 0
+            elif int(views.get("ride_pans", VIEW_DEFAULTS["ride_pans"]) or 0) <= 0:
+                views["ride_pans"] = 1
+            if value == "only":
+                views["only"] = "rides"
+            elif views.get("only") == "rides":
+                del views["only"]
+        elif (key == "parkScripts" and value is True) or (key == "parkViews" and value is False):
+            data.pop(opt, None)  # (the default)
+        else:
+            target[opt] = value
+
+
 def apply_props(playlist, props):
     """The playlist (as tomllib reads it) with the editor's properties and park order applied:
     holds back to unscaled seconds (the plugin's are times time_scale), Unset titles and title music
@@ -3085,6 +3138,10 @@ def apply_props(playlist, props):
             target.pop(opt, None)  # Unset: the viewer's own setting
         else:
             target[opt] = value
+    # Generation after the holds: those are in the plugin's seconds, times the time scale the playlist was
+    # built with, so a new time scale scales them too
+    if isinstance(props.get("generation"), dict):
+        apply_generation(data, props["generation"])
     if not views:
         del data["views"]
     order = props.get("order")
@@ -3171,7 +3228,9 @@ def write_props(playlist_path, props):
     # (the entries in their new order as they stand in the file: the text moves those, then takes the ticks)
     ordered = apply_props(playlist, {"order": props["order"]}).get("park") if isinstance(props.get("order"), list) else playlist.get("park")
     used = [e.get("use", True) for e in data.get("park", [])] != [e.get("use", True) for e in ordered or []]
-    changed = [k for k, _, _ in PROPS if k in props] + (["park order"] if ordered != playlist.get("park") else []) + \
+    changed = [k for k, _, _ in PROPS if k in props] + \
+        (["generation " + ", ".join(sorted(props["generation"]))] if isinstance(props.get("generation"), dict) and props["generation"] else []) + \
+        (["park order"] if ordered != playlist.get("park") else []) + \
         (["parks in use"] if used else [])
     import tomlwrite
     text = reorder_parks(raw.decode("utf-8"), ordered) if ordered != playlist.get("park") else raw.decode("utf-8")
