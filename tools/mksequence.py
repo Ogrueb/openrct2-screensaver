@@ -3725,8 +3725,8 @@ def task_runner(task, user_dir, **base):
     messages = []
     fields = dict(base, taskVersion=TASK_VERSION, task=task, started=int(time.time() * 1000))
 
-    def note(level, text, park=None):
-        messages.append(dict({"level": level, "text": text}, **({"park": park} if park else {})))
+    def note(level, text, park=None, **extra):
+        messages.append(dict({"level": level, "text": text}, **({"park": park} if park else {}), **extra))
 
     def write(**more):
         fields.update(more)
@@ -3967,21 +3967,22 @@ def import_downloads(paths, library, title, user_dir, openrct2, note):
     return entries, new_objects, had
 
 
-OBJECTS_NOTE = "objects installed in your object folder: restart the game so it loads them, then build again"
+OBJECTS_NOTE = "Restart the game to load the objects just installed in your object folder, then build again"
 
 
 def objects_notes(note, new, had):
     """The restart note for a download's loose objects: new files need a restart; files installed earlier
     (an earlier try, Starpointe on the owner's PC, 2026-11-14) need one only if the game started before them,
-    so files from the last day get a note (older ones the running game has loaded)."""
+    so files from the last day get a note with when they were installed (`installed`, ms), which the game
+    leaves out when it started after that."""
     if new:
         note("warn", OBJECTS_NOTE)
         return
     times = [t for t in (os.path.getmtime(f) for f in had if os.path.isfile(f)) if t > time.time() - 86400]
     if times:
         when = time.strftime("%Y-%m-%d %H:%M", time.localtime(max(times)))
-        note("warn", "its objects are in your object folder (installed %s): if the game was started before that, "
-                     "restart it so it loads them, then build again" % when)
+        note("warn", "Restart the game to load its objects (installed in your object folder at %s), then build again"
+             % when, installed=int(max(times) * 1000))
 
 
 def needs_import(reason):

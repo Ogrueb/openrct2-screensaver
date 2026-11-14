@@ -312,7 +312,11 @@ closed.
   squares react the moment a task starts, before the generator writes anything (owner, 2026-11-14): Build
   and play lights the first park that needs a build, Add park adds an empty lit square for the park being
   added, and New playlist, Import, Duplicate and a switch to a playlist never built show one lit bar in place
-  of the playing playlist's squares (a playlist New made shows its own parks). Only a
+  of the playing playlist's squares (a playlist New made shows its own parks). While a build runs, a park the
+  build before did not have (one just added, or any of another playlist's) stays empty until the generator
+  reaches it. A task's warnings (Add park's restart for objects it installed) sit right under the build's
+  "Built" line, and the header says to restart; a restart note about objects installed before the game
+  started is left out (the message's `installed` time against the plugin's load). Only a
   park edited since the last build (or the install) is dimmed, with "edited, needs a build" in its tooltip,
   and it dims as soon as the edit is saved; Playlist properties dim none, as no park needs building for
   them (owner's test, 2026-11-11). The plugin keeps the edits each build took in (`RCTScreensaver.builtEdits`;

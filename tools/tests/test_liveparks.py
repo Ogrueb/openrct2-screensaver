@@ -168,7 +168,7 @@ class LiveParks(unittest.TestCase):
         self.assertTrue(os.path.isfile(os.path.join(self.lib, added)), added)
         texts = [m["text"] for m in self.task("add")["messages"]]
         self.assertTrue(any("converted from SV6" in t for t in texts), texts)
-        self.assertTrue(any("restart the game" in t for t in texts), "new objects need a restart")
+        self.assertTrue(any("restart the game" in t.lower() for t in texts), "new objects need a restart")
         self.assertIs(self.read()["park"][-1]["author"], False, "a save has no builders to warn about")
 
     def test_new_of_a_folder_with_saves_imports_it(self):
@@ -197,7 +197,7 @@ class LiveParks(unittest.TestCase):
         self.assertEqual(code, 0, self.task("add"))
         self.assertEqual(self.read()["park"][-1]["file"], "../pack.zip")
         self.assertIn("WALL1.DAT", os.listdir(os.path.join(self.user, "object", "rct-screensaver")))
-        self.assertTrue(any("restart the game" in m["text"] for m in self.task("add")["messages"]))
+        self.assertTrue(any("restart the game" in m["text"].lower() for m in self.task("add")["messages"]))
         # Added again elsewhere (an earlier try installed its objects): still the restart note
         other = os.path.join(self.lib, "other.toml")
         with open(other, "w") as f:
@@ -206,7 +206,8 @@ class LiveParks(unittest.TestCase):
         code, _ = self.run_task(mksequence.live_add, "Other", dl, self.user)
         self.assertEqual(code, 0, self.task("add"))
         texts = [m["text"] for m in self.task("add")["messages"]]
-        self.assertTrue(any("its objects are in your object folder" in t and "restart" in t for t in texts), texts)
+        self.assertTrue(any("load its objects (installed" in t for t in texts), texts)
+        self.assertTrue(any(m.get("installed") for m in self.task("add")["messages"]), "with when, for the game to judge")
 
     def test_add_bakes_the_games_edits_first(self):
         os.makedirs(livefile.folder(self.user), exist_ok=True)

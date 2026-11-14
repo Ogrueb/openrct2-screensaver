@@ -328,6 +328,8 @@
       this.started = 0;
       this.lastPoll = 0;
       // the last build's result (its squares and messages stay shown)
+      this.gameStarted = Date.now();
+      // the plugin's load, the game's start near enough: objects installed before it are loaded
       this.notes = [];
       // the plugin's own lines about the last task, before the generator's
       this.earlier = [];
@@ -534,7 +536,7 @@
       this.sequence = void 0;
       this.progress = void 0;
       const took = Date.now() - this.started;
-      const from = (r) => [...r?.messages ?? []].reverse();
+      const from = (r) => [...r?.messages ?? []].filter((m) => !(m.installed && m.installed < this.gameStarted)).reverse();
       const what = { build: "Build", open: "Switch", import: "Import", add: "Adding the park", new: "New playlist", copy: "Duplicate", export: "Export" }[task];
       if (task !== "build" && task !== "open" && !(imported?.ok && sequence)) {
         const why = status.state === "cancelled" ? "cancelled" : imported?.error || status.error || "the generator failed";
@@ -565,7 +567,9 @@
         log(`${NOUN[task]} "${made}" made`);
         return;
       }
-      this.earlier = task !== "build" && task !== "open" ? from(imported) : [];
+      const own = task !== "build" && task !== "open" ? from(imported) : [];
+      const lifted = own.filter((m) => m.level === "warn" || m.level === "error");
+      this.earlier = own.filter((m) => !lifted.includes(m));
       this.last = current;
       if (status.state === "cancelled") {
         this.outcome = { phase: "idle", text: "Build cancelled" };
@@ -598,7 +602,10 @@
         phase: "done",
         text: `${done} at ${at}, now playing${warnings ? `; ${warnings} warning${warnings > 1 ? "s" : ""}` : ""}`
       };
-      this.notes = [{ level: "ok", text: task === "build" || task === "add" ? `Built ${at} in ${clock(took)}, now playing` : `${done} "${sequence}" ${at} in ${clock(took)}, now playing` }];
+      this.notes = [{ level: "ok", text: task === "build" || task === "add" ? `Built ${at} in ${clock(took)}, now playing` : `${done} "${sequence}" ${at} in ${clock(took)}, now playing` }, ...lifted];
+      if (lifted.some((m) => /restart the game/i.test(m.text))) {
+        this.outcome = { phase: "done", text: `${done} at ${at}; restart the game to load its new objects`, warning: true };
+      }
       for (const w of current.warnings ?? []) {
         log(`build warning: ${w}`);
       }
@@ -683,7 +690,7 @@
       const states = this.progress?.parkStates;
       if (this.building && states?.length) {
         const same = this.task === "build" || this.task === "add";
-        return states.map((p) => same && p.state === "pending" && p.key ? carried(p.key, p) : p);
+        return states.map((p) => same && p.state === "pending" && p.key && before.has(p.key) ? carried(p.key, p) : p);
       }
       if (this.task === "new" || this.task === "import" || this.task === "copy" && !this.sequence) {
         return unknown;
