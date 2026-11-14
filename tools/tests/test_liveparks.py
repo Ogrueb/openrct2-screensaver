@@ -139,7 +139,7 @@ class LiveParks(unittest.TestCase):
             lines = []
             for f in made:
                 self.park(os.path.join(library, f))
-                lines += ["[[park]]", 'file = "%s"' % f, 'name = "%s"' % f[:-5].title()]
+                lines += ["[[park]]", 'file = "%s"' % f, 'name = "%s"' % f[:-5].title(), "author = false"]
             if made:
                 os.makedirs(os.path.join(library, "x"), exist_ok=True)
                 lines.append('companions = ["x/show.js"]')
@@ -169,6 +169,7 @@ class LiveParks(unittest.TestCase):
         texts = [m["text"] for m in self.task("add")["messages"]]
         self.assertTrue(any("converted from SV6" in t for t in texts), texts)
         self.assertTrue(any("restart the game" in t for t in texts), "new objects need a restart")
+        self.assertIs(self.read()["park"][-1]["author"], False, "a save has no builders to warn about")
 
     def test_new_of_a_folder_with_saves_imports_it(self):
         folder = os.path.join(self.tmp.name, "RCT2 saves")
@@ -196,6 +197,16 @@ class LiveParks(unittest.TestCase):
         self.assertEqual(code, 0, self.task("add"))
         self.assertEqual(self.read()["park"][-1]["file"], "../pack.zip")
         self.assertIn("WALL1.DAT", os.listdir(os.path.join(self.user, "object", "rct-screensaver")))
+        self.assertTrue(any("restart the game" in m["text"] for m in self.task("add")["messages"]))
+        # Added again elsewhere (an earlier try installed its objects): still the restart note
+        other = os.path.join(self.lib, "other.toml")
+        with open(other, "w") as f:
+            f.write('name = "Other"\n\n[[park]]\nfile = "a.park"\n')
+        mksequence.register_generator(self.user, "Other", other)
+        code, _ = self.run_task(mksequence.live_add, "Other", dl, self.user)
+        self.assertEqual(code, 0, self.task("add"))
+        texts = [m["text"] for m in self.task("add")["messages"]]
+        self.assertTrue(any("its objects are in your object folder" in t and "restart" in t for t in texts), texts)
 
     def test_add_bakes_the_games_edits_first(self):
         os.makedirs(livefile.folder(self.user), exist_ok=True)

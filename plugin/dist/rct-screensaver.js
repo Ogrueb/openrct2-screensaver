@@ -682,7 +682,8 @@
       const unknown = [{ name: this.task === "import" ? "The imported playlist" : "The new playlist", state: "building" }];
       const states = this.progress?.parkStates;
       if (this.building && states?.length) {
-        return states.map((p) => p.state === "pending" && p.key ? carried(p.key, p) : p);
+        const same = this.task === "build" || this.task === "add";
+        return states.map((p) => same && p.state === "pending" && p.key ? carried(p.key, p) : p);
       }
       if (this.task === "new" || this.task === "import" || this.task === "copy" && !this.sequence) {
         return unknown;
@@ -6085,6 +6086,92 @@
     return t0 <= t1 ? [x0 + t0 * dx, y0 + t0 * dy, x0 + t1 * dx, y0 + t1 * dy] : void 0;
   }
 
+  // src/ui/generation.ts
+  var GEN_CHOICES = {
+    motion: [["Pans", "pans", "Glide from view to view"], ["Static", "static", "Hold each view, then cut"]],
+    route: [["Circuit", "circuit", "Loop around the park"], ["Random", "random", "The generator's pick order, varying angle and zoom"]],
+    reverse: [["Off", false, "Orders as found"], ["On", true, "Each order reversed too"]],
+    ridePans: [
+      ["Include", "include", "Adds a pan along a ride's track"],
+      ["Exclude", "exclude", "No ride pans"],
+      ["Only", "only", "Overview and ride pans only"]
+    ],
+    parkScripts: [["Off", false, "The parks' own scripts stay off"], ["On", true, "Run the parks' own scripts (companion plugins)"]],
+    parkViews: [["Off", false, "No views on scripted events"], ["On", true, "Views on the parks' scripted animations and shows"]]
+  };
+  var GEN_STEPS = {
+    variants: { step: 1, min: 1, max: 10, text: (v) => `${v}` },
+    parkMin: { step: 5, min: 0, max: 300, text: (v) => v ? `${v} s` : "none" },
+    parkCap: { step: 5, min: 10, max: 300, text: (v) => `${v} s` },
+    timeScale: { step: 0.25, min: 0.5, max: 3, text: (v) => `\xD7 ${v.toFixed(2)}` }
+  };
+  function generationClick(g, id, prefix) {
+    if (id.startsWith(`${prefix}seg.`)) {
+      const [, key, i] = id.slice(prefix.length).split(".");
+      const choice = GEN_CHOICES[key]?.[Number(i)];
+      return choice ? { ...g, [key]: choice[1] } : g;
+    }
+    if (id.startsWith(`${prefix}step.`)) {
+      const [, key, sign] = id.slice(prefix.length).split(".");
+      const k = key;
+      const st = GEN_STEPS[k];
+      if (!st) {
+        return g;
+      }
+      let v = Math.round((g[k] + (sign === "more" ? st.step : -st.step)) * 100) / 100;
+      v = Math.max(st.min, Math.min(st.max, v));
+      v = k === "parkMin" ? Math.min(v, g.parkCap - 5) : k === "parkCap" ? Math.max(v, g.parkMin + 5) : v;
+      return { ...g, [k]: v };
+    }
+    return void 0;
+  }
+  function generationRows(scene, overlay, g, prefix, x, y, width, place, state, rowH = 26) {
+    const rowLabel = (id, text) => label(scene, id, text, { x, y, width: 0, height: rowH }, 13, overlay);
+    const segments = (key, text) => {
+      rowLabel(`${prefix}seg.${key}.label`, text);
+      const choices = GEN_CHOICES[key];
+      const widths = choices.map(([t]) => Math.ceil(measure(overlay, t, 12, true).width) + 16);
+      let sx = x + width - widths.reduce((a, w) => a + w, 0) - 4 * (choices.length - 1);
+      const sy = y + Math.round((rowH - 22) / 2);
+      choices.forEach(([t, value, tip], i) => {
+        const id = `${prefix}seg.${key}.${i}`;
+        const r = place(id, { x: sx, y: sy, width: widths[i], height: 22 }, tip);
+        button(scene, id, r, state(id, g[key] === value), { text: t, textSize: 12 }, overlay);
+        sx += widths[i] + 4;
+      });
+      y += rowH;
+    };
+    const stepper = (key, text, tip) => {
+      rowLabel(`${prefix}step.${key}.label`, text);
+      const st = GEN_STEPS[key];
+      const w = 22;
+      const sy = y + Math.round((rowH - w) / 2);
+      const more = place(`${prefix}step.${key}.more`, { x: x + width - w, y: sy, width: w, height: w }, tip, g[key] >= st.max);
+      const box = { x: more.x - 4 - 52, y: sy, width: 52, height: w };
+      const less = place(`${prefix}step.${key}.less`, { x: box.x - 4 - w, y: sy, width: w, height: w }, tip, g[key] <= st.min);
+      button(scene, `${prefix}step.${key}.less`, less, state(`${prefix}step.${key}.less`, false), { icon: "less", iconSize: 16 }, overlay);
+      button(scene, `${prefix}step.${key}.more`, more, state(`${prefix}step.${key}.more`, false), { icon: "add", iconSize: 16 }, overlay);
+      scene.set(`${prefix}stepv.${key}`, { type: "rect", ...box, fill: THEME.editorList, z: 1 });
+      const vid = `${prefix}stept.${key}`;
+      label(scene, vid, st.text(g[key]), { x: box.x + box.width / 2, y: sy, width: 0, height: w }, 13, overlay);
+      scene.set(vid, { ...scene.get(vid), align: "center" });
+      y += rowH;
+    };
+    segments("motion", "Motion");
+    segments("route", "View order");
+    if (g.route === "circuit") {
+      stepper("variants", "Variants", "Circuit orders per park, a different one on each visit (small parks may have fewer)");
+      segments("reverse", "Include reverse");
+    }
+    if (g.motion === "pans") {
+      segments("ridePans", "Ride pans");
+    }
+    stepper("parkMin", "Shortest park", "Shortest time per park");
+    stepper("parkCap", "Longest park", "Longest time per park: the lowest-scoring views drop to fit");
+    stepper("timeScale", "Time scale", "Multiplies every generated hold and pan: above 1 is slower");
+    return y;
+  }
+
   // src/ui/editor-panel.ts
   var PAN_SHARE_STEP2 = 0.1;
   var HINT_FRAME = "Drag the park: moves the view. Wheel: zooms it.";
@@ -6109,24 +6196,6 @@
       ["Off", "off", "No names"],
       ["Unset", null, "Viewer's setting"]
     ]
-  };
-  var GEN_CHOICES = {
-    motion: [["Pans", "pans", "Glide from view to view"], ["Static", "static", "Hold each view, then cut"]],
-    route: [["Circuit", "circuit", "Loop around the park"], ["Random", "random", "The generator's pick order, varying angle and zoom"]],
-    reverse: [["Off", false, "Orders as found"], ["On", true, "Each order reversed too"]],
-    ridePans: [
-      ["Include", "include", "Adds a pan along a ride's track"],
-      ["Exclude", "exclude", "No ride pans"],
-      ["Only", "only", "Overview and ride pans only"]
-    ],
-    parkScripts: [["Off", false, "The parks' own scripts stay off"], ["On", true, "Run the parks' own scripts (companion plugins)"]],
-    parkViews: [["Off", false, "No views on scripted events"], ["On", true, "Views on the parks' scripted animations and shows"]]
-  };
-  var GEN_STEPS = {
-    variants: { step: 1, min: 1, max: 10, text: (v) => `${v}` },
-    parkMin: { step: 5, min: 0, max: 300, text: (v) => v ? `${v} s` : "none" },
-    parkCap: { step: 5, min: 10, max: 300, text: (v) => `${v} s` },
-    timeScale: { step: 0.25, min: 0.5, max: 3, text: (v) => `\xD7 ${v.toFixed(2)}` }
   };
   var OFF_ON = (off, on) => [["Off", false, off], ["On", true, on]];
   var PARK_CHOICES = {
@@ -6374,7 +6443,7 @@
     pressed(inside) {
       const ed = this.editor;
       const hit = this.hit();
-      if (this.dropdown && (!hit || !hit.startsWith("park.") && !hit.startsWith("parks."))) {
+      if (this.dropdown && (!hit || !hit.startsWith("park.") && !hit.startsWith("parks.") && !(hit === "build" && this.draft))) {
         this.dropdown = void 0;
         return true;
       }
@@ -6630,24 +6699,12 @@
         }
         return;
       }
-      if (id.startsWith("nseg.") && this.newGen) {
-        const [, key, i] = id.split(".");
-        const choice = GEN_CHOICES[key]?.[Number(i)];
-        if (choice) {
-          this.newGen = { ...this.newGen, [key]: choice[1] };
+      if (this.newGen) {
+        const g = generationClick(this.newGen, id, "n");
+        if (g) {
+          this.newGen = g;
+          return;
         }
-        return;
-      }
-      if (id.startsWith("nstep.") && this.newGen) {
-        const [, key, sign] = id.split(".");
-        const k = key;
-        const g = this.newGen;
-        const st = GEN_STEPS[k];
-        let v = Math.round((g[k] + (sign === "more" ? st.step : -st.step)) * 100) / 100;
-        v = Math.max(st.min, Math.min(st.max, v));
-        v = k === "parkMin" ? Math.min(v, g.parkCap - 5) : k === "parkCap" ? Math.max(v, g.parkMin + 5) : v;
-        this.newGen = { ...g, [k]: v };
-        return;
       }
       if (id.startsWith("step.")) {
         const [, key, sign] = id.split(".");
@@ -6782,12 +6839,23 @@
       const e = this.editor;
       if (builder.running) {
         builder.cancel();
+      } else if (this.draft && builder.available) {
+        this.buildDraft();
       } else if (e && builder.available && builder.pendingEdits(e.playback.installedAt)) {
         e.playback.savePlaylistProps();
         this.messages.first = 0;
         builder.start(e.playback.sequenceName);
       }
       this.render();
+    }
+    /** The New playlist's first build (Build and play while its park list is open): its parks as ticked and
+     *  ordered, then played. */
+    buildDraft() {
+      const name = this.draft.sequence;
+      this.draft = void 0;
+      this.dropdown = void 0;
+      this.messages.first = 0;
+      builder.openPlaylist(name);
     }
     /** Import playlist or Export playlist: the system's file dialog (the game waits while it is open),
      *  then the generator in the background, followed in this pane like a build. */
@@ -7386,7 +7454,7 @@
         return this.playlists.map((_, i) => ({ kind: "playlist", i }));
       }
       if (this.draft) {
-        return [...rows.map((_, p) => ({ kind: "park", p })), { kind: "build" }];
+        return rows.map((_, p) => ({ kind: "park", p }));
       }
       const unused = e.playback.unusedParks.map((park, i) => ({ park, i })).filter((u) => !u.park.on);
       return [
@@ -7415,12 +7483,6 @@
           d.props = { ...d.props, use };
           saveOtherPlaylistProps(d.sequence, d.source, d.props);
         }
-      } else if (what === "build" && this.draft) {
-        const name = this.draft.sequence;
-        this.draft = void 0;
-        this.dropdown = void 0;
-        this.messages.first = 0;
-        builder.openPlaylist(name);
       } else if (what.startsWith("tick.")) {
         const row = this.orderRows(e)[Number(what.slice(5))];
         const on = row ? row.index >= 0 ? p.parkInUse(row.index) : true : false;
@@ -7582,8 +7644,8 @@
           text(`pcount.${i}`, right, area.x + width - 8 - rw, y, pl.missing ? THEME.warning : fresh ? THEME.pending : THEME.textDim);
           continue;
         }
-        const [label0, tip, icon] = item.kind === "add" ? ["Add park\u2026", "Pick a park, an RCT save or a park download (.park, .sv6, .zip); it is added and the playlist built", "add"] : ["Build and play this playlist", "Build the new playlist with these parks, in this order, and play it", "build"];
-        const off = (item.kind === "build" ? !builder.available : !parksOn) || busy;
+        const [label0, tip, icon] = ["Add park\u2026", "Pick a park, an RCT save or a park download (.park, .sv6, .zip); it is added and the playlist built", "add"];
+        const off = !parksOn || busy;
         const why = !parksOn ? builder.available ? "needs the patched engine with these dialogs" : builder.unavailableReason : busy ? `wait for the ${builder.noun} to finish` : "";
         const id = `parks.${item.kind}`;
         const row = this.place(id, { x: area.x + 4, y: y + 2, width: width - 8, height: s.parkRow - 4 }, why ? `${label0.replace("\u2026", "")}: ${why}` : tip, off);
@@ -7978,12 +8040,13 @@
       this.squares(scene, builder.parks, x0, y, inner, squareH);
       y += squareH + 8;
       const unavailable = line.phase === "unavailable";
-      const nothing = !running && !unavailable && !builder.pendingEdits(e.playback.installedAt);
+      const draft = !!this.draft && !running;
+      const nothing = !running && !unavailable && !draft && !builder.pendingEdits(e.playback.installedAt);
       const task = builder.runningTask;
       const build = this.place(
         "build",
         { x: x0, y, width: inner, height: s.buildButton },
-        unavailable ? line.text : task === "export" ? "Stop the export (Ctrl+B)" : task === "import" ? "Stop the import; the playlist plays on as it was (Ctrl+B)" : task === "new" || task === "copy" || task === "open" ? `Stop the ${builder.noun}; the playlist plays on as it was (Ctrl+B)` : task === "add" ? "Stop adding the park; the playlist plays on as it was (Ctrl+B)" : running ? "Stop the build; the playlist plays on as it was (Ctrl+B)" : nothing ? "Nothing to build: the playlist files hold every edit" : "Save your live edits to the playlist and build it in the background, then play it (Ctrl+B)",
+        unavailable ? line.text : task === "export" ? "Stop the export (Ctrl+B)" : task === "import" ? "Stop the import; the playlist plays on as it was (Ctrl+B)" : task === "new" || task === "copy" || task === "open" ? `Stop the ${builder.noun}; the playlist plays on as it was (Ctrl+B)` : task === "add" ? "Stop adding the park; the playlist plays on as it was (Ctrl+B)" : running ? "Stop the build; the playlist plays on as it was (Ctrl+B)" : draft ? "Build the new playlist with its parks as ticked and ordered, then play it (Ctrl+B)" : nothing ? "Nothing to build: the playlist files hold every edit" : "Save your live edits to the playlist and build it in the background, then play it (Ctrl+B)",
         unavailable || nothing
       );
       const st = this.state("build");
@@ -8211,7 +8274,7 @@
     return lines;
   }
   var Welcome = class {
-    // when this panel's New started: the playlist it makes is built and played at once
+    // the options of the playlist New is making
     /** `problem`: why the installed playlist cannot play (empty: none is installed). */
     constructor(api, problem = "") {
       this.api = api;
@@ -8240,6 +8303,10 @@
       const made = builder.made;
       if (this.newSince && made && made.task === "new" && made.at >= this.newSince && !builder.running) {
         this.newSince = 0;
+        if (this.madeGen) {
+          saveOtherPlaylistProps(made.sequence, made.playlist, { generation: this.madeGen });
+          this.madeGen = void 0;
+        }
         builder.openPlaylist(made.sequence);
       } else if (this.newSince && !builder.running && builder.runningTask === void 0 && builder.line.phase === "failed") {
         this.newSince = 0;
@@ -8269,10 +8336,19 @@
     }
     click(id) {
       if (id === "new") {
+        this.gen = { ...GENERATION_DEFAULTS };
+      } else if (id === "back") {
+        this.gen = void 0;
+      } else if (id.startsWith("w") && this.gen) {
+        this.gen = generationClick(this.gen, id, "w") ?? this.gen;
+      } else if (id === "go") {
+        this.madeGen = this.gen;
+        this.gen = void 0;
         this.newSince = Date.now();
         builder.newPlaylist();
         if (!builder.running) {
           this.newSince = 0;
+          this.madeGen = void 0;
         }
       } else if (id === "import") {
         builder.importPlaylist();
@@ -8283,7 +8359,54 @@
         }
       }
     }
+    /** New's first step: the generation options, then Choose folder… or Back. */
+    drawGen(g) {
+      const scene = /* @__PURE__ */ new Map();
+      const overlay = this.api.overlay;
+      const inner = WIDTH2 - 2 * PAD;
+      const introLines = wrap(this.api, "How the new playlist's views are made. These matter only now: its first build makes its views with them.", 14, inner);
+      const rows = 5 + (g.route === "circuit" ? 2 : 0) + (g.motion === "pans" ? 1 : 0);
+      const height = PAD + 28 + 6 + introLines.length * 19 + 10 + rows * 26 + 14 + ROW + 10 + 18 + PAD;
+      const frame = { x: Math.round((ui.width - WIDTH2) / 2), y: Math.max(8, Math.round((ui.height - height) / 2)), width: WIDTH2, height };
+      backing(scene, "frame", frame, THEME.editorBacking);
+      const x0 = frame.x + PAD;
+      let y = frame.y + PAD;
+      label(scene, "title", "New playlist", { x: x0, y, width: inner, height: 28 }, 22, overlay, true);
+      y += 28 + 6;
+      introLines.forEach((t, i) => {
+        label(scene, `intro.${i}`, t, { x: x0, y: y + i * 19, width: inner, height: 19 }, 14, overlay);
+        scene.set(`intro.${i}`, { ...scene.get(`intro.${i}`), colour: THEME.textDim });
+      });
+      y += introLines.length * 19 + 10;
+      this.hits = [];
+      const state = (id, on) => ({ hover: this.hover === id, down: this.down === id && this.hover === id, on, disabled: false });
+      y = generationRows(scene, overlay, g, "w", x0, y, inner, (id, r, tip, off) => {
+        this.hits.push({ id, rect: r, tip, off: !!off });
+        return r;
+      }, (id, on) => ({ ...state(id, on), disabled: !!this.hits.find((h) => h.id === id)?.off }));
+      y += 14;
+      const busy = builder.running;
+      const goOff = !builder.parksAvailable || busy;
+      const half = Math.floor((inner - GAP) / 2);
+      const go = { x: x0, y, width: half, height: ROW };
+      const back = { x: x0 + half + GAP, y, width: inner - half - GAP, height: ROW };
+      this.hits.push({ id: "go", rect: go, tip: goOff ? builder.parksAvailable ? `Wait for the ${builder.noun} to finish` : builder.unavailableReason : "Pick a folder of parks: a playlist of them is made with these options, built and played", off: goOff });
+      this.hits.push({ id: "back", rect: back, tip: "Back to the start", off: false });
+      button(scene, "go", go, { ...state("go", false), disabled: goOff }, { icon: "add", iconSize: 18, text: "Choose folder\u2026", textSize: 15, left: true }, overlay);
+      button(scene, "back", back, state("back", false), { text: "Back", textSize: 15 }, overlay);
+      y += ROW + 10;
+      label(scene, "esc", "Esc leaves the screensaver", { x: x0, y, width: inner, height: 18 }, 13, overlay);
+      scene.set("esc", { ...scene.get("esc"), colour: THEME.textDim });
+      const tipped = this.hits.find((h) => h.id === this.hover);
+      if (tipped && contains(tipped.rect, this.mouse.x, this.mouse.y)) {
+        tooltip(scene, "tip", tipped.tip, this.mouse.x, tipped.rect.y - 4, overlay, ui.width);
+      }
+      return scene;
+    }
     draw() {
+      if (this.gen) {
+        return this.drawGen(this.gen);
+      }
       const scene = /* @__PURE__ */ new Map();
       const overlay = this.api.overlay;
       const inner = WIDTH2 - 2 * PAD;
@@ -8331,7 +8454,7 @@
         "new",
         "add",
         "New playlist from a folder of parks\u2026",
-        "Pick a folder of parks (.park files, RCT saves or park downloads): a playlist of them is made, built and played",
+        "Pick how its views are made, then a folder of parks (.park files, RCT saves or park downloads): a playlist of them is made, built and played",
         { x: x0, y, width: inner, height: ROW },
         parksOff
       );

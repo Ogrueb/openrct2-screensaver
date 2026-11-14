@@ -423,7 +423,7 @@ def run(paths, out, openrct2=None, user_dir=None, each=False, skip_known=(), nam
 
 def install_loose(path, user_dir=None):
     """The loose object files of one download (a zip or folder) installed into the user object folder, as an
-    import does; returns how many files were new."""
+    import does; returns (how many files were new, the paths of its objects there already)."""
     user_dir = user_dir or default_user_dir()
     owners = load_owners(user_dir)
     before = set(owners)
@@ -431,7 +431,9 @@ def install_loose(path, user_dir=None):
     install_objects(parkinfo.Archive(path), user_dir, installed_objects(user_dir, owners), owners, claimed)
     # (its own claims, keyed like an import of that one download, so importing it again replaces only its own)
     save_owners(user_dir, owners, os.path.normcase(os.path.abspath(path)), claimed)
-    return len(set(owners) - before)
+    new = set(owners) - before
+    dest = os.path.join(user_dir, "object", OBJECT_SUBDIR)
+    return len(new), [os.path.join(dest, f) for f in sorted(claimed - new)]
 
 
 def main():

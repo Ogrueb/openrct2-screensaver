@@ -141,7 +141,7 @@ See README.md for usage.
   in `screensaver/python`), which the engine runs when `generator.json` is missing or stale (else a Python on the
   PATH); `screensaver.generator` says whether one can run and why not, so the plugin grays Build, New, Add park,
   Import/Export with the reason (`builder.unavailableReason`). With no playlist the mode shows a panel
-  (`ui/welcome.ts`: New playlist from a folder, built and played at once; Import; the known playlists). Settings and New playlist (owner, 2026-11-14, `docs/screensaver-ui.md`
+  (`ui/welcome.ts`: New playlist from a folder, its generation options first, then built and played at once; Import; the known playlists). Settings and New playlist (owner, 2026-11-14, `docs/screensaver-ui.md`
   "Settings and the New playlist pane"): a Settings foldout top right with a Playlist | Park switch holds what applies
   to any views (motion feel, holds, titles, music, scripts and event views; a park's scripts, event views, return pan,
   pan speed), and New playlist and Duplicate are icon buttons on the playlist row, New opening a pane top centre with

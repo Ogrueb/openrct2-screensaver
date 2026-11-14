@@ -23,6 +23,7 @@ import { saveOtherPlaylistProps } from "../storage";
 import { Layer, Rect, Scene, backing, bevel, button, contains, iconPath, iconPixels, label, measure, tooltip } from "./kit";
 import { CRAWL, EDITOR, THEME, TIMING, Z } from "./theme";
 import { ViewMap } from "./view-map";
+import { GEN_CHOICES, GEN_STEPS, GenStep, generationClick } from "./generation";
 
 const PAN_SHARE_STEP = 0.1;
 const HINT_FRAME = "Drag the park: moves the view. Wheel: zooms it.";
@@ -40,24 +41,6 @@ const CHOICES: Partial<Record<keyof PlaylistProps, Choice[]>> = {
         ["Unset", "keep", "Viewer's setting"]],
     titles: [["Overview", "overview", "First view"], ["On", "on", "Every view"],
         ["Off", "off", "No names"], ["Unset", null, "Viewer's setting"]],
-};
-
-/** The Generation section's choices (the settings page's labels), and its steppers' steps and ranges. */
-const GEN_CHOICES: Partial<Record<keyof Generation, Choice[]>> = {
-    motion: [["Pans", "pans", "Glide from view to view"], ["Static", "static", "Hold each view, then cut"]],
-    route: [["Circuit", "circuit", "Loop around the park"], ["Random", "random", "The generator's pick order, varying angle and zoom"]],
-    reverse: [["Off", false, "Orders as found"], ["On", true, "Each order reversed too"]],
-    ridePans: [["Include", "include", "Adds a pan along a ride's track"], ["Exclude", "exclude", "No ride pans"],
-        ["Only", "only", "Overview and ride pans only"]],
-    parkScripts: [["Off", false, "The parks' own scripts stay off"], ["On", true, "Run the parks' own scripts (companion plugins)"]],
-    parkViews: [["Off", false, "No views on scripted events"], ["On", true, "Views on the parks' scripted animations and shows"]],
-};
-type GenStep = "variants" | "parkMin" | "parkCap" | "timeScale";
-const GEN_STEPS: Record<GenStep, { step: number; min: number; max: number; text: (v: number) => string }> = {
-    variants: { step: 1, min: 1, max: 10, text: v => `${v}` },
-    parkMin: { step: 5, min: 0, max: 300, text: v => (v ? `${v} s` : "none") },
-    parkCap: { step: 5, min: 10, max: 300, text: v => `${v} s` },
-    timeScale: { step: 0.25, min: 0.5, max: 3, text: v => `× ${v.toFixed(2)}` },
 };
 
 /** The park settings (the views pane's settings button): the switches' choices, and the steppers' values. */
@@ -138,7 +121,7 @@ class Scroll {
 /** A row press that becomes a drag once the mouse moves (views or parks). */
 /** A row of the open park list. */
 type ParkItem = { kind: "park"; p: number } | { kind: "unused"; i: number } | { kind: "playlist"; i: number }
-    | { kind: "head"; text: string } | { kind: "add" } | { kind: "build" };
+    | { kind: "head"; text: string } | { kind: "add" };
 
 interface RowDrag {
     list: "views" | "parks";
@@ -350,8 +333,9 @@ export class EditorPanel implements EditorView {
     private pressed(inside: boolean): boolean {
         const ed = this.editor!;
         const hit = this.hit();
-        if (this.dropdown && (!hit || (!hit.startsWith("park.") && !hit.startsWith("parks.")))) {
-            // Another click closes the open list (a click on either field too); it does nothing else.
+        if (this.dropdown && (!hit || (!hit.startsWith("park.") && !hit.startsWith("parks.") && !(hit === "build" && this.draft)))) {
+            // Another click closes the open list (a click on either field too); it does nothing else (but
+            // Build and play builds a new playlist's parks as the list shows them).
             this.dropdown = undefined;
             return true;
         }
@@ -627,25 +611,12 @@ export class EditorPanel implements EditorView {
             }
             return;
         }
-        if (id.startsWith("nseg.") && this.newGen) {
-            const [, key, i] = id.split(".");
-            const choice = GEN_CHOICES[key as keyof Generation]?.[Number(i)];
-            if (choice) {
-                this.newGen = { ...this.newGen, [key]: choice[1] };
+        if (this.newGen) {
+            const g = generationClick(this.newGen, id, "n");
+            if (g) {
+                this.newGen = g;
+                return;
             }
-            return;
-        }
-        if (id.startsWith("nstep.") && this.newGen) {
-            const [, key, sign] = id.split(".");
-            const k = key as GenStep;
-            const g = this.newGen;
-            const st = GEN_STEPS[k];
-            let v = Math.round((g[k] + (sign === "more" ? st.step : -st.step)) * 100) / 100;
-            v = Math.max(st.min, Math.min(st.max, v));
-            // (the shortest park time stays under the longest, as on the settings page)
-            v = k === "parkMin" ? Math.min(v, g.parkCap - 5) : k === "parkCap" ? Math.max(v, g.parkMin + 5) : v;
-            this.newGen = { ...g, [k]: v };
-            return;
         }
         if (id.startsWith("step.")) {
             const [, key, sign] = id.split(".");
@@ -702,12 +673,24 @@ export class EditorPanel implements EditorView {
         const e = this.editor;
         if (builder.running) {
             builder.cancel();
+        } else if (this.draft && builder.available) {
+            this.buildDraft();
         } else if (e && builder.available && builder.pendingEdits(e.playback.installedAt)) {
             e.playback.savePlaylistProps(); // saved already; the build takes the live file
             this.messages.first = 0;
             builder.start(e.playback.sequenceName);
         }
         this.render();
+    }
+
+    /** The New playlist's first build (Build and play while its park list is open): its parks as ticked and
+     *  ordered, then played. */
+    private buildDraft(): void {
+        const name = this.draft!.sequence;
+        this.draft = undefined;
+        this.dropdown = undefined;
+        this.messages.first = 0;
+        builder.openPlaylist(name);
     }
 
     /** Import playlist or Export playlist: the system's file dialog (the game waits while it is open),
@@ -1263,7 +1246,8 @@ export class EditorPanel implements EditorView {
             return this.playlists.map((_, i) => ({ kind: "playlist", i }) as ParkItem);
         }
         if (this.draft) {
-            return [...rows.map((_, p) => ({ kind: "park", p }) as ParkItem), { kind: "build" }];
+            // (built by the Build pane's Build and play: owner, 2026-11-14)
+            return rows.map((_, p) => ({ kind: "park", p }) as ParkItem);
         }
         // (a left-out park ticked on joins the order above, to be placed before the build)
         const unused = e.playback.unusedParks.map((park, i) => ({ park, i })).filter(u => !u.park.on);
@@ -1291,12 +1275,6 @@ export class EditorPanel implements EditorView {
                 d.props = { ...d.props, use };
                 saveOtherPlaylistProps(d.sequence, d.source, d.props);
             }
-        } else if (what === "build" && this.draft) {
-            const name = this.draft.sequence;
-            this.draft = undefined;
-            this.dropdown = undefined;
-            this.messages.first = 0;
-            builder.openPlaylist(name);
         } else if (what.startsWith("tick.")) {
             const row = this.orderRows(e)[Number(what.slice(5))];
             const on = row ? (row.index >= 0 ? p.parkInUse(row.index) : true) : false;
@@ -1449,10 +1427,9 @@ export class EditorPanel implements EditorView {
                 text(`pcount.${i}`, right, area.x + width - 8 - rw, y, pl.missing ? THEME.warning : fresh ? THEME.pending : THEME.textDim);
                 continue;
             }
-            // The action rows: Add park; Build and play the new playlist
-            const [label0, tip, icon] = item.kind === "add" ? ["Add park…", "Pick a park, an RCT save or a park download (.park, .sv6, .zip); it is added and the playlist built", "add"]
-                : ["Build and play this playlist", "Build the new playlist with these parks, in this order, and play it", "build"];
-            const off = (item.kind === "build" ? !builder.available : !parksOn) || busy;
+            // The action row: Add park
+            const [label0, tip, icon] = ["Add park…", "Pick a park, an RCT save or a park download (.park, .sv6, .zip); it is added and the playlist built", "add"];
+            const off = !parksOn || busy;
             const why = !parksOn ? (builder.available ? "needs the patched engine with these dialogs" : builder.unavailableReason) : busy ? `wait for the ${builder.noun} to finish` : "";
             const id = `parks.${item.kind}`;
             const row = this.place(id, { x: area.x + 4, y: y + 2, width: width - 8, height: s.parkRow - 4 }, why ? `${label0.replace("…", "")}: ${why}` : tip, off);
@@ -1813,7 +1790,8 @@ export class EditorPanel implements EditorView {
         y += squareH + 8;
         // Build and play, or Cancel build while one runs.
         const unavailable = line.phase === "unavailable";
-        const nothing = !running && !unavailable && !builder.pendingEdits(e.playback.installedAt);
+        const draft = !!this.draft && !running;
+        const nothing = !running && !unavailable && !draft && !builder.pendingEdits(e.playback.installedAt);
         const task = builder.runningTask;
         const build = this.place("build", { x: x0, y, width: inner, height: s.buildButton },
             unavailable ? line.text : task === "export" ? "Stop the export (Ctrl+B)"
@@ -1821,6 +1799,7 @@ export class EditorPanel implements EditorView {
                 : task === "new" || task === "copy" || task === "open" ? `Stop the ${builder.noun}; the playlist plays on as it was (Ctrl+B)`
                 : task === "add" ? "Stop adding the park; the playlist plays on as it was (Ctrl+B)"
                 : running ? "Stop the build; the playlist plays on as it was (Ctrl+B)"
+                : draft ? "Build the new playlist with its parks as ticked and ordered, then play it (Ctrl+B)"
                 : nothing ? "Nothing to build: the playlist files hold every edit"
                 : "Save your live edits to the playlist and build it in the background, then play it (Ctrl+B)", unavailable || nothing);
         const st = this.state("build");

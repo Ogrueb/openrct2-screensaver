@@ -649,7 +649,10 @@ export class Builder {
         const unknown: ParkState[] = [{ name: this.task === "import" ? "The imported playlist" : "The new playlist", state: "building" }];
         const states = this.progress?.parkStates;
         if (this.building && states?.length) {
-            return states.map(p => p.state === "pending" && p.key ? carried(p.key, p) : p);
+            // (a rebuild of the playing playlist shows its waiting parks as they were; another playlist's
+            // waiting parks are empty squares until the generator reaches them)
+            const same = this.task === "build" || this.task === "add";
+            return states.map(p => same && p.state === "pending" && p.key ? carried(p.key, p) : p);
         }
         if (this.task === "new" || this.task === "import" || this.task === "copy" && !this.sequence) {
             return unknown;

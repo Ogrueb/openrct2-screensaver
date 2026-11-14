@@ -45,8 +45,8 @@ game files, which are not included; neither are any parks (see `ExampleParks/REA
 3. **Run it.** Start OpenRCT2 and click the Screensaver button on the main menu (the fifth button,
    a monitor with a park), or start `openrct2.exe --screensaver` to go straight into the mode. Esc
    returns to the menu, or quits when the game was started with the flag. With no playlist yet the
-   mode says so: **New playlist from a folder of parks** picks your folder, builds the playlist and
-   plays it; **Import playlist** takes a bundle someone exported. The view editor (E) does the rest
+   mode says so: **New playlist from a folder of parks** asks how its views are made, picks your
+   folder, builds the playlist and plays it; **Import playlist** takes a bundle someone exported. The view editor (E) does the rest
    (see "Setting views by hand").
 
 The settings page and the command line do more than the game's editor (every generator option,

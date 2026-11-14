@@ -2287,7 +2287,8 @@ def resolve_park(entry, index, base_dir, defaults, layout, edits=None, library=N
         if found:
             author = ", ".join(found)
             author_note = "builders not in the playlist; from the NE catalog or the file name: %s" % author
-        else:
+        elif not os.path.normcase(os.path.join("screensaver", "library", "added", "")) in os.path.normcase(path):
+            # (a park Add park converted from an RCT save before 2026-11-14 has no `author = false` yet)
             author_note = "no builders: none in the playlist, and the file matches nothing in the NE catalog (the caption shows the name alone)"
     _, counts, surface, heights = parkinfo.visible_element_counts(parkinfo.chunk_reader(chunks, body, 0x30))
     opts = {**defaults, **entry.get("views", {}), "saved_rotation": saved["rotation"]}
@@ -3818,10 +3819,11 @@ def write_playlist_text(path, text):
         f.write(text)
 
 
-def add_park_entry(playlist_path, park_path):
+def add_park_entry(playlist_path, park_path, author=None):
     """Add the park file or download `park_path` to the playlist as a new [[park]] (comments kept), or tick
     it on again when the playlist has it unticked. Returns (line for the user, reason or None: loose
-    objects that need installing). Raises when the park can't be added."""
+    objects that need installing). `author` False: none to credit (an RCT save converted for it). Raises when
+    the park can't be added."""
     entry, reason = parkinfo.park_entry(park_path)
     if entry is None:
         raise ValueError("%s; add it with the settings page's folder scan, which converts and installs" % reason
@@ -3851,6 +3853,9 @@ def add_park_entry(playlist_path, park_path):
     if entry.get("author"):
         block += "author = %s\n" % toml_string(entry["author"])
         new["author"] = entry["author"]
+    elif author is False:
+        block += "author = false  # an RCT save: no builders to credit\n"
+        new["author"] = False
     if data.get("park") and not re.search(r"(?m)^\s*\[\[\s*park\s*\]\]", raw):
         # Parks written as one inline list (New playlist did that before 2026-11-14): TOML can't extend it
         # with a [[park]], so the file is written anew with its parks as tables, its header comment kept
@@ -3909,7 +3914,8 @@ def task_failed(note, write, what, e):
 
 def import_downloads(paths, library, title, user_dir, openrct2, note):
     """RCT saves converted and loose objects installed, as the settings page's folder scan does (importparks.py),
-    into the park library `library`: returns (entries with absolute files, whether objects were installed)."""
+    into the park library `library`: returns (entries with absolute files, how many object files were new, the
+    paths of its objects that were there already)."""
     import importparks
     playlist, records, new_objects = importparks.run(paths, library, openrct2, user_dir, name=title,
                                                      echo=lambda line: None)
@@ -3924,10 +3930,27 @@ def import_downloads(paths, library, title, user_dir, openrct2, note):
     entries = [dict(e, file=os.path.join(library, e["file"]),
                     **({"companions": [os.path.join(library, c) for c in e["companions"]]} if e.get("companions") else {}))
                for e in data.get("park", [])]
-    return entries, new_objects > 0
+    ours = os.path.normcase(os.path.join(user_dir, "object", importparks.OBJECT_SUBDIR, ""))
+    had = sorted({o["installed"] for rec in records for o in rec.get("objects") or []
+                  if o.get("installed") and os.path.normcase(os.path.abspath(o["installed"])).startswith(ours)})
+    return entries, new_objects, had
 
 
 OBJECTS_NOTE = "objects installed in your object folder: restart the game so it loads them, then build again"
+
+
+def objects_notes(note, new, had):
+    """The restart note for a download's loose objects: new files need a restart; files installed earlier
+    (an earlier try, Starpointe on the owner's PC, 2026-11-14) need one only if the game started before them,
+    so files from the last day get a note (older ones the running game has loaded)."""
+    if new:
+        note("warn", OBJECTS_NOTE)
+        return
+    times = [t for t in (os.path.getmtime(f) for f in had if os.path.isfile(f)) if t > time.time() - 86400]
+    if times:
+        when = time.strftime("%Y-%m-%d %H:%M", time.localtime(max(times)))
+        note("warn", "its objects are in your object folder (installed %s): if the game was started before that, "
+                     "restart it so it loads them, then build again" % when)
 
 
 def needs_import(reason):
@@ -3952,17 +3975,15 @@ def live_add(name, park_path, user_dir, openrct2=None):
             # A download that ships loose objects: they go into the object folder, the park is read in place
             import importparks
             line, _ = add_park_entry(source, park_path)
-            if importparks.install_loose(park_path, user_dir):
-                note("warn", OBJECTS_NOTE)
+            objects_notes(note, *importparks.install_loose(park_path, user_dir))
         elif needs_import(reason):
             # An RCT save: converted into a library of its own
             library = os.path.join(user_dir, "screensaver", "library", "added", slug(os.path.splitext(os.path.basename(park_path))[0]))
-            entries, installed = import_downloads([park_path], library, "Added", user_dir, openrct2, note)
+            entries, new, had = import_downloads([park_path], library, "Added", user_dir, openrct2, note)
             if not entries:
                 raise ValueError("%s could not be imported%s" % (os.path.basename(park_path), "" if openrct2 else " (no OpenRCT2 to convert it with)"))
-            line, _ = add_park_entry(source, entries[0]["file"])
-            if installed:
-                note("warn", OBJECTS_NOTE)
+            line, _ = add_park_entry(source, entries[0]["file"], entries[0].get("author"))
+            objects_notes(note, new, had)
         else:
             line, reason = add_park_entry(source, park_path)
         note("ok", line)
@@ -3995,14 +4016,14 @@ def live_new(folder, user_dir, openrct2=None):
     try:
         write(ok=None)
         entries, reasons = parkinfo.scan_folder(folder)
-        installed = False
+        objects = (0, [])
         title = "RCT Screensaver " + (os.path.basename(os.path.normpath(folder)) or "parks")
         if any(needs_import(r) for r in reasons):
             # RCT saves or loose objects: the folder goes through importparks.py into a library (owner's handoff,
             # 2026-11-13), as the settings page's scan does
             note("info", "Converting saves and installing objects from %s" % folder)
             library = os.path.join(user_dir, "screensaver", "library", slug(os.path.basename(os.path.normpath(folder)) or "parks"))
-            entries, installed = import_downloads([folder], library, title, user_dir, openrct2, note)
+            entries, *objects = import_downloads([folder], library, title, user_dir, openrct2, note)
             reasons = []
         if not entries:
             raise ValueError("no parks in %s%s" % (folder, " (%s)" % "; ".join(reasons) if reasons else ""))
@@ -4019,8 +4040,7 @@ def live_new(folder, user_dir, openrct2=None):
         note("ok", "Made \"%s\" of %d park%s in %s" % (name, len(entries), "s" if len(entries) != 1 else "", folder))
         for reason in reasons:
             note("warn", "%s: left out or incomplete" % reason)
-        if installed:
-            note("warn", OBJECTS_NOTE)
+        objects_notes(note, *objects)
         # Its parks for the game's park list, to tick and order before the first build (owner, 2026-11-13):
         # names from the NE catalogue or the file, as reading every park would take seconds each
         parks = [{"key": park_key(e), "name": draft_name(e)} for e in entries]

@@ -429,8 +429,8 @@ click on the park field (Playlist order):
   on another builds it (`screensaver.build(<name>)`, only changed parks thanks to the park cache) and plays it as an
   import is played (`applyBuild` of a sequence that is not playing): its edits come from its live file, the
   playing playlist's edits leave the storage and stay in its own live file.
-- **New playlist…** and **Duplicate…** sit side by side at the top of the PLAYLIST list (owner, 2026-11-13; a
-  plus and a copy icon), above the playlists.
+- **New playlist…** and **Duplicate…** are icon buttons (a plus and a copy icon) on the playlist row since
+  2026-11-14 (they were at the top of the PLAYLIST list); New opens the New playlist pane first.
 - **New playlist from a folder…** calls `screensaver.newPlaylist()`: the system's folder dialog, then
   `mksequence.py --live-new <folder>`, which reads the folder as the settings page's scan does (`parkinfo.
   scan_folder`; parks and downloads in place; a folder with RCT saves or loose objects goes through
@@ -439,8 +439,9 @@ click on the park field (Playlist order):
   `screensaver/playlists/<slug>.toml` named "RCT Screensaver <folder>" (" 2" and so on when taken), registers it
   and lists it (`live/task-new.json`, with its parks: key and a name from the NE catalog or the file). No build
   follows (owner's tests, 2026-11-12/13): the park list opens on the new playlist's parks ("New playlist: its parks",
-  PLAYLIST showing it "not built"), to tick off and drag into order (saved to its own live file), and **Build and play
-  this playlist** builds it with them and plays it. Closed without building, it stays in the PLAYLIST list.
+  PLAYLIST showing it "not built"), to tick off and drag into order (saved to its own live file), and the Build pane's
+  **Build and play** (or Ctrl+B) builds it with them and plays it (the park list's own Build row went, owner 2026-11-14:
+  one Build button). Its squares stay empty until the generator reaches each park. Closed without building, it stays in the PLAYLIST list.
 - **Duplicate this playlist…** calls `screensaver.copyPlaylist(<sequence>)`: the system's Save dialog in
   `screensaver/playlists` ("<name> copy.toml"), then `mksequence.py --live-copy <sequence> --to <file>`: the
   game's edits baked, the playlist copied with its views file, named after the file (another name than any other
@@ -475,8 +476,9 @@ stock sequence with nothing on top, and every build button failed after a click 
   needed ..."); the build pane's header says "needs Python" or "no generator".
 - **No playlist.** The mode shows a panel in the middle of the window (`ui/welcome.ts`) over the stock title
   sequence: "No playlist yet" (or "Playlist not found" when the installed one's sequence is gone), New
-  playlist from a folder of parks (made, then built and played at once: there is nothing to keep playing
-  while its parks are ticked), Import playlist, the playlists `live/playlists.json` lists (built and played
+  playlist from a folder of parks (first the generation options, as the editor's New playlist pane, with Choose
+  folder… and Back, owner 2026-11-14; then made, its options saved to its live file, built and played at once:
+  there is nothing to keep playing while its parks are ticked), Import playlist, the playlists `live/playlists.json` lists (built and played
   on a click), the running task's line, and "Esc leaves the screensaver". No controls bar until a playlist
   plays; the build that finishes starts the player and the panel goes.
 
