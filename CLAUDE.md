@@ -141,7 +141,9 @@ See README.md for usage.
   in `screensaver/python`), which the engine runs when `generator.json` is missing or stale (else a Python on the
   PATH); `screensaver.generator` says whether one can run and why not, so the plugin grays Build, New, Add park,
   Import/Export with the reason (`builder.unavailableReason`). With no playlist the mode shows a panel
-  (`ui/welcome.ts`: New playlist from a folder, built and played at once; Import; the known playlists).
+  (`ui/welcome.ts`: New playlist from a folder, built and played at once; Import; the known playlists). Playlist properties' GENERATION section (2026-11-14, folded): the settings page's playlist-wide options
+  (motion, view order, variants, reverse, ride pans, park times, time scale, park scripts, event views), saved as
+  changes against the build's `generation` values and baked at the next build (`apply_generation`).
 - **Palette index 10** is both the void outside the map and the UI black; a packed water
   object that lightens it (Gardens of Light) washes out the stock interface (the white void was intended, but the UI must not suffer).
   Engine patch 0001 splits the two properly (the viewport painter rewrites its own index-10

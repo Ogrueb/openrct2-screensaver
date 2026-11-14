@@ -146,6 +146,7 @@ export interface Playlist {
     installed?: number;
     source?: string; // the playlist file it was installed from (mksequence.py --install), for the live file
     parks: ParkEntry[];
+    generation?: Generation; // the playlist-wide generator options it was built with (the editor's Generation section)
     unused?: { key: string; name: string }[]; // parks ticked off (use = false): listed in the editor to tick on again
 }
 
@@ -163,7 +164,29 @@ export interface PlaylistProps {
     returnHold?: number;
     titleMusic?: "ride" | "theme" | "keep";
     titles?: Titles | null;
+    generation?: Partial<Generation>; // the Generation section's changes: they take effect at the next build
 }
+
+/** The playlist-wide generator options (mksequence.py GENERATION; the settings page sets the same ones),
+ *  as the editor's Generation section shows them. */
+export interface Generation {
+    motion: "pans" | "static";
+    route: "circuit" | "random" | "picks";
+    variants: number; // circuit orders played in turn, 1-10
+    reverse: boolean; // the orders reversed too
+    ridePans: "include" | "exclude" | "only";
+    parkMin: number; // seconds per park, at least
+    parkCap: number; // and at most
+    timeScale: number; // every hold times this
+    parkScripts: boolean; // the parks' own scripts run
+    parkViews: boolean; // views on the parks' scripted animations and shows (park_plugins)
+}
+
+/** The generator's defaults (VIEW_DEFAULTS), for a playlist built before builds named its options. */
+export const GENERATION_DEFAULTS: Generation = {
+    motion: "pans", route: "circuit", variants: 1, reverse: false, ridePans: "include",
+    parkMin: 30, parkCap: 150, timeScale: 1, parkScripts: true, parkViews: false,
+};
 
 export function loadPlaylistProps(sequence: string): PlaylistProps {
     const all = context.sharedStorage.get<Record<string, PlaylistProps>>(NAMESPACE + ".playlistProps", {});

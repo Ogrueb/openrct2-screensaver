@@ -471,9 +471,24 @@ stock sequence with nothing on top, and every build button failed after a click 
   on a click), the running task's line, and "Esc leaves the screensaver". No controls bar until a playlist
   plays; the build that finishes starts the player and the panel goes.
 
-Still open from the handoff: a Generation section in Playlist properties, per-park settings in the views
-pane, and `.sv6` saves and loose objects through New playlist and Add park (the settings page's folder scan
-still does those).
+Still open from the handoff: per-park settings in the views pane, and `.sv6` saves and loose objects through
+New playlist and Add park (the settings page's folder scan still does those).
+
+### Generation (2026-11-14)
+
+Playlist properties end with a GENERATION section, folded under its header, holding the playlist-wide
+generator options the settings page sets, with its labels: Motion (Pans, Static), View order (Circuit,
+Random), Variants (1-10) and Include reverse (circuit only), Ride pans (Include, Exclude, Only; pans only),
+Shortest and Longest park (0-300 s and 10-300 s in 5 s steps, kept 5 s apart), Time scale (× 0.5-3 in 0.25
+steps), Park scripts and Event views (`park_plugins`; shown while park scripts run). Unlike the rest of the
+properties, nothing plays differently until a build: the header says "changed · next build" in amber while a
+value differs from the build, and the save marks the build pane "edits not built". Every build names the
+values it was made with (`generation` in the playlist, `generation_values`); the editor saves only what
+differs from them (`playlistProps.<sequence>.generation`, plugin keys), drops what a new build has made its
+own, and the build's bake writes them into the playlist (`apply_generation`: `[views] motion`, `route`,
+`circuit_variants`, `circuit_reverse`, `ride_pans`/`only = "rides"`, `park_min`, `park_cap`, `time_scale`,
+top-level `park_scripts`, `park_plugins`). The timing holds the editor saves are in the time scale the
+playlist was built with, so a new time scale scales them too.
 
 ### Live file (2026-11-10, owner's go-ahead in "Explore saving playlists without the Generator")
 

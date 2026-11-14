@@ -8,7 +8,7 @@ import { measureLoaded } from "./measure";
 import { Pan, PanChanges, Pose, panTolerance } from "./pan";
 import { DESIGN_SCREEN, NO_SCALING, Scaling, Screen, scaleTolerance, scaleViews, scalingFor, screenOf } from "./scale";
 import {
-    Cue, Edits, ParkEntry, Playlist, PlaylistProps, Settings, View, Visits, isPinned, placeCuts, loadEdits, loadPlaylistProps, loadVisits,
+    Cue, Edits, GENERATION_DEFAULTS, Generation, ParkEntry, Playlist, PlaylistProps, Settings, View, Visits, isPinned, placeCuts, loadEdits, loadPlaylistProps, loadVisits,
     saveEdits, savePlaylistProps, saveSettings, saveVisits,
 } from "./storage";
 
@@ -184,6 +184,7 @@ export class Player {
         const keyOf = (p: ParkEntry) => p.key ?? p.fileName;
         const current = this.running && this.parkOrder.length ? keyOf(this.currentPark()) : undefined;
         this.playlist = playlist;
+        this.pruneGeneration();
         if (!this.running) {
             return;
         }
@@ -673,7 +674,7 @@ export class Player {
     }
 
     /** The playlist's own values for the editor's Playlist properties, as built. */
-    get playlistDefaults(): Required<Omit<PlaylistProps, "order" | "use">> {
+    get playlistDefaults(): Required<Omit<PlaylistProps, "order" | "use" | "generation">> {
         const p = this.playlist;
         return {
             inertia: p.inertia ?? this.settings.inertia,
@@ -694,7 +695,7 @@ export class Player {
     }
 
     /** The Playlist properties in force: the editor's over the playlist's own. */
-    get playlistProps(): Required<Omit<PlaylistProps, "order" | "use">> {
+    get playlistProps(): Required<Omit<PlaylistProps, "order" | "use" | "generation">> {
         const d = this.playlistDefaults;
         const p = this.props;
         return {
@@ -717,6 +718,63 @@ export class Player {
             return;
         }
         this.clearPan(); // planned again with the new motion
+    }
+
+    /** The generator options the playlist was built with (the editor's Generation section). */
+    get generationBuilt(): Generation {
+        return { ...GENERATION_DEFAULTS, ...(this.playlist.generation ?? {}) };
+    }
+
+    /** The Generation section's values: the editor's changes over the build's. */
+    get generation(): Generation {
+        return { ...this.generationBuilt, ...(this.props.generation ?? {}) };
+    }
+
+    /** The Generation section differs from the build: the next build applies it. */
+    get generationChanged(): boolean {
+        const built = this.generationBuilt;
+        return Object.entries(this.props.generation ?? {}).some(([k, v]) => built[k as keyof Generation] !== v);
+    }
+
+    /** Drops the Generation changes a new build has made its own (equal to the build, they change nothing). */
+    private pruneGeneration(): void {
+        const changes = this.savedProps.generation;
+        if (!changes || !this.playlist.generation) {
+            return;
+        }
+        const built = this.generationBuilt;
+        const left = Object.fromEntries(Object.entries(changes).filter(([k, v]) => built[k as keyof Generation] !== v));
+        if (Object.keys(left).length === Object.keys(changes).length) {
+            return;
+        }
+        if (Object.keys(left).length) {
+            this.savedProps.generation = left;
+            this.props.generation = { ...left };
+        } else {
+            delete this.savedProps.generation;
+            delete this.props.generation;
+        }
+        // (not saved now, which would count as an edit since the build: the next save writes it so)
+    }
+
+    /** Changes a generator option, saved at once (and so in the live file, which the next build bakes into
+     *  the playlist); back at the build's value it is no change. Nothing plays differently before a build. */
+    setGeneration<K extends keyof Generation>(key: K, value: Generation[K]): void {
+        const changes: Partial<Generation> = { ...(this.savedProps.generation ?? {}) };
+        if (this.generationBuilt[key] === value) {
+            delete changes[key];
+        } else {
+            changes[key] = value;
+        }
+        const generation = Object.keys(changes).length ? changes : undefined;
+        this.props.generation = generation;
+        this.savedProps.generation = generation;
+        if (generation === undefined) {
+            delete this.props.generation;
+            delete this.savedProps.generation;
+        }
+        savePlaylistProps(this.playlist.sequence, this.savedProps);
+        log(`generation ${key} = ${value}`);
     }
 
     /** The Playlist properties differ from what is saved in the game's storage. */

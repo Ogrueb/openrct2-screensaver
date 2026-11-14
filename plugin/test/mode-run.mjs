@@ -728,6 +728,33 @@ assert.ok(scene.get("rcts.bar.titles.icon").src.includes("titles-off"), "on -> o
         edClick("seg.panChanges.2");
         assert.equal(saved["RCTScreensaver.playlistProps"][playlist.sequence].panChanges, "end", "saved at once");
     }
+    // Generation: folded under its header; saved as it changes, for the next build.
+    {
+        assert.equal(ed("gseg.motion.0"), undefined, "Generation starts folded");
+        assert.equal(ed("gen.note").text, "at the next build");
+        edClick("genHead");
+        assert.ok(ed("gseg.motion.0"), "its header unfolds it");
+        assert.ok(ed("gstep.variants.less"), "a circuit shows its variants");
+        edClick("gseg.route.1");
+        const gen = () => saved["RCTScreensaver.playlistProps"][playlist.sequence].generation;
+        assert.equal(gen().route, "random", "saved at once");
+        assert.equal(ed("gstep.variants.less"), undefined, "Random has no variants");
+        assert.equal(ed("gen.note").text, "changed · next build");
+        edClick("gstep.timeScale.more");
+        assert.equal(ed("gstept.timeScale").text, "× 1.25");
+        assert.equal(gen().timeScale, 1.25);
+        edClick("gstep.parkMin.less");
+        assert.equal(gen().parkMin, 25);
+        assert.ok(ed("gseg.parkViews.0"), "event views show while park scripts run");
+        edClick("gseg.parkScripts.0");
+        assert.equal(ed("gseg.parkViews.0"), undefined, "and hide when they do not");
+        assert.equal(gen().parkScripts, false);
+        for (const id of ["gseg.route.0", "gstep.timeScale.less", "gstep.parkMin.more", "gseg.parkScripts.1"]) edClick(id);
+        assert.equal(gen(), undefined, "back at the build's values, nothing is changed");
+        assert.equal(ed("gen.note").text, "at the next build");
+        edClick("genHead");
+        assert.equal(ed("gseg.motion.0"), undefined, "and folds again");
+    }
     // The pin: off, the panes hide once the mouse rests; a move brings them back.
     {
         edClick("pin");

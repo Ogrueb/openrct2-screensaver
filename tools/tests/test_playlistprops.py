@@ -102,6 +102,46 @@ class PlaylistProps(unittest.TestCase):
         self.assertEqual(ours["edits"], {"b.park": {"views": [{"x": 2}]}}, "the pinned edit moved to the views file")
         self.assertEqual(ours["builtEdits"], ours["edits"], "what stays counts as built")
 
+    def test_generation_written(self):
+        self.write_store({"generation": {"motion": "static", "route": "random", "variants": 2, "reverse": True,
+                                         "ridePans": "only", "parkMin": 20, "parkCap": 90, "timeScale": 1.5,
+                                         "parkScripts": False, "parkViews": True}, "changeHold": 3.0})
+        found, changed = mksequence.pull_props(self.playlist, self.store)
+        self.assertTrue(any(c.startswith("generation ") for c in changed), changed)
+        v = self.read()["views"]
+        self.assertEqual((v["motion"], v["route"], v["circuit_variants"], v["circuit_reverse"]), ("static", "random", 2, True))
+        self.assertEqual((v.get("ride_pans", 1), v["only"]), (1, "rides"))
+        self.assertEqual((v["park_min"], v["park_cap"], v["time_scale"]), (20, 90, 1.5))
+        self.assertIs(self.read()["park_scripts"], False)
+        self.assertIs(self.read()["park_plugins"], True)
+        self.assertEqual(v["change_hold"], 1.5, "holds divided by the time scale they were set under")
+        with open(self.playlist, encoding="utf-8") as f:
+            self.assertIn("# my playlist", f.read())
+
+    def test_generation_ride_pans_and_defaults(self):
+        data = mksequence.apply_props({"views": {"only": "rides", "ride_pans": 1}, "park_scripts": False, "park_plugins": True},
+                                      {"generation": {"ridePans": "exclude", "parkScripts": True, "parkViews": False}})
+        self.assertEqual(data["views"], {"ride_pans": 0}, "only = rides goes with exclude")
+        self.assertNotIn("park_scripts", data, "on is the default")
+        self.assertNotIn("park_plugins", data, "off is the default")
+        data = mksequence.apply_props({"views": {"ride_pans": 0}}, {"generation": {"ridePans": "include"}})
+        self.assertEqual(data["views"]["ride_pans"], 1)
+        self.assertNotIn("only", data["views"])
+
+    def test_generation_checked(self):
+        for bad in ({"variants": 0}, {"route": "zigzag"}, {"timeScale": 9}, {"parkViews": "yes"}):
+            with self.assertRaises(ValueError):
+                mksequence.apply_props({}, {"generation": bad})
+        self.assertEqual(mksequence.apply_props({"name": "x"}, {"generation": {"someday": 1}}), {"name": "x"}, "unknown keys pass")
+
+    def test_generation_values(self):
+        defaults = dict(mksequence.VIEW_DEFAULTS, only="rides", time_scale=2)
+        values = mksequence.generation_values(defaults, {"park_scripts": False})
+        self.assertEqual(values["ridePans"], "only")
+        self.assertIs(values["parkScripts"], False)
+        self.assertEqual(values["timeScale"], 2.0)
+        self.assertEqual(set(values), set(mksequence.GENERATION))
+
     def test_off_accepted(self):
         self.assertIn("off", mksequence.PAN_CHANGES)
 
