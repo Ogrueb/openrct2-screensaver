@@ -21,6 +21,15 @@ playlist.parks[0].views.push({ x: 50, y: 55, z: 64, rotation: 0, zoom: -1, hold:
 playlist.parks[0].views.splice(2, 0, { x: 60, y: 60, z: 64, rotation: 0, zoom: -1, hold: 2, animation: "train", cue: { ride: 3, ticks: 40, wait: 1 } });
 playlist.parks[0].views.splice(4, 0, { x: 20, y: 25, z: 64, rotation: 1, zoom: 0, hold: 3, animation: "ufo", cue: { tick: 2400, lead: 2, every: 4800, ticks: 200, cut: true } });
 let now = 0;
+// The park settings a build lists (mksequence.py park_settings); the second park's (the one the editor opens
+// on) count is its profile's, its park cap the playlist entry's own
+const parkValues = { towers: true, rides: true, count: 8, zoomMin: -2, zoomMax: 1, pan: "auto", panTolerance: 500, parkCap: 150,
+    returnPan: true, companionPans: "run" };
+playlist.parkDefaults = { ...parkValues, scripts: true, events: true };
+playlist.parks.forEach((p, i) => {
+    p.settings = { ...parkValues, ...(i === 1 ? { count: 6, scripts: true } : {}), profile: i === 1 ? "p1" : null, savedName: `Park ${i}`,
+        mapSize: [64, 64], adjusted: i === 1 ? ["count"] : [], locked: i === 1 ? ["parkCap"] : [] };
+});
 const store = { RCTScreensaver: { playlist, settings: { fadeMs: 0, titleMusic: "ride", window: "windowed" } } };
 const lookup = key => key.split(".").reduce((o, k) => (o == null ? undefined : o[k]), store);
 const commands = [];
@@ -727,6 +736,41 @@ assert.ok(scene.get("rcts.bar.titles.icon").src.includes("titles-off"), "on -> o
         edClick("propsHead");
         edClick("seg.panChanges.2");
         assert.equal(saved["RCTScreensaver.playlistProps"][playlist.sequence].panChanges, "end", "saved at once");
+    }
+    // Park settings: the settings button shows them in place of the views; saved as they change, for the next
+    // build's bake into the park's profile.
+    {
+        assert.ok(ed("parkSet"), "the park row has the settings button");
+        edClick("parkSet");
+        assert.ok(ed("pset.head"), "the settings show in place of the views");
+        const park = playlist.parks.find(p => p.name === ed("text.park").text);
+        assert.equal(park.settings.profile, "p1", "(the second park, as the editor opened on it)");
+        const parks = () => saved["RCTScreensaver.playlistProps"][playlist.sequence].parks;
+        assert.equal(ed("pstept.count").text, "6");
+        assert.equal(ed("pset.note").text, "profile p1");
+        assert.ok(ed("pseg.scripts.1"), "a park with scripts has the switch");
+        assert.equal(ed("pseg.events.0"), undefined, "one without event views has none");
+        edClick("pstep.count.more");
+        assert.equal(parks()[park.key].set.count, 7, "saved at once");
+        assert.equal(parks()[park.key].savedName, "Park 1", "with how the profile finds the park");
+        assert.equal(ed("pset.note").text, "changed · next build");
+        edClick("pseg.towers.0");
+        assert.equal(parks()[park.key].set.towers, false);
+        edClick("pstep.pan.more");
+        assert.equal(ed("pstept.pan").text, "0%", "the pan share steps from auto to 0%");
+        edClick("pstep.parkCap.more");
+        assert.equal(parks()[park.key].set.parkCap, undefined, "the playlist's own entry sets the park cap: locked");
+        for (const id of ["pstep.pan.less", "pseg.towers.1", "pstep.count.less"]) edClick(id);
+        assert.equal(parks(), undefined, "back at the build's values, nothing is changed");
+        edClick("parkReset");
+        assert.equal(JSON.stringify(parks()[park.key].set), '{"count":null}', "Playlist's: the profile's keys go");
+        assert.equal(ed("pstept.count").text, "8", "showing the playlist's value");
+        edClick("pstep.count.less");
+        edClick("pstep.count.less");
+        assert.equal(parks(), undefined, "back at the profile's value: no change");
+        edClick("parkSet");
+        assert.equal(ed("pset.head"), undefined, "the button brings the views back");
+        assert.ok(ed("cell.0.1"), "and the views list");
     }
     // Generation: folded under its header; saved as it changes, for the next build.
     {

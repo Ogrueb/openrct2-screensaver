@@ -143,7 +143,9 @@ See README.md for usage.
   Import/Export with the reason (`builder.unavailableReason`). With no playlist the mode shows a panel
   (`ui/welcome.ts`: New playlist from a folder, built and played at once; Import; the known playlists). Playlist properties' GENERATION section (2026-11-14, folded): the settings page's playlist-wide options
   (motion, view order, variants, reverse, ride pans, park times, time scale, park scripts, event views), saved as
-  changes against the build's `generation` values and baked at the next build (`apply_generation`).
+  changes against the build's `generation` values and baked at the next build (`apply_generation`). Park settings
+  (2026-11-14, the views pane's settings button): the settings page's park switches and parameters, baked into the
+  park's profile in the user folder at the next build (`profiles.change`, shared with the settings page).
 - **Palette index 10** is both the void outside the map and the UI black; a packed water
   object that lightens it (Gardens of Light) washes out the stock interface (the white void was intended, but the UI must not suffer).
   Engine patch 0001 splits the two properly (the viewport painter rewrites its own index-10

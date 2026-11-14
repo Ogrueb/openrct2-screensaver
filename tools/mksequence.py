@@ -2274,6 +2274,7 @@ def resolve_park(entry, index, base_dir, defaults, layout, edits=None, library=N
     # The park's profile (parks/*.toml) goes under the playlist's own entry.
     profile = profiles.find(park_profiles or {}, entry, saved_name, map_size(parkinfo.chunk_reader(chunks, body, 0x30)),
                             os.path.basename(entry["file"]))
+    own_views = set(entry.get("views", {}))  # set by the playlist's own entry: over any profile
     entry = profiles.apply(profile, entry, park_plugins)
     name = entry.get("name") or parkinfo.display_name(saved_name, path, member)[0]  # the profile's name under the entry's
     # The builders for the caption's byline: the entry's (written at import or scan), else checked against the
@@ -2288,6 +2289,7 @@ def resolve_park(entry, index, base_dir, defaults, layout, edits=None, library=N
             author_note = "no builders: none in the playlist, and the file matches nothing in the NE catalog (the caption shows the name alone)"
     _, counts, surface, heights = parkinfo.visible_element_counts(parkinfo.chunk_reader(chunks, body, 0x30))
     opts = {**defaults, **entry.get("views", {}), "saved_rotation": saved["rotation"]}
+    chosen = dict(opts)  # (the park's options as set, before motion and route turn some off)
     if opts["route"] == "random":
         opts.update(RANDOM_OFF)
     if opts["motion"] == "static":
@@ -2486,6 +2488,9 @@ def resolve_park(entry, index, base_dir, defaults, layout, edits=None, library=N
             "animations": animations,
             # Companion plugins find their park by its saved name and map size.
             "savedName": saved_name, "mapSize": size, "hasStorage": bool(storage),
+            "settings": park_settings(chosen, profile, own_views, saved_name, size,
+                                      scripts=False if (profile or {}).get("companions") is False else True if found else None,
+                                      events=False if not chosen["events"] else True if animations or any(v.get("show") for v in defaults or []) else None),
             "companions": found,
             "companionCamera": bool(entry.get("companion_camera", False)),
             "companionSettings": companion_settings,
@@ -2578,6 +2583,132 @@ def scale_views(views, offset):
     return [dict(v, zoom=min(3, max(-2, v["zoom"] + offset))) for v in views] if offset else views
 
 
+# The view editor's park settings (the settings page's park switches and Edit parameters), by the plugin's
+# key: the profile's [views] key, and how the value reads.
+PARK_SETTINGS = {
+    "towers": "tower_views", "rides": "ride_pans", "count": "count", "zoomMin": "zoom_min", "zoomMax": "zoom_max",
+    "pan": "pan", "panTolerance": "pan_tolerance", "parkCap": "park_cap", "returnPan": "return_pan",
+    "companionPans": "companion_pans", "events": "events",
+}
+
+
+def park_settings(opts, profile, own_views, saved_name, map_wh, scripts=None, events=None):
+    """A park's settings as the view editor shows them: the values in force, the park's profile (stem, or
+    None) and how to match a new one, the keys its profile sets (`adjusted`) and the keys the playlist's
+    entry sets (`locked`: a profile change would not show). `scripts`/`events` None: the park has none."""
+    keys = {k: opt for k, opt in PARK_SETTINGS.items()}
+    adjusted = [k for k, opt in keys.items() if opt in (profile or {}).get("views", {})]
+    if (profile or {}).get("companions") is False:
+        adjusted.append("scripts")
+    pan = opts["pan"]
+    out = {"profile": profile["id"] if profile else None, "savedName": saved_name, "mapSize": list(map_wh),
+           "towers": int(opts["tower_views"] or 0) > 0, "rides": int(opts["ride_pans"] or 0) > 0,
+           "count": int(opts["count"]), "zoomMin": int(opts["zoom_min"]), "zoomMax": int(opts["zoom_max"]),
+           "pan": pan if pan == "auto" else float(pan), "panTolerance": float(opts["pan_tolerance"]),
+           "parkCap": float(opts["park_cap"]), "returnPan": bool(opts["return_pan"]),
+           "companionPans": opts["companion_pans"], "adjusted": adjusted,
+           "locked": [k for k, opt in keys.items() if opt in own_views]}
+    if scripts is not None:
+        out["scripts"] = scripts
+    if events is not None:
+        out["events"] = events
+    return out
+
+
+def settings_changes(changes, defaults):
+    """The view editor's park setting changes (plugin key -> value, None: back to the playlist's) as a
+    profile change (profiles.change_data): `defaults` the playlist's [views] over VIEW_DEFAULTS. A value equal
+    to the playlist's leaves no key in the profile."""
+    out = {}
+    views = {}
+    for key, value in changes.items():
+        if key == "scripts":
+            if value not in (True, False, None):
+                raise ValueError("park setting scripts: %r is not acceptable" % (value,))
+            out["companions"] = False if value is False else None
+            continue
+        opt = PARK_SETTINGS.get(key)
+        if opt is None:
+            continue
+        if value is None:
+            views[opt] = None
+            continue
+        if key in ("towers", "rides"):
+            if not isinstance(value, bool):
+                raise ValueError("park setting %s: %r is not acceptable" % (key, value))
+            on = int(defaults[opt] or 0) > 0
+            views[opt] = None if value == on else (0 if not value else (2 if key == "towers" else 1))
+            continue
+        ok = {"count": lambda v: isinstance(v, int) and 1 <= v <= 30,
+              "zoomMin": lambda v: isinstance(v, int) and -3 <= v <= 3, "zoomMax": lambda v: isinstance(v, int) and -3 <= v <= 3,
+              "pan": lambda v: v == "auto" or (isinstance(v, (int, float)) and 0 <= v <= 1),
+              "panTolerance": lambda v: isinstance(v, (int, float)) and 50 <= v <= 2000,
+              "parkCap": lambda v: isinstance(v, (int, float)) and 10 <= v <= 3600,
+              "returnPan": lambda v: isinstance(v, bool), "events": lambda v: isinstance(v, bool),
+              "companionPans": lambda v: v in ("run", "pause")}[key]
+        if isinstance(value, bool) and key not in ("returnPan", "events") or not ok(value):
+            raise ValueError("park setting %s: %r is not acceptable" % (key, value))
+        views[opt] = None if value == defaults.get(opt) else value
+    if views:
+        out["views"] = views
+    return out
+
+
+def park_settings_profiles(park_props, defaults, park_profiles):
+    """The playlist's profiles (profiles.load) with the view editor's park settings (Playlist properties
+    `parks`: park key -> {profile, savedName, mapSize, set}) applied in memory, for a build that applies a
+    live file not baked yet."""
+    out = dict(park_profiles)
+    for key, p in (park_props or {}).items():
+        if not isinstance(p, dict) or not isinstance(p.get("set"), dict):
+            continue
+        changes = settings_changes(p["set"], defaults)
+        stem = p.get("profile")
+        if stem and stem in out:
+            base = out[stem]
+        else:
+            stem = profiles.new_stem(p.get("savedName") or key, set(out))
+            base = {"match": {"name": p.get("savedName") or "", "map": list(p.get("mapSize") or [])}}
+            if not p.get("mapSize"):
+                base["match"].pop("map")
+        out[stem] = dict(profiles.change_data(base, changes), id=stem, source="live")
+    return out
+
+
+def write_park_settings(playlist_path, props):
+    """Write the view editor's park settings (Playlist properties `parks`) into the parks' profiles in the
+    user folder, as the settings page does (profiles.change). Returns the names of the parks changed."""
+    parks = props.get("parks")
+    if not isinstance(parks, dict) or not parks:
+        return []
+    with open(playlist_path, "rb") as f:
+        playlist = tomllib.load(f)
+    defaults = {**VIEW_DEFAULTS, **playlist.get("views", {})}
+    import tomlwrite
+
+    def write(path, data):
+        text = None
+        if os.path.exists(path):
+            with open(path, encoding="utf-8") as f:
+                text = tomlwrite.patch(f.read(), data)
+            shutil.copy2(path, path + ".bak")
+        text = text or tomlwrite.dumps(data)
+        with open(path + ".tmp", "w", encoding="utf-8", newline="\n") as f:
+            f.write(text)
+        os.replace(path + ".tmp", path)
+
+    done = []
+    for key, p in parks.items():
+        if not isinstance(p, dict) or not isinstance(p.get("set"), dict) or not p.get("savedName"):
+            continue
+        changes = settings_changes(p["set"], defaults)
+        if changes:
+            profiles.change({"profile": p.get("profile"), "savedName": p["savedName"], "mapSize": p.get("mapSize") or [0, 0]},
+                            changes, write)
+            done.append(p.get("name") or key)
+    return done
+
+
 def playlist_data(name, parks, screen=None, defaults=None, titles=None):
     """Playlist as stored for the plugin under RCTScreensaver.playlist. `screen` is the window the
     generated views were judged in ([views] window): the plugin scales zooms and pan speeds from it.
@@ -2596,6 +2727,8 @@ def playlist_data(name, parks, screen=None, defaults=None, titles=None):
                 entry["viewScreen"] = p["viewScreen"]
             entry["defaultViews"] = [{k: v[k] for k in ("x", "y", "z", "rotation", "zoom", "hold", "overview", "animation", "show", "fixed", "pan", "panChanges", "inertia", "zoomThreshold", "path", "pathStep", "showAt", "cue") if k in v}
                                      for v in p["defaultViews"]]
+        if p.get("settings"):
+            entry["settings"] = p["settings"]  # the view editor's park settings
         if p.get("box"):
             entry["box"] = p["box"]  # the content box: the settings page's view drawing frames its renders on it
         if p["bounds"]:
@@ -2794,6 +2927,8 @@ def prepare(playlist_path, use_edits=True, overrides=None, use_profiles=True, la
     if live and use_edits:
         edits = apply_live_edits(edits, live["edits"], {park_key(e) for e in playlist.get("park", [])})
     park_profiles = profiles.load() if use_profiles else {}
+    if use_profiles and live and isinstance(live["props"].get("parks"), dict):
+        park_profiles = park_settings_profiles(live["props"]["parks"], {**VIEW_DEFAULTS, **playlist.get("views", {})}, park_profiles)
     park_plugins = playlist.get("park_plugins", False)
     if not isinstance(park_plugins, bool):
         raise ValueError("park_plugins must be true or false")
@@ -2927,6 +3062,9 @@ def build(playlist_path, out_dir, seed=None, layout=None, use_edits=True, overri
     if data:
         # The playlist-wide generator options, as the view editor's Playlist properties show them
         data["generation"] = generation_values(defaults, playlist)
+        # The park settings' playlist values (a park's without its profile): the editor's "back to the playlist's"
+        data["parkDefaults"] = {k: v for k, v in park_settings(defaults, None, set(), "", (0, 0), True, bool(defaults["events"])).items()
+                                if k not in ("profile", "savedName", "mapSize", "adjusted", "locked")}
         # Parks ticked off (`use = false`): the view editor lists them to tick on again
         known = cache.names if cache else {}
         unused = []
@@ -3495,6 +3633,9 @@ def bake_live(source, name, user_dir):
         (["parks ticked on or off"] if s.get("use") else [])
     merge_edits(source, live["edits"])
     write_props(source, live["props"])
+    settings = write_park_settings(source, live["props"])
+    if settings:
+        parts.append("park settings of %s (their profiles)" % ", ".join(settings))
     livefile.mark_baked(live, user_dir)
     return "Took in your edits: %s; saved to %s" % (", ".join(parts) or "nothing new", os.path.basename(source))
 
@@ -4008,6 +4149,9 @@ def main():
         for item in args.set:
             overrides.update(tomllib.loads(item))
         user_dir = args.user_dir or default_user_dir()
+        if args.user_dir and not os.environ.get("RCT_SCREENSAVER_HOME"):
+            # The user's profiles and playlists live in that OpenRCT2 folder too (a portable install's)
+            os.environ["RCT_SCREENSAVER_HOME"] = os.path.join(args.user_dir, "screensaver")
         if args.live_build:
             sys.exit(live_build(args.live_build, user_dir))
         if args.live_export:

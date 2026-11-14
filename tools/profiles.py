@@ -70,7 +70,7 @@ A playlist entry can name its profile (profile = "koi-pond", the file's stem) or
 (profile = false); `mksequence.py --ignore-profiles` builds without any. Spot and show
 definitions describe the companions' code, so they are read whether profiles are applied or not.
 """
-import os, tomllib
+import os, re, shutil, tomllib
 
 import userdata
 
@@ -243,3 +243,117 @@ def apply(profile, entry, park_plugins):
     if profile.get("companions") is False:
         merged.setdefault("companions", [])  # none of the park's companions runs (the entry can still list some)
     return merged
+
+
+# --- changing a profile (the settings page's park switches and parameters, the game's park settings) ---
+
+PROFILE_ORDER = ["companions", "match", "views", "extras", "companion", "spot", "animation", "show"]
+
+
+def change_data(data, changes):
+    """The profile `data` (as read, without id/path/source) with `changes` applied, in a new dict:
+    changes = {views: {k: v|None}, extras: {...}, companions: False|None, animation: {name: {off, hold}|None},
+    show: {name: {view, path, hold}}}; None deletes a key."""
+    data = {k: (dict(v) if isinstance(v, dict) else v) for k, v in data.items() if k not in ("id", "path", "source")}
+    if "companions" in changes:
+        if changes["companions"] is False:
+            data["companions"] = False
+        else:
+            data.pop("companions", None)
+    for section in ("views", "extras"):
+        for k, v in (changes.get(section) or {}).items():
+            table = data.setdefault(section, {})
+            if v is None:
+                table.pop(k, None)
+            else:
+                table[k] = v
+            if not table:
+                data.pop(section)
+    for name, change in (changes.get("animation") or {}).items():
+        table = {k: dict(v) for k, v in data.get("animation", {}).items()}
+        entry = {**table.get(name, {}), **{k: v for k, v in (change or {}).items() if v is not None}}
+        for k, v in (change or {}).items():
+            if v is None:
+                entry.pop(k, None)
+        if entry and change is not None:
+            table[name] = entry
+        else:
+            table.pop(name, None)
+        data["animation"] = table
+        if not table:
+            data.pop("animation")
+    for name, change in (changes.get("show") or {}).items():
+        shows = {k: dict(v) for k, v in data.get("show", {}).items()}
+        if name not in shows:
+            raise ValueError("show %r is not defined in the park's profile" % name)
+        for k, v in change.items():
+            if v is None:
+                shows[name].pop(k, None)
+            else:
+                shows[name][k] = v
+        data["show"] = shows
+    return {k: data[k] for k in sorted(data, key=lambda k: PROFILE_ORDER.index(k) if k in PROFILE_ORDER else len(PROFILE_ORDER))}
+
+
+def slug(text, limit=40):
+    s = re.sub(r"[^a-z0-9]+", "-", (text or "").lower()).strip("-")
+    return s[:limit].rstrip("-") or "park"
+
+
+def new_stem(saved_name, taken):
+    """A file name for a new profile of a park, not one of `taken`."""
+    stem, n = slug(saved_name), 2
+    while stem in taken:
+        stem, n = "%s-%d" % (slug(saved_name), n), n + 1
+    return stem
+
+
+def change(park, changes, write, user_parks=None):
+    """Applies changes (change_data's) to a park's profile in the user folder, creating one when it has
+    none; park = {profile: stem or None, savedName, mapSize}. `write(path, data)` writes the file (the
+    settings page keeps backups). The repository's profile is copied into the user folder first. A copy
+    that no longer differs from what ships (or a new one left with only its [match]) is removed, so the user
+    folder holds only real changes and later fixes to the shipped profile apply. A change that leaves the
+    profiles unreadable is undone and raises. Returns the profile's stem."""
+    user_parks = user_parks or userdata.parks()
+    stem = park.get("profile")
+    if stem:
+        if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", stem):
+            raise ValueError("bad profile name %r" % stem)
+        path = os.path.join(user_parks, stem + ".toml")
+        before = None
+        if os.path.exists(path):
+            with open(path, "rb") as f:
+                before = f.read()
+            data = tomllib.loads(before.decode("utf-8"))
+        else:
+            # The repository's profile: its copy in the user folder replaces it (comments kept)
+            known = load()
+            if stem not in known:
+                raise ValueError("no profile %r" % stem)
+            os.makedirs(user_parks, exist_ok=True)
+            shutil.copy2(known[stem]["path"], path)
+            with open(path, "rb") as f:
+                data = tomllib.load(f)
+    else:
+        stem = new_stem(park["savedName"], set(load()))
+        path = os.path.join(user_parks, stem + ".toml")
+        before = None
+        data = {"match": {"name": park["savedName"], "map": list(park["mapSize"])}}
+    data = change_data(data, changes)
+    os.makedirs(user_parks, exist_ok=True)
+    write(path, data)
+    try:
+        load()
+    except ValueError:
+        if before is None:
+            os.remove(path)
+        else:
+            with open(path, "wb") as f:
+                f.write(before)
+        raise
+    shipped = load(user=False).get(stem)
+    plain = lambda p: {k: v for k, v in p.items() if k not in ("id", "path", "source")}
+    if (shipped and plain(shipped) == data) or (not shipped and set(data) == {"match"}):
+        os.remove(path)
+    return stem

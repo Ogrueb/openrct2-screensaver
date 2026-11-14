@@ -2899,6 +2899,7 @@
       const current = this.running && this.parkOrder.length ? keyOf(this.currentPark()) : void 0;
       this.playlist = playlist;
       this.pruneGeneration();
+      this.pruneParkSettings();
       if (!this.running) {
         return;
       }
@@ -3429,6 +3430,117 @@
       }
       savePlaylistProps(this.playlist.sequence, this.savedProps);
       log2(`generation ${key} = ${value}`);
+    }
+    /** The current park's settings as built (undefined: a build before builds listed them). */
+    get parkSettingsBuilt() {
+      return this.currentPark()?.settings;
+    }
+    /** The current park's settings as the editor shows them: its changes over the build's, a change back to the
+     *  playlist's showing the playlist's value. */
+    get parkSettings() {
+      const park = this.currentPark();
+      const built = park?.settings;
+      if (!park || !built) {
+        return void 0;
+      }
+      const set = this.props.parks?.[park.key ?? park.fileName]?.set ?? {};
+      const out = { ...built };
+      const defaults = this.playlist.parkDefaults;
+      for (const [k, v] of Object.entries(set)) {
+        out[k] = v === null ? defaults?.[k] ?? built[k] : v;
+      }
+      return out;
+    }
+    /** The current park's settings changes (null: back to the playlist's). */
+    get parkSettingsSet() {
+      const park = this.currentPark();
+      return (park && this.props.parks?.[park.key ?? park.fileName]?.set) ?? {};
+    }
+    /** The current park's settings differ from its build: the next build applies them. */
+    get parkSettingsChanged() {
+      const park = this.currentPark();
+      return !!park && Object.keys(this.props.parks?.[park.key ?? park.fileName]?.set ?? {}).length > 0;
+    }
+    /** Changes one of the current park's settings, saved at once (and so in the live file; the next build's
+     *  bake writes it into the park's profile). Back at the build's value it is no change. */
+    setParkSetting(key, value) {
+      const park = this.currentPark();
+      const built = park?.settings;
+      if (!park || !built || built.locked.includes(key)) {
+        return;
+      }
+      const pk = park.key ?? park.fileName;
+      const change = this.parkChange(pk, park, built);
+      const back = built[key] === value;
+      if (back) {
+        delete change.set[key];
+      } else {
+        change.set[key] = value;
+      }
+      this.saveParkChange(pk, change);
+      log2(`park setting ${key} = ${value} (${park.name})`);
+    }
+    /** The current park's settings back to the playlist's: its profile's keys go at the next build. */
+    resetParkSettings() {
+      const park = this.currentPark();
+      const built = park?.settings;
+      if (!park || !built) {
+        return;
+      }
+      const pk = park.key ?? park.fileName;
+      const change = this.parkChange(pk, park, built);
+      change.set = {};
+      for (const k of built.adjusted.filter((k2) => !built.locked.includes(k2))) {
+        change.set[k] = null;
+      }
+      this.saveParkChange(pk, change);
+      log2(`park settings back to the playlist's (${park.name})`);
+    }
+    parkChange(pk, park, built) {
+      const was = this.savedProps.parks?.[pk];
+      return { name: park.name, profile: built.profile, savedName: built.savedName, mapSize: built.mapSize, set: { ...was?.set ?? {} } };
+    }
+    saveParkChange(pk, change) {
+      const parks = { ...this.savedProps.parks ?? {} };
+      if (Object.keys(change.set).length) {
+        parks[pk] = change;
+      } else {
+        delete parks[pk];
+      }
+      if (Object.keys(parks).length) {
+        this.props.parks = parks;
+        this.savedProps.parks = parks;
+      } else {
+        delete this.props.parks;
+        delete this.savedProps.parks;
+      }
+      savePlaylistProps(this.playlist.sequence, this.savedProps);
+    }
+    /** Drops the park settings changes a new build has made its own. */
+    pruneParkSettings() {
+      const parks = this.savedProps.parks;
+      if (!parks) {
+        return;
+      }
+      const left = {};
+      for (const [pk, change] of Object.entries(parks)) {
+        const built = this.playlist.parks.find((p) => (p.key ?? p.fileName) === pk)?.settings;
+        if (!built) {
+          left[pk] = change;
+          continue;
+        }
+        const set = Object.fromEntries(Object.entries(change.set).filter(([k, v]) => v === null ? built.adjusted.includes(k) : built[k] !== v));
+        if (Object.keys(set).length) {
+          left[pk] = { ...change, profile: built.profile, set };
+        }
+      }
+      if (Object.keys(left).length) {
+        this.savedProps.parks = left;
+        this.props.parks = { ...left };
+      } else {
+        delete this.savedProps.parks;
+        delete this.props.parks;
+      }
     }
     /** The Playlist properties differ from what is saved in the game's storage. */
     get playlistPropsUnsaved() {
@@ -5995,6 +6107,25 @@
     parkCap: { step: 5, min: 10, max: 300, text: (v) => `${v} s` },
     timeScale: { step: 0.25, min: 0.5, max: 3, text: (v) => `\xD7 ${v.toFixed(2)}` }
   };
+  var OFF_ON = (off, on) => [["Off", false, off], ["On", true, on]];
+  var PARK_CHOICES = {
+    scripts: OFF_ON("The park's own scripts stay off", "Run the park's own scripts (companion plugins)"),
+    companionPans: [["Run", "run", "Its scripts run while the camera pans"], ["Pause", "pause", "Its scripts pause while the camera pans"]],
+    events: OFF_ON("No views on its scripted events", "Views on its scripted animations and shows"),
+    towers: OFF_ON("No tower views", "Views on its tall structures"),
+    rides: OFF_ON("No ride pans", "A pan along a ride's track"),
+    returnPan: OFF_ON("The last view cuts to the next park", "The last view pans back to the first")
+  };
+  var PAN_STEPS = ["auto", 0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1];
+  var PARK_STEPS = {
+    count: { label: "Most views", tip: "Most views in the park, the overview included", text: (v) => `${v}` },
+    zoomMin: { label: "Closest zoom", tip: "The closest close-up zoom (-2 is closest)", text: (v) => `${v}` },
+    zoomMax: { label: "Widest zoom", tip: "The widest close-up zoom", text: (v) => `${v}` },
+    pan: { label: "Pan share", tip: "Share of each hold spent panning (auto: from the pan's length)", text: (v) => v === "auto" ? "auto" : `${Math.round(v * 100)}%` },
+    panTolerance: { label: "Pan speed", tip: "How fast pans may move, px/s at zoom -2: lower is smoother but drops views", text: (v) => `${v}` },
+    parkCap: { label: "Longest park", tip: "Longest time in the park: the lowest-scoring views drop to fit", text: (v) => `${v} s` }
+  };
+  var LOCKED_TIP = "Set in the playlist's own entry for this park";
   var Scroll = class {
     constructor() {
       this.first = 0;
@@ -6065,6 +6196,8 @@
       // the Playlist properties unfolded
       this.genOpen = false;
       // and their Generation section
+      this.settingsOpen = false;
+      // the views pane shows the park's settings in place of its views
       this.clipShown = false;
       // a Copy/Paste note is on its button (it goes after a moment)
       this.buildShown = "";
@@ -6442,6 +6575,25 @@
         }
         return;
       }
+      if (id.startsWith("pseg.")) {
+        const [, key, i] = id.split(".");
+        const choice = PARK_CHOICES[key]?.[Number(i)];
+        if (choice) {
+          e.playback.setParkSetting(key, choice[1]);
+        }
+        return;
+      }
+      if (id.startsWith("pstep.")) {
+        const [, key, sign] = id.split(".");
+        const v = e.playback.parkSettings;
+        if (v) {
+          const next = parkStep(key, v, sign === "more" ? 1 : -1);
+          if (next !== void 0) {
+            e.playback.setParkSetting(key, next);
+          }
+        }
+        return;
+      }
       if (id.startsWith("gseg.")) {
         const [, key, i] = id.split(".");
         const choice = GEN_CHOICES[key]?.[Number(i)];
@@ -6555,6 +6707,12 @@
           break;
         case "genHead":
           this.genOpen = !this.genOpen;
+          break;
+        case "parkSet":
+          this.settingsOpen = !this.settingsOpen;
+          break;
+        case "parkReset":
+          e.playback.resetParkSettings();
           break;
         case "buildHead":
           this.buildOpen = this.buildFolded();
@@ -6683,9 +6841,15 @@
       this.place("prevPark", { x: x0, y, width: t, height: t }, "Previous park", !many || e.playback.isLoading);
       const nextX = x0 + inner - t;
       this.place("nextPark", { x: nextX, y, width: t, height: t }, "Next park", !many || e.playback.isLoading);
+      const setX = nextX - s.gap - t;
+      const hasSettings = e.playback.parkSettings !== void 0;
+      this.place("parkSet", { x: setX, y, width: t, height: t }, !hasSettings ? "Park settings: build the playlist first" : this.settingsOpen ? "Back to the park's views" : "Park settings: views, zoom, pans, scripts", !hasSettings);
+      if (!hasSettings) {
+        this.settingsOpen = false;
+      }
       const field = this.place(
         "field",
-        { x: x0 + t + s.gap, y, width: nextX - s.gap - (x0 + t + s.gap), height: t },
+        { x: x0 + t + s.gap, y, width: setX - s.gap - (x0 + t + s.gap), height: t },
         many ? "Hold: jump to a park. Click: reorder" : void 0
       );
       y += t + s.gap;
@@ -6709,7 +6873,7 @@
       this.listRect = { x: x0, y, width: inner - bar2, height: listH };
       this.views.layout({ x: x0 + inner - s.scrollBar, y: y + s.rowHeight, width: s.scrollBar, height: s.visibleRows * s.rowHeight }, route.length, s.visibleRows);
       let bottom = y + listH;
-      if (events.length) {
+      if (events.length && !this.settingsOpen) {
         const shown = Math.min(events.length, s.eventRows);
         const top = bottom + s.eventsGap + s.rowHeight;
         const ebar = events.length > s.eventRows ? s.scrollBar + 2 : 0;
@@ -6767,6 +6931,7 @@
       scene.set("text.plparks", { ...scene.get("text.plparks"), colour: THEME.textDim });
       button(scene, "prevPark", this.boxes.get("prevPark"), this.state("prevPark"), { icon: "prev-view", iconSize: s.toolIcon }, overlay);
       button(scene, "nextPark", this.boxes.get("nextPark"), this.state("nextPark"), { icon: "next-view", iconSize: s.toolIcon }, overlay);
+      button(scene, "parkSet", this.boxes.get("parkSet"), this.state("parkSet", this.settingsOpen), { icon: "settings", iconSize: s.toolIcon }, overlay);
       const fieldOpen = this.dropdown !== void 0 && this.playlists === void 0;
       scene.set("field", { type: "rect", ...field, fill: fieldOpen ? THEME.faceDown : this.hit() === "field" ? THEME.faceHover : THEME.editorList, z: Z.face });
       bevel(scene, "field", field, THEME.bevelDark, THEME.bevelLight, THEME.bevel, Z.bevel);
@@ -6783,7 +6948,11 @@
       if (count) {
         label(scene, "text.count", count, { x: field.x + field.width - 6 - countW, y: field.y, width: 0, height: field.height }, s.textSize, overlay, true);
       }
-      this.viewsList(e, scene, rows, route);
+      if (this.settingsOpen) {
+        this.parkSettings(e, scene);
+      } else {
+        this.viewsList(e, scene, rows, route);
+      }
       if (this.eventsRect) {
         this.eventsList(e, scene, events);
       }
@@ -6791,6 +6960,100 @@
         this.parkList(e, scene);
       } else {
         this.parksRect = void 0;
+      }
+    }
+    /** The park's settings in place of its views (the settings page's park switches and parameters): saved as
+     *  they change into the park's profile at the next build; in two columns, a header row with Reset. */
+    parkSettings(e, scene) {
+      const s = EDITOR;
+      const overlay = this.mode.overlay;
+      const area = { ...this.listRect, width: this.paneViews.width - 2 * s.pad };
+      const v = e.playback.parkSettings;
+      const built = e.playback.parkSettingsBuilt;
+      const changed = e.playback.parkSettingsChanged;
+      const set = e.playback.parkSettingsSet;
+      const rowH = 26;
+      this.sectionLabel(scene, "pset.head", "PARK SETTINGS", area.x, area.y + 5);
+      const resetW = 92;
+      const reset = this.place(
+        "parkReset",
+        { x: area.x + area.width - resetW, y: area.y, width: resetW, height: s.segHeight },
+        "Back to the playlist's values (the park's profile changes go at the next build)",
+        !built.adjusted.length && !changed
+      );
+      button(scene, "parkReset", reset, this.state("parkReset"), { text: "Playlist's", textSize: 13 }, overlay);
+      const note = changed ? "changed \xB7 next build" : built.profile ? `profile ${built.profile}` : "the playlist's values";
+      const nw = measure(overlay, note, 12).width;
+      label(scene, "pset.note", note, { x: reset.x - 10 - nw, y: area.y, width: 0, height: s.segHeight }, 12, overlay);
+      scene.set("pset.note", { ...scene.get("pset.note"), colour: changed ? THEME.pending : THEME.textDim });
+      const colW = Math.floor((area.width - 16) / 2);
+      const cols = [area.x, area.x + colW + 16];
+      const ys = [area.y + rowH + 4, area.y + rowH + 4];
+      const rowLabel = (c, key, text) => {
+        const id = `pset.label.${key}`;
+        label(scene, id, text, { x: cols[c], y: ys[c], width: 0, height: rowH }, 13, overlay);
+        const colour = built.locked.includes(key) ? THEME.textDim : key in set ? THEME.pending : void 0;
+        if (colour) {
+          scene.set(id, { ...scene.get(id), colour });
+        }
+      };
+      const segments = (c, key, text) => {
+        rowLabel(c, key, text);
+        const choices = PARK_CHOICES[key];
+        const widths = choices.map(([t]) => Math.ceil(measure(overlay, t, 12, true).width) + 16);
+        let sx = cols[c] + colW - widths.reduce((a, w) => a + w, 0) - s.gap * (choices.length - 1);
+        const sy = ys[c] + Math.round((rowH - 22) / 2);
+        const locked = built.locked.includes(key);
+        choices.forEach(([t, value, tip], i) => {
+          const id = `pseg.${key}.${i}`;
+          const r = this.place(id, { x: sx, y: sy, width: widths[i], height: 22 }, locked ? LOCKED_TIP : tip, locked);
+          button(scene, id, r, this.state(id, v[key] === value), { text: t, textSize: 12 }, overlay);
+          sx += widths[i] + s.gap;
+        });
+        ys[c] += rowH;
+      };
+      const stepper = (c, key) => {
+        const st = PARK_STEPS[key];
+        rowLabel(c, key, st.label);
+        const w = 22;
+        const sy = ys[c] + Math.round((rowH - w) / 2);
+        const locked = built.locked.includes(key);
+        const tip = locked ? LOCKED_TIP : st.tip;
+        const more = this.place(
+          `pstep.${key}.more`,
+          { x: cols[c] + colW - w, y: sy, width: w, height: w },
+          tip,
+          locked || parkStep(key, v, 1) === void 0
+        );
+        const value = { x: more.x - s.gap - 52, y: sy, width: 52, height: w };
+        const less = this.place(
+          `pstep.${key}.less`,
+          { x: value.x - s.gap - w, y: sy, width: w, height: w },
+          tip,
+          locked || parkStep(key, v, -1) === void 0
+        );
+        button(scene, `pstep.${key}.less`, less, this.state(`pstep.${key}.less`), { icon: "less", iconSize: 16 }, overlay);
+        button(scene, `pstep.${key}.more`, more, this.state(`pstep.${key}.more`), { icon: "add", iconSize: 16 }, overlay);
+        scene.set(`pstepv.${key}`, { type: "rect", ...value, fill: THEME.editorList, z: Z.face });
+        const vid = `pstept.${key}`;
+        label(scene, vid, st.text(v[key]), { x: value.x + value.width / 2, y: sy, width: 0, height: w }, 13, overlay);
+        scene.set(vid, { ...scene.get(vid), align: "center" });
+        ys[c] += rowH;
+      };
+      if (v.scripts !== void 0) {
+        segments(0, "scripts", "Park scripts");
+        if (v.scripts) {
+          segments(0, "companionPans", "Scripts in pans");
+        }
+      }
+      if (v.events !== void 0) {
+        segments(0, "events", "Event views");
+      }
+      segments(0, "towers", "Tower views");
+      segments(0, "rides", "Ride pans");
+      segments(0, "returnPan", "Return pan");
+      for (const key of ["count", "zoomMin", "zoomMax", "pan", "panTolerance", "parkCap"]) {
+        stepper(1, key);
       }
     }
     viewsList(e, scene, rows, route) {
@@ -7874,6 +8137,17 @@
       starts.push(starts[starts.length - 1] + Math.round(w));
     }
     return starts;
+  }
+  function parkStep(key, v, dir) {
+    if (key === "pan") {
+      const i = PAN_STEPS.findIndex((p) => p === v.pan || typeof p === "number" && typeof v.pan === "number" && Math.abs(p - v.pan) < 0.05);
+      const at = i < 0 ? 0 : i;
+      return PAN_STEPS[at + dir];
+    }
+    const cur = v[key];
+    const [step, min, max] = key === "count" ? [1, 1, 30] : key === "zoomMin" ? [1, -2, v.zoomMax] : key === "zoomMax" ? [1, v.zoomMin, 3] : key === "panTolerance" ? [50, 100, 1e3] : [10, 30, 300];
+    const next = Math.round((cur + dir * step) * 100) / 100;
+    return next < min || next > max ? void 0 : next;
   }
 
   // src/ui/welcome.ts
