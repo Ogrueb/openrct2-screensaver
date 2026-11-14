@@ -484,20 +484,36 @@ The handoff's items are done (2026-11-14): `.sv6` saves and loose objects now go
 park too (see "Parks and playlists"). A conversion runs OpenRCT2's `convert` with its own user folder (v0.5.6's
 convert takes no `--user-data-path`), so a portable install's objects are not seen by it.
 
-### Park settings (2026-11-14)
+### Settings: two gears and the Generation pane (owner, 2026-11-14)
 
-The views pane's park row has a settings button (between the park field and Next park): it shows the park's
-settings in place of its views, the settings page's park switches and Edit parameters in two columns: Park
-scripts and Scripts in pans (for a park with scripts), Event views (a park with event views), Tower views, Ride
-pans, Return pan; Most views, Closest and Widest zoom, Pan share (auto, 0-100%), Pan speed (`pan_tolerance`),
-Longest park. As on the settings page they belong to the park, not the playlist: the next build's bake writes
-them into the park's profile in the user folder (`profiles.change`, which the settings page now shares; a park
-without one gets a new profile matched by its saved name and map size; a copy left equal to the shipped profile,
-or a new one left with only its match, is removed), so they apply in every playlist that plays the park. The
-header says "profile <stem>", "the playlist's values" or, in amber, "changed · next build"; the Playlist's
-button sets every key the profile sets back to the playlist's (null in the change, the key removed at the bake).
-A key the playlist's own `[[park]]` entry sets is gray with "Set in the playlist's own entry for this park", as
-the entry wins over any profile.
+The editor's settings are split by what they apply to (owner's review of the first layout, 2026-11-14: the
+generation options sat in two places, mixed with settings that also apply to views set by hand):
+
+- **The playlist row's gear** (right of the PLAYLIST field) shows the playlist's settings that apply to any
+  views in place of the park's views: MOTION (Inertia; Turns, zooms = `panChanges`), TIMING (Change, Arrival
+  and Return hold), PRESENTATION (Music, Titles) and PARK SCRIPTS (Scripts and Event views, `park_scripts` and
+  `park_plugins`: event views come on top of drawn views too). These were the Playlist properties; they save
+  as they change, the scripts for the next build.
+- **The park row's gear** (between the park field and Next park) shows the park's settings that apply to any
+  views: Park scripts and Scripts in pans (a park with scripts), Event views (a park with event views), Return
+  pan, Pan speed (`pan_tolerance`). Its Playlist's button resets only these.
+- **The Generation pane** (top right, in the Playlist properties' old place, open by default) holds every
+  setting only the automatic view generation uses: the playlist's (see "Generation" below) and, under PARK ·
+  <name>, the park's in two columns: Tower views, Ride pans, Most views; Closest and Widest zoom, Pan share
+  (auto, 0-100%), Longest park, with a Playlist's button of its own. A park whose views are set by hand (edited
+  in the game, from the views file, or listed in the playlist: `listed` on the park) has them grayed with "its
+  views are set by hand". The pane's header says "changed · next build" while any of them differs from the
+  build.
+
+The park settings are the settings page's park switches and Edit parameters. As on the settings page they
+belong to the park, not the playlist: the next build's bake writes them into the park's profile in the user
+folder (`profiles.change`, which the settings page now shares; a park without one gets a new profile matched by
+its saved name and map size; a copy left equal to the shipped profile, or a new one left with only its match, is
+removed), so they apply in every playlist that plays the park. The headers say "profile <stem>", "the
+playlist's values" or, in amber, "changed · next build"; a Playlist's button sets every key of its group the
+profile sets back to the playlist's (null in the change, the key removed at the bake). A key the playlist's own
+`[[park]]` entry sets is gray with "Set in the playlist's own entry for this park", as the entry wins over any
+profile.
 
 Every build lists each park's settings (`settings` on the park: the values in force, `profile`, `savedName`,
 `mapSize`, `adjusted` keys the profile sets, `locked` keys the entry sets) and the playlist's values
@@ -509,12 +525,11 @@ own. `mksequence.py --user-dir` now also points the user's profiles and playlist
 
 ### Generation (2026-11-14)
 
-Playlist properties end with a GENERATION section, folded under its header, holding the playlist-wide
-generator options the settings page sets, with its labels: Motion (Pans, Static), View order (Circuit,
-Random), Variants (1-10) and Include reverse (circuit only), Ride pans (Include, Exclude, Only; pans only),
-Shortest and Longest park (0-300 s and 10-300 s in 5 s steps, kept 5 s apart), Time scale (× 0.5-3 in 0.25
-steps), Park scripts and Event views (`park_plugins`; shown while park scripts run). Unlike the rest of the
-properties, nothing plays differently until a build: the header says "changed · next build" in amber while a
+The Generation pane's PLAYLIST section holds the playlist-wide generator options the settings page sets,
+with its labels: Motion (Pans, Static), View order (Circuit, Random), Variants (1-10) and Include reverse
+(circuit only), Ride pans (Include, Exclude, Only; pans only), Shortest and Longest park (0-300 s and 10-300 s
+in 5 s steps, kept 5 s apart), Time scale (× 0.5-3 in 0.25 steps). Park scripts and Event views are stored with
+them but shown on the playlist's gear, as they apply to any views. Nothing plays differently until a build: the header says "changed · next build" in amber while a
 value differs from the build, and the save marks the build pane "edits not built". Every build names the
 values it was made with (`generation` in the playlist, `generation_values`); the editor saves only what
 differs from them (`playlistProps.<sequence>.generation`, plugin keys), drops what a new build has made its

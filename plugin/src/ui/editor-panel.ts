@@ -7,8 +7,10 @@
 //   views (cut-ins, car cues, shows) in a list of their own, by when they play (owner, 2026-11-10);
 // - the toolbox, bottom left: Frame | Map, a hint, the view, camera and event tools, hold and pan, then
 //   undo, redo, Reset view, the pin (the panes stay shown) and Play; tooltips name each tool and its key;
-// - the top-right box: the park's restore points and the Playlist properties (motion, timing,
-//   presentation), folded to its header when the window is too narrow for it beside the views pane.
+// - the top-right box: the park's restore points and the Generation pane (every setting only the automatic
+//   view generation uses, the playlist's and the park's; owner, 2026-11-14), folded to its header when the
+//   window is too narrow for it beside the views pane. The settings that apply to any views are on gears
+//   at the playlist and park rows of the views pane.
 // Live editing (docs/screensaver-ui.md): a drag on the park moves the selected view, the wheel zooms it.
 
 import { builder, clock, ParkState, PlaylistInfo, readPlaylists } from "../builder";
@@ -79,6 +81,13 @@ const PARK_STEPS: Record<ParkStep, { label: string; tip: string; text: (v: numbe
     panTolerance: { label: "Pan speed", tip: "How fast pans may move, px/s at zoom -2: lower is smoother but drops views", text: v => `${v}` },
     parkCap: { label: "Longest park", tip: "Longest time in the park: the lowest-scoring views drop to fit", text: v => `${v} s` },
 };
+const PARK_LABELS: Record<ParkSeg, string> = {
+    scripts: "Park scripts", companionPans: "Scripts in pans", events: "Event views", towers: "Tower views", rides: "Ride pans", returnPan: "Return pan",
+};
+/** The park settings that apply to any views (the park row's gear), and those only the generation uses
+ *  (the Generation pane; owner, 2026-11-14). */
+const PARK_PLAYBACK: (keyof ParkValues)[] = ["scripts", "companionPans", "events", "returnPan", "panTolerance"];
+const PARK_GENERATION: (keyof ParkValues)[] = ["towers", "rides", "count", "zoomMin", "zoomMax", "pan", "parkCap"];
 const LOCKED_TIP = "Set in the playlist's own entry for this park";
 
 /** A list that scrolls: its first row shown, and the thumb's drag. */
@@ -176,9 +185,8 @@ export class EditorPanel implements EditorView {
     // it on Build and play (owner, 2026-11-13); gone when the list closes
     private draft: { sequence: string; source?: string; parks: { key: string; name: string }[]; props: PlaylistProps } | undefined;
     private picked: string | undefined; // the restore point highlighted
-    private propsOpen = true; // the Playlist properties unfolded
-    private genOpen = false; // and their Generation section
-    private settingsOpen = false; // the views pane shows the park's settings in place of its views
+    private genOpen = true; // the Generation pane unfolded
+    private settingsOpen: "park" | "playlist" | undefined; // the views pane shows a gear's settings in place of the park's views
     private clipShown = false; // a Copy/Paste note is on its button (it goes after a moment)
     private buildShown = ""; // the build pane's state as last drawn (buildSignature)
     private buildOpen: boolean | undefined; // the build pane unfolded by hand (undefined: when there is room)
@@ -667,10 +675,11 @@ export class EditorPanel implements EditorView {
             case "copy": e.copyViews(); break;
             case "paste": e.pasteViews(); break;
             case "boxHead": this.boxOpen = this.boxFolded(); break;
-            case "propsHead": this.propsOpen = !this.propsOpen; break;
             case "genHead": this.genOpen = !this.genOpen; break;
-            case "parkSet": this.settingsOpen = !this.settingsOpen; break;
-            case "parkReset": e.playback.resetParkSettings(); break;
+            case "parkSet": this.settingsOpen = this.settingsOpen === "park" ? undefined : "park"; break;
+            case "plSet": this.settingsOpen = this.settingsOpen === "playlist" ? undefined : "playlist"; break;
+            case "parkReset": e.playback.resetParkSettings(PARK_PLAYBACK); break;
+            case "parkGenReset": e.playback.resetParkSettings(PARK_GENERATION); break;
             case "buildHead": this.buildOpen = this.buildFolded(); break;
             case "build": this.toggleBuild(); break;
             case "import": this.bundle("import"); break;
@@ -793,8 +802,11 @@ export class EditorPanel implements EditorView {
         let y = s.y + s.pad;
         const t = s.titleHeight;
         // The playlist, a heading of its own over the park (owner, 2026-11-12)
-        const plField = this.place("plfield", { x: x0, y, width: inner, height: s.playlistHeight },
+        const plSetW = s.playlistHeight;
+        const plField = this.place("plfield", { x: x0, y, width: inner - plSetW - s.gap, height: s.playlistHeight },
             "The playlist: click to switch to another, make a new one or duplicate this one");
+        this.place("plSet", { x: x0 + inner - plSetW, y, width: plSetW, height: s.playlistHeight },
+            this.settingsOpen === "playlist" ? "Back to the park's views" : "Playlist settings: motion, holds, titles, music, scripts");
         y += s.playlistHeight + s.gap;
         const order = e.playback.playOrder;
         const pos = order.indexOf(e.parkIndex);
@@ -806,9 +818,9 @@ export class EditorPanel implements EditorView {
         const setX = nextX - s.gap - t;
         const hasSettings = e.playback.parkSettings !== undefined;
         this.place("parkSet", { x: setX, y, width: t, height: t }, !hasSettings ? "Park settings: build the playlist first"
-            : this.settingsOpen ? "Back to the park's views" : "Park settings: views, zoom, pans, scripts", !hasSettings);
-        if (!hasSettings) {
-            this.settingsOpen = false;
+            : this.settingsOpen === "park" ? "Back to the park's views" : "Park settings: scripts, event views, return pan, pan speed", !hasSettings);
+        if (!hasSettings && this.settingsOpen === "park") {
+            this.settingsOpen = undefined;
         }
         const field = this.place("field", { x: x0 + t + s.gap, y, width: setX - s.gap - (x0 + t + s.gap), height: t },
             many ? "Hold: jump to a park. Click: reorder" : undefined);
@@ -891,7 +903,8 @@ export class EditorPanel implements EditorView {
         // Park row
         button(scene, "prevPark", this.boxes.get("prevPark")!, this.state("prevPark"), { icon: "prev-view", iconSize: s.toolIcon }, overlay);
         button(scene, "nextPark", this.boxes.get("nextPark")!, this.state("nextPark"), { icon: "next-view", iconSize: s.toolIcon }, overlay);
-        button(scene, "parkSet", this.boxes.get("parkSet")!, this.state("parkSet", this.settingsOpen), { icon: "settings", iconSize: s.toolIcon }, overlay);
+        button(scene, "parkSet", this.boxes.get("parkSet")!, this.state("parkSet", this.settingsOpen === "park"), { icon: "settings", iconSize: s.toolIcon }, overlay);
+        button(scene, "plSet", this.boxes.get("plSet")!, this.state("plSet", this.settingsOpen === "playlist"), { icon: "settings", iconSize: s.toolIcon - 6 }, overlay);
         const fieldOpen = this.dropdown !== undefined && this.playlists === undefined;
         scene.set("field", { type: "rect", ...field, fill: fieldOpen ? THEME.faceDown : this.hit() === "field" ? THEME.faceHover : THEME.editorList, z: Z.face });
         bevel(scene, "field", field, THEME.bevelDark, THEME.bevelLight, THEME.bevel, Z.bevel);
@@ -908,8 +921,10 @@ export class EditorPanel implements EditorView {
         if (count) {
             label(scene, "text.count", count, { x: field.x + field.width - 6 - countW, y: field.y, width: 0, height: field.height }, s.textSize, overlay, true);
         }
-        if (this.settingsOpen) {
+        if (this.settingsOpen === "park") {
             this.parkSettings(e, scene);
+        } else if (this.settingsOpen === "playlist") {
+            this.playlistSettings(e, scene);
         } else {
             this.viewsList(e, scene, rows, route);
         }
@@ -923,87 +938,145 @@ export class EditorPanel implements EditorView {
         }
     }
 
-    /** The park's settings in place of its views (the settings page's park switches and parameters): saved as
-     *  they change into the park's profile at the next build; in two columns, a header row with Reset. */
-    private parkSettings(e: Editor, scene: Scene): void {
+    /** Rows of labeled controls in columns (the gear panels and the Generation pane): a section header,
+     *  segmented buttons and steppers, `rowH` tall, each column filled from the top. */
+    private form(scene: Scene, cols: number[], colW: number, y0: number, rowH = 26) {
         const s = EDITOR;
         const overlay = this.mode.overlay;
-        const area = { ...this.listRect, width: this.paneViews.width - 2 * s.pad };
-        const v = e.playback.parkSettings!;
-        const built = e.playback.parkSettingsBuilt!;
-        const changed = e.playback.parkSettingsChanged;
-        const set = e.playback.parkSettingsSet;
-        const rowH = 26;
-        // Header: what the settings are and where they go, and Reset
-        this.sectionLabel(scene, "pset.head", "PARK SETTINGS", area.x, area.y + 5);
-        const resetW = 92;
-        const reset = this.place("parkReset", { x: area.x + area.width - resetW, y: area.y, width: resetW, height: s.segHeight },
-            "Back to the playlist's values (the park's profile changes go at the next build)", !built.adjusted.length && !changed);
-        button(scene, "parkReset", reset, this.state("parkReset"), { text: "Playlist's", textSize: 13 }, overlay);
-        const note = changed ? "changed · next build" : built.profile ? `profile ${built.profile}` : "the playlist's values";
-        const nw = measure(overlay, note, 12).width;
-        label(scene, "pset.note", note, { x: reset.x - 10 - nw, y: area.y, width: 0, height: s.segHeight }, 12, overlay);
-        scene.set("pset.note", { ...scene.get("pset.note")!, colour: changed ? THEME.pending : THEME.textDim });
-        const colW = Math.floor((area.width - 16) / 2);
-        const cols = [area.x, area.x + colW + 16];
-        const ys = [area.y + rowH + 4, area.y + rowH + 4];
-        const rowLabel = (c: number, key: keyof ParkValues, text: string) => {
-            const id = `pset.label.${key}`;
+        const ys = cols.map(() => y0);
+        const rowLabel = (c: number, id: string, text: string, colour?: string) => {
             label(scene, id, text, { x: cols[c], y: ys[c], width: 0, height: rowH }, 13, overlay);
-            const colour = built.locked.includes(key) ? THEME.textDim : key in set ? THEME.pending : undefined;
             if (colour) {
                 scene.set(id, { ...scene.get(id)!, colour });
             }
         };
-        const segments = (c: number, key: ParkSeg, text: string) => {
-            rowLabel(c, key, text);
-            const choices = PARK_CHOICES[key];
-            const widths = choices.map(([t]) => Math.ceil(measure(overlay, t, 12, true).width) + 16);
-            let sx = cols[c] + colW - widths.reduce((a, w) => a + w, 0) - s.gap * (choices.length - 1);
-            const sy = ys[c] + Math.round((rowH - 22) / 2);
-            const locked = built.locked.includes(key);
-            choices.forEach(([t, value, tip], i) => {
-                const id = `pseg.${key}.${i}`;
-                const r = this.place(id, { x: sx, y: sy, width: widths[i], height: 22 }, locked ? LOCKED_TIP : tip, locked);
-                button(scene, id, r, this.state(id, v[key] === value), { text: t, textSize: 12 }, overlay);
-                sx += widths[i] + s.gap;
-            });
-            ys[c] += rowH;
+        return {
+            ys,
+            section: (c: number, id: string, text: string) => {
+                this.sectionLabel(scene, id, text, cols[c], ys[c] + 6);
+                ys[c] += s.labelHeight + 10;
+            },
+            /** Segmented buttons, ids `${id}.${i}`; `disabled` with `tip` in place of each choice's. */
+            segments: (c: number, id: string, text: string, choices: Choice[], current: unknown,
+                o: { colour?: string; disabled?: boolean; tip?: string } = {}) => {
+                rowLabel(c, `${id}.label`, text, o.colour);
+                const widths = choices.map(([t]) => Math.ceil(measure(overlay, t, 12, true).width) + 16);
+                let sx = cols[c] + colW - widths.reduce((a, w) => a + w, 0) - s.gap * (choices.length - 1);
+                const sy = ys[c] + Math.round((rowH - 22) / 2);
+                choices.forEach(([t, value, tip], i) => {
+                    const bid = `${id}.${i}`;
+                    const r = this.place(bid, { x: sx, y: sy, width: widths[i], height: 22 }, o.tip ?? tip, o.disabled);
+                    button(scene, bid, r, this.state(bid, current === value), { text: t, textSize: 12 }, overlay);
+                    sx += widths[i] + s.gap;
+                });
+                ys[c] += rowH;
+            },
+            /** A stepper, ids `${id}.less` and `${id}.more`, its value text `${valueId}`. */
+            stepper: (c: number, id: string, valueId: string, text: string, value: string, tip: string,
+                o: { colour?: string; less?: boolean; more?: boolean; disabled?: boolean } = {}) => {
+                rowLabel(c, `${id}.label`, text, o.colour);
+                const w = 22;
+                const sy = ys[c] + Math.round((rowH - w) / 2);
+                const more = this.place(`${id}.more`, { x: cols[c] + colW - w, y: sy, width: w, height: w }, tip, o.disabled || o.more === false);
+                const box = { x: more.x - s.gap - 52, y: sy, width: 52, height: w };
+                const less = this.place(`${id}.less`, { x: box.x - s.gap - w, y: sy, width: w, height: w }, tip, o.disabled || o.less === false);
+                button(scene, `${id}.less`, less, this.state(`${id}.less`), { icon: "less", iconSize: 16 }, overlay);
+                button(scene, `${id}.more`, more, this.state(`${id}.more`), { icon: "add", iconSize: 16 }, overlay);
+                scene.set(`${valueId}.box`, { type: "rect", ...box, fill: THEME.editorList, z: Z.face });
+                label(scene, valueId, value, { x: box.x + box.width / 2, y: sy, width: 0, height: w }, 13, overlay);
+                scene.set(valueId, { ...scene.get(valueId)!, align: "center" });
+                ys[c] += rowH;
+            },
         };
-        const stepper = (c: number, key: ParkStep) => {
-            const st = PARK_STEPS[key];
-            rowLabel(c, key, st.label);
-            const w = 22;
-            const sy = ys[c] + Math.round((rowH - w) / 2);
+    }
+
+    /** A gear panel's header: its title, a note (pending when changed) and a reset button. */
+    private gearHeader(scene: Scene, area: Rect, id: string, title: string, note: string, changed: boolean,
+        reset?: { id: string; text: string; tip: string; disabled: boolean }): void {
+        const s = EDITOR;
+        const overlay = this.mode.overlay;
+        this.sectionLabel(scene, `${id}.head`, title, area.x, area.y + 5);
+        let right = area.x + area.width;
+        if (reset) {
+            const r = this.place(reset.id, { x: right - 92, y: area.y, width: 92, height: s.segHeight }, reset.tip, reset.disabled);
+            button(scene, reset.id, r, this.state(reset.id), { text: reset.text, textSize: 13 }, overlay);
+            right = r.x - 10;
+        }
+        const nw = measure(overlay, note, 12).width;
+        label(scene, `${id}.note`, note, { x: right - nw, y: area.y, width: 0, height: s.segHeight }, 12, overlay);
+        scene.set(`${id}.note`, { ...scene.get(`${id}.note`)!, colour: changed ? THEME.pending : THEME.textDim });
+    }
+
+    /** The park row's gear: the park's settings that apply to any views, generated or set by hand (its
+     *  scripts, event views, return pan, pan speed); saved as they change into the park's profile at the
+     *  next build. Its generation settings are in the Generation pane (owner, 2026-11-14). */
+    private parkSettings(e: Editor, scene: Scene): void {
+        const area = { ...this.listRect, width: this.paneViews.width - 2 * EDITOR.pad };
+        const built = e.playback.parkSettingsBuilt!;
+        const changed = e.playback.parkSettingsChangedIn(PARK_PLAYBACK);
+        this.gearHeader(scene, area, "pset", "PARK SETTINGS · ANY VIEWS", changed ? "changed · next build" : built.profile ? `profile ${built.profile}` : "the playlist's values",
+            changed, { id: "parkReset", text: "Playlist's", tip: "Back to the playlist's values (the park's profile changes go at the next build)",
+                disabled: !built.adjusted.some(k => PARK_PLAYBACK.includes(k)) && !changed });
+        const colW = Math.floor((area.width - 24) / 2);
+        const f = this.form(scene, [area.x, area.x + colW + 24], colW, area.y + 30);
+        this.parkControls(e, f, 0, ["scripts", "companionPans", "events", "returnPan"]);
+        this.parkControls(e, f, 1, ["panTolerance"]);
+    }
+
+    /** The park settings `keys` as rows of column `c` (a locked key, set in the playlist's own entry, grayed). */
+    private parkControls(e: Editor, f: ReturnType<EditorPanel["form"]>, c: number, keys: (keyof ParkValues)[], disabled?: string): void {
+        const v = e.playback.parkSettings!;
+        const built = e.playback.parkSettingsBuilt!;
+        const set = e.playback.parkSettingsSet;
+        for (const key of keys) {
             const locked = built.locked.includes(key);
-            const tip = locked ? LOCKED_TIP : st.tip;
-            const more = this.place(`pstep.${key}.more`, { x: cols[c] + colW - w, y: sy, width: w, height: w }, tip,
-                locked || parkStep(key, v, 1) === undefined);
-            const value = { x: more.x - s.gap - 52, y: sy, width: 52, height: w };
-            const less = this.place(`pstep.${key}.less`, { x: value.x - s.gap - w, y: sy, width: w, height: w }, tip,
-                locked || parkStep(key, v, -1) === undefined);
-            button(scene, `pstep.${key}.less`, less, this.state(`pstep.${key}.less`), { icon: "less", iconSize: 16 }, overlay);
-            button(scene, `pstep.${key}.more`, more, this.state(`pstep.${key}.more`), { icon: "add", iconSize: 16 }, overlay);
-            scene.set(`pstepv.${key}`, { type: "rect", ...value, fill: THEME.editorList, z: Z.face });
-            const vid = `pstept.${key}`;
-            label(scene, vid, st.text(v[key]), { x: value.x + value.width / 2, y: sy, width: 0, height: w }, 13, overlay);
-            scene.set(vid, { ...scene.get(vid)!, align: "center" });
-            ys[c] += rowH;
-        };
-        if (v.scripts !== undefined) {
-            segments(0, "scripts", "Park scripts");
-            if (v.scripts) {
-                segments(0, "companionPans", "Scripts in pans");
+            const colour = locked || disabled ? THEME.textDim : key in set ? THEME.pending : undefined;
+            if (key in PARK_CHOICES) {
+                const k = key as ParkSeg;
+                if (v[k] === undefined || k === "companionPans" && !v.scripts) {
+                    continue; // (no scripts or event views in the park; scripts in pans only while they run)
+                }
+                f.segments(c, `pseg.${k}`, PARK_LABELS[k], PARK_CHOICES[k], v[k], { colour, disabled: locked || !!disabled, tip: locked ? LOCKED_TIP : disabled });
+            } else {
+                const k = key as ParkStep;
+                const st = PARK_STEPS[k];
+                f.stepper(c, `pstep.${k}`, `pstept.${k}`, st.label, st.text(v[k]), locked ? LOCKED_TIP : disabled ?? st.tip,
+                    { colour, disabled: locked || !!disabled, less: parkStep(k, v, -1) !== undefined, more: parkStep(k, v, 1) !== undefined });
             }
         }
-        if (v.events !== undefined) {
-            segments(0, "events", "Event views");
+    }
+
+    /** The playlist row's gear: the playlist's settings that apply to any views (motion feel, holds,
+     *  titles and music, the parks' scripts); saved as they change (owner, 2026-11-14). */
+    private playlistSettings(e: Editor, scene: Scene): void {
+        const s = EDITOR;
+        const area = { ...this.listRect, width: this.paneViews.width - 2 * s.pad };
+        const props = e.playback.playlistProps;
+        const g = e.playback.generation;
+        this.gearHeader(scene, area, "plset", "PLAYLIST SETTINGS · ANY VIEWS", "saved as they change", false);
+        const colW = Math.floor((area.width - 24) / 2);
+        const f = this.form(scene, [area.x, area.x + colW + 24], colW, area.y + 26);
+        const hold = (c: number, key: "changeHold" | "arriveHold" | "returnHold", text: string, tip: string) =>
+            f.stepper(c, `step.${key}`, `stept.${key}`, text, `${props[key].toFixed(1)} s`, tip,
+                { less: props[key] > 0, more: props[key] < s.holdMax });
+        f.section(0, "sec.MOTION", "MOTION");
+        f.segments(0, "seg.inertia", "Inertia", CHOICES.inertia!, props.inertia);
+        f.segments(0, "seg.panChanges", "Turns, zooms", CHOICES.panChanges!, props.panChanges);
+        f.section(0, "sec.TIMING", "TIMING");
+        if (props.panChanges !== "off") {
+            // Off: no pan turns or zooms, so these do not apply (owner, 2026-11-10).
+            hold(0, "changeHold", "Change hold", "Pause after a turn or zoom");
+            hold(0, "arriveHold", "Arrival hold", "Pause before a turn or zoom");
         }
-        segments(0, "towers", "Tower views");
-        segments(0, "rides", "Ride pans");
-        segments(0, "returnPan", "Return pan");
-        for (const key of ["count", "zoomMin", "zoomMax", "pan", "panTolerance", "parkCap"] as ParkStep[]) {
-            stepper(1, key);
+        hold(0, "returnHold", "Return hold", "Pause at first view before next park");
+        f.section(1, "sec.PRESENTATION", "PRESENTATION");
+        f.segments(1, "seg.titleMusic", "Music", CHOICES.titleMusic!, props.titleMusic);
+        f.segments(1, "seg.titles", "Titles", CHOICES.titles!, props.titles);
+        f.section(1, "sec.SCRIPTS", "PARK SCRIPTS");
+        const pending = (key: keyof Generation) => (e.playback.generationChangedKeys.includes(key) ? THEME.pending : undefined);
+        f.segments(1, "gseg.parkScripts", "Scripts", GEN_CHOICES.parkScripts!, g.parkScripts, { colour: pending("parkScripts") });
+        if (g.parkScripts) {
+            f.segments(1, "gseg.parkViews", "Event views", GEN_CHOICES.parkViews!, g.parkViews, { colour: pending("parkViews") });
         }
     }
 
@@ -1562,22 +1635,24 @@ export class EditorPanel implements EditorView {
             }
         }
         y += s.boxButton + 10;
-        // Playlist properties, folded under their header.
-        const ph = this.place("propsHead", { x: x0, y, width: inner, height: s.propHeader }, this.propsOpen ? "Fold" : "Unfold");
-        scene.set("propsHead", { type: "rect", ...ph, fill: this.hit() === "propsHead" ? THEME.faceHover : "#00000000", z: Z.face });
-        bevel(scene, "propsHead", ph, THEME.backingLight, THEME.backingDark, THEME.bevel, Z.bevel);
-        foldMark(scene, "props.mark", this.propsOpen, x0 + 4, y + s.propHeader / 2, overlay);
-        label(scene, "props.title", "Playlist", { x: x0 + 24, y, width: 0, height: s.propHeader }, 16, overlay, true);
-        const tw = measure(overlay, "Playlist", 16, true).width;
-        label(scene, "props.sub", "properties", { x: x0 + 24 + tw + 8, y: y + 1, width: 0, height: s.propHeader }, 13, overlay);
-        scene.set("props.sub", { ...scene.get("props.sub")!, colour: THEME.textDim });
-        const subW = measure(overlay, "properties", 13).width;
-        const seq = fit(overlay, e.playback.sequenceName, 13, inner - 24 - tw - 8 - subW - 24);
-        const qw = measure(overlay, seq, 13).width;
-        label(scene, "props.name", seq, { x: x0 + inner - 8 - qw, y, width: 0, height: s.propHeader }, 13, overlay);
-        y += s.propHeader + 4;
-        if (this.propsOpen) {
-            y = this.properties(e, scene, x0, y, inner);
+        // Generation: the settings only the automatic view generation uses (owner, 2026-11-14), folded under
+        // their header; those that apply to any views are on the views pane's gears.
+        const ph = this.place("genHead", { x: x0, y, width: inner, height: s.propHeader }, this.genOpen ? "Fold" : "Unfold");
+        scene.set("genHead", { type: "rect", ...ph, fill: this.hit() === "genHead" ? THEME.faceHover : "#00000000", z: Z.face });
+        bevel(scene, "genHead", ph, THEME.backingLight, THEME.backingDark, THEME.bevel, Z.bevel);
+        foldMark(scene, "gen.mark", this.genOpen, x0 + 4, y + s.propHeader / 2, overlay);
+        label(scene, "gen.title", "Generation", { x: x0 + 24, y, width: 0, height: s.propHeader }, 16, overlay, true);
+        const tw = measure(overlay, "Generation", 16, true).width;
+        label(scene, "gen.sub", "automatic views", { x: x0 + 24 + tw + 8, y: y + 1, width: 0, height: s.propHeader }, 13, overlay);
+        scene.set("gen.sub", { ...scene.get("gen.sub")!, colour: THEME.textDim });
+        const pending = e.playback.generationChanged || e.playback.parkSettingsChangedIn(PARK_GENERATION);
+        const genNote = pending ? "changed · next build" : "at the next build";
+        const nw = measure(overlay, genNote, 13).width;
+        label(scene, "gen.note", genNote, { x: x0 + inner - 8 - nw, y, width: 0, height: s.propHeader }, 13, overlay);
+        scene.set("gen.note", { ...scene.get("gen.note")!, colour: pending ? THEME.pending : THEME.textDim });
+        y += s.propHeader + 2;
+        if (this.genOpen) {
+            y = this.generation(e, scene, x0, y, inner) + 4;
         }
         const frame = { x: x0 - s.pad, y: top, width, height: y - top + s.pad - 6 };
         this.frames.push(frame);
@@ -1833,114 +1908,21 @@ export class EditorPanel implements EditorView {
     }
 
     /** Motion, timing and presentation; returns the y below them. */
-    private properties(e: Editor, scene: Scene, x0: number, y: number, inner: number): number {
-        const s = EDITOR;
-        const overlay = this.mode.overlay;
-        const props = e.playback.playlistProps;
-        const section = (name: string) => {
-            this.sectionLabel(scene, `sec.${name}`, name, x0, y);
-            y += s.labelHeight + 3;
-        };
-        const rowLabel = (key: string, text: string) =>
-            label(scene, `prop.${key}`, text, { x: x0, y, width: 0, height: s.propRow }, s.textSize, overlay);
-        const segments = (key: keyof PlaylistProps, text: string) => {
-            rowLabel(key, text);
-            const choices = CHOICES[key]!;
-            const widths = choices.map(([t]) => Math.ceil(measure(overlay, t, 13, true).width) + 2 * s.segPad);
-            let sx = x0 + inner - widths.reduce((a, w) => a + w, 0) - s.gap * (choices.length - 1);
-            const sy = y + Math.round((s.propRow - s.segHeight) / 2);
-            choices.forEach(([t, value, tip], i) => {
-                const id = `seg.${key}.${i}`;
-                const r = this.place(id, { x: sx, y: sy, width: widths[i], height: s.segHeight }, tip);
-                button(scene, id, r, this.state(id, props[key as keyof typeof props] === value), { text: t, textSize: 13 }, overlay);
-                sx += widths[i] + s.gap;
-            });
-            y += s.propRow;
-        };
-        const stepper = (key: "changeHold" | "arriveHold" | "returnHold", text: string, tip: string) => {
-            rowLabel(key, text);
-            const w = s.stepButton;
-            const sy = y + Math.round((s.propRow - w) / 2);
-            const right = x0 + inner;
-            const more = this.place(`step.${key}.more`, { x: right - w, y: sy, width: w, height: w }, tip);
-            const value = { x: more.x - s.gap - s.stepValueBox, y: sy, width: s.stepValueBox, height: w };
-            const less = this.place(`step.${key}.less`, { x: value.x - s.gap - w, y: sy, width: w, height: w }, tip);
-            button(scene, `step.${key}.less`, less, this.state(`step.${key}.less`), { icon: "less", iconSize: 16 }, overlay);
-            button(scene, `step.${key}.more`, more, this.state(`step.${key}.more`), { icon: "add", iconSize: 16 }, overlay);
-            scene.set(`stepv.${key}`, { type: "rect", ...value, fill: THEME.editorList, z: Z.face });
-            const vid = `stept.${key}`;
-            label(scene, vid, `${props[key].toFixed(1)} s`, { x: value.x + value.width / 2, y: sy, width: 0, height: w }, 13, overlay);
-            scene.set(vid, { ...scene.get(vid)!, align: "center" });
-            y += s.propRow;
-        };
-        section("MOTION");
-        segments("inertia", "Inertia");
-        segments("panChanges", "Angle and zoom change");
-        section("TIMING");
-        if (props.panChanges !== "off") {
-            // Off: no pan turns or zooms, so these do not apply (owner, 2026-11-10).
-            stepper("changeHold", "Change hold", "Pause after a turn or zoom");
-            stepper("arriveHold", "Arrival hold", "Pause before a turn or zoom");
-        }
-        stepper("returnHold", "Return hold", "Pause at first view before next park");
-        section("PRESENTATION");
-        segments("titleMusic", "Title music");
-        segments("titles", "Show titles");
-        return this.generation(e, scene, x0, y + 4, inner) + 6;
-    }
-
-    /** The playlist-wide generator options, folded under their header: saved as they change, they take
-     *  effect at the next build (the Build pane shows "edits not built"); returns the y below them. */
+    /** The Generation pane's body: every setting that only the automatic view generation uses (owner,
+     *  2026-11-14), the playlist's then the park's; saved as they change, they take effect at the next build
+     *  (the Build pane shows "edits not built"). Returns the y below them. */
     private generation(e: Editor, scene: Scene, x0: number, y: number, inner: number): number {
-        const s = EDITOR;
-        const overlay = this.mode.overlay;
         const g = e.playback.generation;
-        const changed = e.playback.generationChanged;
-        const head = this.place("genHead", { x: x0, y, width: inner, height: s.labelHeight + 6 },
-            this.genOpen ? "Fold" : "How the next build makes the views");
-        scene.set("genHead", { type: "rect", ...head, fill: this.hit() === "genHead" ? THEME.faceHover : "#00000000", z: Z.face });
-        foldMark(scene, "gen.mark", this.genOpen, x0, y + head.height / 2, overlay);
-        this.sectionLabel(scene, "sec.GENERATION", "GENERATION", x0 + 20, y + 3);
-        const note = changed ? "changed · next build" : "at the next build";
-        const nw = measure(overlay, note, 12).width;
-        label(scene, "gen.note", note, { x: x0 + inner - nw, y: y + 3, width: 0, height: s.labelHeight }, 12, overlay);
-        scene.set("gen.note", { ...scene.get("gen.note")!, colour: changed ? THEME.pending : THEME.textDim });
-        y += head.height + 3;
-        if (!this.genOpen) {
-            return y;
-        }
-        const rowLabel = (key: string, text: string) =>
-            label(scene, `gprop.${key}`, text, { x: x0, y, width: 0, height: s.propRow }, s.textSize, overlay);
-        const segments = (key: keyof Generation, text: string) => {
-            rowLabel(key, text);
-            const choices = GEN_CHOICES[key]!;
-            const widths = choices.map(([t]) => Math.ceil(measure(overlay, t, 13, true).width) + 2 * s.segPad);
-            let sx = x0 + inner - widths.reduce((a, w) => a + w, 0) - s.gap * (choices.length - 1);
-            const sy = y + Math.round((s.propRow - s.segHeight) / 2);
-            choices.forEach(([t, value, tip], i) => {
-                const id = `gseg.${key}.${i}`;
-                const r = this.place(id, { x: sx, y: sy, width: widths[i], height: s.segHeight }, tip);
-                button(scene, id, r, this.state(id, g[key] === value), { text: t, textSize: 13 }, overlay);
-                sx += widths[i] + s.gap;
-            });
-            y += s.propRow;
-        };
+        const changedKeys = e.playback.generationChangedKeys;
+        const f = this.form(scene, [x0], inner, y);
+        const colour = (key: keyof Generation) => (changedKeys.includes(key) ? THEME.pending : undefined);
+        const segments = (key: keyof Generation, text: string) =>
+            f.segments(0, `gseg.${key}`, text, GEN_CHOICES[key]!, g[key], { colour: colour(key) });
         const stepper = (key: GenStep, text: string, tip: string) => {
-            rowLabel(key, text);
             const st = GEN_STEPS[key];
-            const w = s.stepButton;
-            const sy = y + Math.round((s.propRow - w) / 2);
-            const more = this.place(`gstep.${key}.more`, { x: x0 + inner - w, y: sy, width: w, height: w }, tip, g[key] >= st.max);
-            const value = { x: more.x - s.gap - s.stepValueBox, y: sy, width: s.stepValueBox, height: w };
-            const less = this.place(`gstep.${key}.less`, { x: value.x - s.gap - w, y: sy, width: w, height: w }, tip, g[key] <= st.min);
-            button(scene, `gstep.${key}.less`, less, this.state(`gstep.${key}.less`), { icon: "less", iconSize: 16 }, overlay);
-            button(scene, `gstep.${key}.more`, more, this.state(`gstep.${key}.more`), { icon: "add", iconSize: 16 }, overlay);
-            scene.set(`gstepv.${key}`, { type: "rect", ...value, fill: THEME.editorList, z: Z.face });
-            const vid = `gstept.${key}`;
-            label(scene, vid, st.text(g[key]), { x: value.x + value.width / 2, y: sy, width: 0, height: w }, 13, overlay);
-            scene.set(vid, { ...scene.get(vid)!, align: "center" });
-            y += s.propRow;
+            f.stepper(0, `gstep.${key}`, `gstept.${key}`, text, st.text(g[key]), tip, { colour: colour(key), less: g[key] > st.min, more: g[key] < st.max });
         };
+        f.section(0, "sec.GENERATION", "PLAYLIST");
         segments("motion", "Motion");
         segments("route", "View order");
         if (g.route === "circuit") {
@@ -1952,12 +1934,30 @@ export class EditorPanel implements EditorView {
         }
         stepper("parkMin", "Shortest park", "Shortest time per park");
         stepper("parkCap", "Longest park", "Longest time per park: the lowest-scoring views drop to fit");
-        stepper("timeScale", "Time scale", "Multiplies every hold and pan: above 1 is slower");
-        segments("parkScripts", "Park scripts");
-        if (g.parkScripts) {
-            segments("parkViews", "Event views");
+        stepper("timeScale", "Time scale", "Multiplies every generated hold and pan: above 1 is slower");
+        y = f.ys[0] + 6;
+        // The park's own generation settings (its profile), grayed while it plays views set by hand
+        const v = e.playback.parkSettings;
+        const built = e.playback.parkSettingsBuilt;
+        const name = (e.parkNames[e.parkIndex] ?? "").toUpperCase();
+        const area = { x: x0, y, width: inner, height: 0 };
+        if (!v || !built) {
+            this.gearHeader(scene, area, "pgen", fit(this.mode.overlay, `PARK · ${name}`, EDITOR.labelSize, inner - 140), "build the playlist first", false);
+            return y + EDITOR.segHeight + 4;
         }
-        return y;
+        const generated = e.playback.parkGenerated;
+        const changed = e.playback.parkSettingsChangedIn(PARK_GENERATION);
+        const note = !generated ? "its views are set by hand" : changed ? "changed · next build" : built.profile ? `profile ${built.profile}` : "the playlist's values";
+        this.gearHeader(scene, area, "pgen", fit(this.mode.overlay, `PARK · ${name}`, EDITOR.labelSize, inner - 260), note, changed,
+            { id: "parkGenReset", text: "Playlist's", tip: "Back to the playlist's values (the park's profile changes go at the next build)",
+                disabled: !generated || !built.adjusted.some(k => PARK_GENERATION.includes(k)) && !changed });
+        // (in two columns, so the pane leaves the Build pane its room)
+        const colW = Math.floor((inner - 16) / 2);
+        const pf = this.form(scene, [x0, x0 + colW + 16], colW, y + EDITOR.segHeight + 4);
+        const off = generated ? undefined : "The park plays views set by hand: generation doesn't make them";
+        this.parkControls(e, pf, 0, ["towers", "rides", "count"], off);
+        this.parkControls(e, pf, 1, ["zoomMin", "zoomMax", "pan", "parkCap"], off);
+        return Math.max(...pf.ys);
     }
 }
 

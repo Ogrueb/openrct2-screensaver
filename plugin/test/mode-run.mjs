@@ -27,8 +27,10 @@ const parkValues = { towers: true, rides: true, count: 8, zoomMin: -2, zoomMax: 
     returnPan: true, companionPans: "run" };
 playlist.parkDefaults = { ...parkValues, scripts: true, events: true };
 playlist.parks.forEach((p, i) => {
-    p.settings = { ...parkValues, ...(i === 1 ? { count: 6, scripts: true } : {}), profile: i === 1 ? "p1" : null, savedName: `Park ${i}`,
-        mapSize: [64, 64], adjusted: i === 1 ? ["count"] : [], locked: i === 1 ? ["parkCap"] : [] };
+    // (the third park the same, for the Generation pane once the second's views are set by hand)
+    const p1 = i === 1 || i === 2;
+    p.settings = { ...parkValues, ...(p1 ? { count: 6, scripts: true } : {}), profile: p1 ? "p1" : null, savedName: `Park ${i}`,
+        mapSize: [64, 64], adjusted: p1 ? ["count"] : [], locked: p1 ? ["parkCap"] : [] };
 });
 const store = { RCTScreensaver: { playlist, settings: { fadeMs: 0, titleMusic: "ride", window: "windowed" } } };
 const lookup = key => key.split(".").reduce((o, k) => (o == null ? undefined : o[k]), store);
@@ -281,11 +283,11 @@ assert.ok(scene.get("rcts.bar.titles.icon").src.includes("titles-off"), "on -> o
     assert.equal(ed("redo").fill, "#2a2e2c80", "an inactive tool is flat and gray (nothing to redo)");
     assert.equal(ed("redo.icon").opacity, 0.35, "its icon dimmed");
     assert.equal(ed("update").fill, "#2a2e2c80", "Set to camera waits for the map: in Frame mode the view follows the camera");
-    assert.ok(ed("box.mark").src.includes("/fold-open-") && ed("props.mark").src.includes("/fold-open-"), "fold marks are icons");
+    assert.ok(ed("box.mark").src.includes("/fold-open-") && ed("gen.mark").src.includes("/fold-open-"), "fold marks are icons");
     {
-        const sg = ed("seg.inertia.1");
+        const sg = ed("gseg.motion.0");
         mouse("move", sg.x + 3, sg.y + 3);
-        assert.equal(ed("tip.text").text, "Eased pans", "the playlist's buttons have tooltips");
+        assert.equal(ed("tip.text").text, "Glide from view to view", "the Generation pane's buttons have tooltips");
         mouse("move", 1200, 650);
     }
     dump("editor");
@@ -710,12 +712,18 @@ assert.ok(scene.get("rcts.bar.titles.icon").src.includes("titles-off"), "on -> o
         assert.ok(ed("points.thumb"), "the list scrolls past three and a half rows");
         dump("points");
     }
-    // Playlist properties: applied and saved at once; Off hides the change and arrival holds.
+    // Playlist settings, on the playlist row's gear (owner, 2026-11-14): the settings that apply to any views,
+    // applied and saved at once; Off hides the change and arrival holds.
     {
-        assert.equal(ed("save"), undefined, "no Save button: the properties save as they change");
+        assert.equal(ed("save"), undefined, "no Save button: the settings save as they change");
+        assert.equal(ed("seg.inertia.0"), undefined, "the playlist settings wait behind their gear");
+        assert.ok(ed("plSet").x > ed("plfield").x + ed("plfield").width && ed("plSet").y === ed("plfield").y, "the gear sits at the playlist row's end");
+        edClick("plSet");
+        assert.ok(ed("plset.head") && !ed("cell.0.1"), "the settings show in place of the views");
+        dump("playlist-gear");
         assert.ok(ed("step.changeHold.less"), "the change hold shows");
         edClick("seg.panChanges.0");
-        assert.equal(ed("step.changeHold.less"), undefined, "Angle and zoom change Off hides the change hold");
+        assert.equal(ed("step.changeHold.less"), undefined, "Turns and zooms Off hides the change hold");
         assert.equal(ed("step.arriveHold.less"), undefined, "and the arrival hold");
         assert.ok(ed("step.returnHold.less"), "the return hold stays");
         mouse("move", 1200, 650);
@@ -731,13 +739,26 @@ assert.ok(scene.get("rcts.bar.titles.icon").src.includes("titles-off"), "on -> o
         assert.equal(props.titleMusic, "theme");
         assert.equal(props.titles, null, "Unset titles saved as null");
         assert.equal(props.order.length, 3, "the park order kept");
-        edClick("propsHead");
-        assert.equal(ed("seg.inertia.0"), undefined, "the Playlist header folds the properties");
-        edClick("propsHead");
         edClick("seg.panChanges.2");
         assert.equal(saved["RCTScreensaver.playlistProps"][playlist.sequence].panChanges, "end", "saved at once");
+        // The parks' scripts apply to any views too: here, saved for the next build
+        const gen = () => saved["RCTScreensaver.playlistProps"][playlist.sequence].generation;
+        assert.ok(ed("gseg.parkViews.0"), "event views show while park scripts run");
+        edClick("gseg.parkScripts.0");
+        assert.equal(ed("gseg.parkViews.0"), undefined, "and hide when they do not");
+        assert.equal(gen().parkScripts, false);
+        assert.equal(ed("gen.note").text, "changed · next build", "the Generation pane's note counts every build change");
+        edClick("gseg.parkScripts.1");
+        assert.equal(gen(), undefined, "back at the build's value, nothing is changed");
+        edClick("parkSet");
+        assert.ok(ed("pset.head") && !ed("plset.head"), "the park's gear takes the playlist's place");
+        edClick("parkSet");
+        edClick("plSet");
+        edClick("plSet");
+        assert.equal(ed("plset.head"), undefined, "the gear brings the views back");
+        assert.ok(ed("cell.0.1"), "and the views list");
     }
-    // Park settings: the settings button shows them in place of the views; saved as they change, for the next
+    // Park settings, on the park row's gear: those that apply to any views; saved as they change, for the next
     // build's bake into the park's profile.
     {
         assert.ok(ed("parkSet"), "the park row has the settings button");
@@ -746,38 +767,28 @@ assert.ok(scene.get("rcts.bar.titles.icon").src.includes("titles-off"), "on -> o
         const park = playlist.parks.find(p => p.name === ed("text.park").text);
         assert.equal(park.settings.profile, "p1", "(the second park, as the editor opened on it)");
         const parks = () => saved["RCTScreensaver.playlistProps"][playlist.sequence].parks;
-        assert.equal(ed("pstept.count").text, "6");
         assert.equal(ed("pset.note").text, "profile p1");
         assert.ok(ed("pseg.scripts.1"), "a park with scripts has the switch");
         assert.equal(ed("pseg.events.0"), undefined, "one without event views has none");
-        edClick("pstep.count.more");
-        assert.equal(parks()[park.key].set.count, 7, "saved at once");
+        dump("park-gear");
+        assert.ok(ed("pstep.panTolerance.more") && ed("pseg.returnPan.0"), "pan speed and return pan apply to any views");
+        const inPane = id => ed(id).x > ed("frame").x + ed("frame").width;
+        assert.ok(inPane("pseg.towers.0") && inPane("pstep.count.more"), "tower views and the view count are generation's: in its pane");
+        edClick("pseg.returnPan.0");
+        assert.equal(parks()[park.key].set.returnPan, false, "saved at once");
         assert.equal(parks()[park.key].savedName, "Park 1", "with how the profile finds the park");
         assert.equal(ed("pset.note").text, "changed · next build");
-        edClick("pseg.towers.0");
-        assert.equal(parks()[park.key].set.towers, false);
-        edClick("pstep.pan.more");
-        assert.equal(ed("pstept.pan").text, "0%", "the pan share steps from auto to 0%");
-        edClick("pstep.parkCap.more");
-        assert.equal(parks()[park.key].set.parkCap, undefined, "the playlist's own entry sets the park cap: locked");
-        for (const id of ["pstep.pan.less", "pseg.towers.1", "pstep.count.less"]) edClick(id);
+        edClick("pseg.returnPan.1");
         assert.equal(parks(), undefined, "back at the build's values, nothing is changed");
-        edClick("parkReset");
-        assert.equal(JSON.stringify(parks()[park.key].set), '{"count":null}', "Playlist's: the profile's keys go");
-        assert.equal(ed("pstept.count").text, "8", "showing the playlist's value");
-        edClick("pstep.count.less");
-        edClick("pstep.count.less");
-        assert.equal(parks(), undefined, "back at the profile's value: no change");
+        assert.equal(ed("parkReset").fill, "#2a2e2c80", "its Playlist's: nothing of the gear's adjusted (the profile's count is generation's)");
         edClick("parkSet");
         assert.equal(ed("pset.head"), undefined, "the button brings the views back");
-        assert.ok(ed("cell.0.1"), "and the views list");
     }
-    // Generation: folded under its header; saved as it changes, for the next build.
+    // Generation, top right: every setting only the automatic generation uses, the playlist's and the park's
+    // (owner, 2026-11-14); saved as they change, for the next build.
     {
-        assert.equal(ed("gseg.motion.0"), undefined, "Generation starts folded");
+        assert.ok(ed("gseg.motion.0"), "Generation starts open");
         assert.equal(ed("gen.note").text, "at the next build");
-        edClick("genHead");
-        assert.ok(ed("gseg.motion.0"), "its header unfolds it");
         assert.ok(ed("gstep.variants.less"), "a circuit shows its variants");
         edClick("gseg.route.1");
         const gen = () => saved["RCTScreensaver.playlistProps"][playlist.sequence].generation;
@@ -789,15 +800,40 @@ assert.ok(scene.get("rcts.bar.titles.icon").src.includes("titles-off"), "on -> o
         assert.equal(gen().timeScale, 1.25);
         edClick("gstep.parkMin.less");
         assert.equal(gen().parkMin, 25);
-        assert.ok(ed("gseg.parkViews.0"), "event views show while park scripts run");
-        edClick("gseg.parkScripts.0");
-        assert.equal(ed("gseg.parkViews.0"), undefined, "and hide when they do not");
-        assert.equal(gen().parkScripts, false);
-        for (const id of ["gseg.route.0", "gstep.timeScale.less", "gstep.parkMin.more", "gseg.parkScripts.1"]) edClick(id);
+        assert.equal(ed("gseg.parkScripts.0"), undefined, "the parks' scripts are on the playlist's gear");
+        for (const id of ["gseg.route.0", "gstep.timeScale.less", "gstep.parkMin.more"]) edClick(id);
         assert.equal(gen(), undefined, "back at the build's values, nothing is changed");
-        assert.equal(ed("gen.note").text, "at the next build");
+        // The park's generation settings, under the playlist's: grayed while its views are set by hand
+        assert.equal(ed("pgen.note").text, "its views are set by hand", "(the second park's views were edited above)");
+        assert.equal(ed("pstep.count.more").fill, "#2a2e2c80", "its generation settings grayed");
+        edClick("nextPark"); tick(30);
+        const park = playlist.parks.find(p => p.name === ed("text.park").text);
+        assert.equal(park, playlist.parks[2], "(the third park next)");
+        const parks = () => saved["RCTScreensaver.playlistProps"][playlist.sequence].parks;
+        assert.ok(ed("pgen.head").y > ed("gstep.timeScale.less").y, "the park's under the playlist's");
+        assert.equal(ed("pstept.count").text, "6");
+        assert.equal(ed("pgen.note").text, "profile p1");
+        edClick("pstep.count.more");
+        assert.equal(parks()[park.key].set.count, 7, "saved at once");
+        assert.equal(ed("pgen.note").text, "changed · next build");
+        edClick("pseg.towers.0");
+        assert.equal(parks()[park.key].set.towers, false);
+        edClick("pstep.pan.more");
+        assert.equal(ed("pstept.pan").text, "0%", "the pan share steps from auto to 0%");
+        edClick("pstep.parkCap.more");
+        assert.equal(parks()[park.key].set.parkCap, undefined, "the playlist's own entry sets the park cap: locked");
+        for (const id of ["pstep.pan.less", "pseg.towers.1", "pstep.count.less"]) edClick(id);
+        assert.equal(parks(), undefined, "back at the build's values, nothing is changed");
+        edClick("parkGenReset");
+        assert.equal(JSON.stringify(parks()[park.key].set), '{"count":null}', "Playlist's: the profile's keys go");
+        assert.equal(ed("pstept.count").text, "8", "showing the playlist's value");
+        edClick("pstep.count.less");
+        edClick("pstep.count.less");
+        assert.equal(parks(), undefined, "back at the profile's value: no change");
+        dump("generation");
         edClick("genHead");
-        assert.equal(ed("gseg.motion.0"), undefined, "and folds again");
+        assert.equal(ed("gseg.motion.0"), undefined, "its header folds it");
+        edClick("genHead");
     }
     // The pin: off, the panes hide once the mouse rests; a move brings them back.
     {
@@ -1061,7 +1097,7 @@ console.log("ok: park changes dip through black in the mode (patch 0010)");
     mode.buildStatus = { ...mode.buildStatus, state: "idle" };
     shortcuts["rctscreensaver.build"]();
     assert.equal(mode.builds.length, 1, "and Ctrl+B does nothing");
-    edClick("seg.inertia.1");
+    edClick("plSet"); edClick("seg.inertia.1"); edClick("plSet");
     assert.notEqual(ed("build").fill, "#2a2e2c80", "an edit makes it active again");
     assert.equal(ed("build.state").text, "edits not built");
     const dimmed = () => [...scene.keys()].filter(k => /^rcts\.ed\.sq\.\d+$/.test(k) && scene.get(k).opacity === 0.35);
