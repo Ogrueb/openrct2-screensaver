@@ -145,7 +145,9 @@ See README.md for usage.
   (motion, view order, variants, reverse, ride pans, park times, time scale, park scripts, event views), saved as
   changes against the build's `generation` values and baked at the next build (`apply_generation`). Park settings
   (2026-11-14, the views pane's settings button): the settings page's park switches and parameters, baked into the
-  park's profile in the user folder at the next build (`profiles.change`, shared with the settings page).
+  park's profile in the user folder at the next build (`profiles.change`, shared with the settings page). New playlist and
+  Add park take RCT saves and loose objects too (2026-11-14): converted with the game's own executable
+  (`--openrct2`, patch 0020) and installed through `importparks.run`/`install_loose`.
 - **Palette index 10** is both the void outside the map and the UI black; a packed water
   object that lightens it (Gardens of Light) washes out the stock interface (the white void was intended, but the UI must not suffer).
   Engine patch 0001 splits the two properly (the viewport painter rewrites its own index-10

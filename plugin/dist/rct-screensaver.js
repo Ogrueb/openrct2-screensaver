@@ -7436,7 +7436,7 @@
           });
           continue;
         }
-        const [label0, tip, icon] = item.kind === "add" ? ["Add park\u2026", "Pick a park file or download (.park, .zip); it is added and the playlist built", "add"] : ["Build and play this playlist", "Build the new playlist with these parks, in this order, and play it", "build"];
+        const [label0, tip, icon] = item.kind === "add" ? ["Add park\u2026", "Pick a park, an RCT save or a park download (.park, .sv6, .zip); it is added and the playlist built", "add"] : ["Build and play this playlist", "Build the new playlist with these parks, in this order, and play it", "build"];
         const off = (item.kind === "build" ? !builder.available : !parksOn) || busy;
         const why = !parksOn ? builder.available ? "needs the patched engine with these dialogs" : builder.unavailableReason : busy ? `wait for the ${builder.noun} to finish` : "";
         const id = `parks.${item.kind}`;
@@ -8305,7 +8305,7 @@
         "new",
         "add",
         "New playlist from a folder of parks\u2026",
-        "Pick a folder of parks (.park files or park downloads): a playlist of them is made, built and played",
+        "Pick a folder of parks (.park files, RCT saves or park downloads): a playlist of them is made, built and played",
         { x: x0, y, width: inner, height: ROW },
         parksOff
       );

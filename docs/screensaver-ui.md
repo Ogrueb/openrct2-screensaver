@@ -408,12 +408,15 @@ click on the park field (Playlist order):
   marked "needs a build", and can be dragged to where it should play before the build (owner, 2026-11-12); its
   place is saved with the order (`order` names its key) and the build bakes it there.
 - **Add park…** (the list's last row) calls `screensaver.addPark(<sequence>)`: the engine shows the system's Open
-  dialog (`*.park;*.zip`, starting where the last park or bundle was picked) and runs `mksequence.py --live-add
+  dialog (`*.park;*.zip;*.sv6;*.sc6;*.sv4;*.sc4`, starting where the last park or bundle was picked) and runs `mksequence.py --live-add
   <sequence> --park <file>`. The generator bakes the game's edits, appends a `[[park]]` with the file relative to
   the playlist (absolute on another drive) and its builders from the NE catalogue or the file name, or ticks the
-  park on again when the playlist has it unticked; a park already in use, a clash of file names, an RCT save or a
-  file that is no park fails with the reason (saves and loose objects: the settings page's folder scan converts
-  and installs them). Its result goes to `live/task-add.json`, then the playlist builds and plays as with Build
+  park on again when the playlist has it unticked; a park already in use, a clash of file names or a file that is
+  no park fails with the reason. An RCT save is converted with the game's own executable (the engine passes
+  `--openrct2 <its exe>`, on Windows the `.com` beside it) into `screensaver/library/added/<slug>/` through
+  `importparks.run`, and that `.park` is added; a download that ships loose objects is read in place and its
+  objects installed into `object/rct-screensaver/` (`importparks.install_loose`), with "restart the game so it
+  loads them" when any were new (the running game scanned its objects at start; 2026-11-14). Its result goes to `live/task-add.json`, then the playlist builds and plays as with Build
   and play.
 - **Playlists** (the PLAYLIST field, a heading of its own over the park field, owner 2026-11-12: it names the
   playing playlist and its parks; a click opens its list from under it over the park row): every playlist the game can build, from
@@ -426,7 +429,9 @@ click on the park field (Playlist order):
   plus and a copy icon), above the playlists.
 - **New playlist from a folder…** calls `screensaver.newPlaylist()`: the system's folder dialog, then
   `mksequence.py --live-new <folder>`, which reads the folder as the settings page's scan does (`parkinfo.
-  scan_folder`; parks and downloads in place, RCT saves and loose objects listed as warnings), writes
+  scan_folder`; parks and downloads in place; a folder with RCT saves or loose objects goes through
+  `importparks.run` into `screensaver/library/<slug>/` as the settings page's scan does, saves converted with
+  the game's executable, objects installed, the parks' scripts copied along; 2026-11-14), writes
   `screensaver/playlists/<slug>.toml` named "RCT Screensaver <folder>" (" 2" and so on when taken), registers it
   and lists it (`live/task-new.json`, with its parks: key and a name from the NE catalog or the file). No build
   follows (owner's tests, 2026-11-12/13): the park list opens on the new playlist's parks ("New playlist: its parks",
@@ -471,8 +476,9 @@ stock sequence with nothing on top, and every build button failed after a click 
   on a click), the running task's line, and "Esc leaves the screensaver". No controls bar until a playlist
   plays; the build that finishes starts the player and the panel goes.
 
-Still open from the handoff: `.sv6` saves and loose objects through New playlist and Add park (the settings
-page's folder scan still does those).
+The handoff's items are done (2026-11-14): `.sv6` saves and loose objects now go through New playlist and Add
+park too (see "Parks and playlists"). A conversion runs OpenRCT2's `convert` with its own user folder (v0.5.6's
+convert takes no `--user-data-path`), so a portable install's objects are not seen by it.
 
 ### Park settings (2026-11-14)
 

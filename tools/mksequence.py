@@ -3894,7 +3894,36 @@ def task_failed(note, write, what, e):
     return 1
 
 
-def live_add(name, park_path, user_dir):
+def import_downloads(paths, library, title, user_dir, openrct2, note):
+    """RCT saves converted and loose objects installed, as the settings page's folder scan does (importparks.py),
+    into the park library `library`: returns (entries with absolute files, whether objects were installed)."""
+    import importparks
+    playlist, records, new_objects = importparks.run(paths, library, openrct2, user_dir, name=title,
+                                                     echo=lambda line: None)
+    for rec in records:
+        for w in rec["warnings"]:
+            note("warn", "%s: %s" % (rec["folder"], w))
+        if rec.get("kind") == "legacy" and "file" in rec:
+            note("info", "%s: converted from %s" % (rec.get("name") or rec["folder"], os.path.splitext(rec["member"])[1].upper().lstrip(".")))
+    with open(playlist, "rb") as f:
+        data = tomllib.load(f)
+    # (files absolute: the playlist that takes them lives elsewhere)
+    entries = [dict(e, file=os.path.join(library, e["file"]),
+                    **({"companions": [os.path.join(library, c) for c in e["companions"]]} if e.get("companions") else {}))
+               for e in data.get("park", [])]
+    return entries, new_objects > 0
+
+
+OBJECTS_NOTE = "objects installed in your object folder: restart the game so it loads them, then build again"
+
+
+def needs_import(reason):
+    """parkinfo's reason a park can't be read in place is one importparks.py handles (a save to convert,
+    loose objects to install)."""
+    return bool(reason) and ("needs converting" in reason or "need installing" in reason or "needs installing" in reason)
+
+
+def live_add(name, park_path, user_dir, openrct2=None):
     """Add the park the user picked in the game's Open dialog (screensaver.addPark) to the playlist
     installed as title sequence `name` (the game's edits baked in first), then build it as --live-build
     does. The result goes to task-add.json in the live folder. Returns the process exit code."""
@@ -3905,10 +3934,25 @@ def live_add(name, park_path, user_dir):
         took = bake_live(source, name, user_dir)
         if took:
             note("info", took)
-        line, reason = add_park_entry(source, park_path)
+        entry, reason = parkinfo.park_entry(park_path)
+        if entry is not None and needs_import(reason):
+            # A download that ships loose objects: they go into the object folder, the park is read in place
+            import importparks
+            line, _ = add_park_entry(source, park_path)
+            if importparks.install_loose(park_path, user_dir):
+                note("warn", OBJECTS_NOTE)
+        elif needs_import(reason):
+            # An RCT save: converted into a library of its own
+            library = os.path.join(user_dir, "screensaver", "library", "added", slug(os.path.splitext(os.path.basename(park_path))[0]))
+            entries, installed = import_downloads([park_path], library, "Added", user_dir, openrct2, note)
+            if not entries:
+                raise ValueError("%s could not be imported%s" % (os.path.basename(park_path), "" if openrct2 else " (no OpenRCT2 to convert it with)"))
+            line, _ = add_park_entry(source, entries[0]["file"])
+            if installed:
+                note("warn", OBJECTS_NOTE)
+        else:
+            line, reason = add_park_entry(source, park_path)
         note("ok", line)
-        if reason:
-            note("warn", "%s; the park may miss scenery until they are installed (the settings page's folder scan does it)" % reason)
         register_generator(user_dir, name, source)  # (the playlists list counts the new park)
         write(ok=True, finished=int(time.time() * 1000), playlist=source)
     except Exception as e:  # anything: the game shows it
@@ -3928,7 +3972,7 @@ def draft_name(entry):
         return os.path.splitext(os.path.basename(entry["file"]))[0]
 
 
-def live_new(folder, user_dir):
+def live_new(folder, user_dir, openrct2=None):
     """Make a new playlist of the parks in the folder the user picked in the game's folder dialog
     (screensaver.newPlaylist): every park and download read in place, as the settings page's scan does,
     the playlist written to <user dir>/screensaver/playlists and registered (live/playlists.json lists it).
@@ -3938,19 +3982,32 @@ def live_new(folder, user_dir):
     try:
         write(ok=None)
         entries, reasons = parkinfo.scan_folder(folder)
+        installed = False
+        title = "RCT Screensaver " + (os.path.basename(os.path.normpath(folder)) or "parks")
+        if any(needs_import(r) for r in reasons):
+            # RCT saves or loose objects: the folder goes through importparks.py into a library (owner's handoff,
+            # 2026-11-13), as the settings page's scan does
+            note("info", "Converting saves and installing objects from %s" % folder)
+            library = os.path.join(user_dir, "screensaver", "library", slug(os.path.basename(os.path.normpath(folder)) or "parks"))
+            entries, installed = import_downloads([folder], library, title, user_dir, openrct2, note)
+            reasons = []
         if not entries:
             raise ValueError("no parks in %s%s" % (folder, " (%s)" % "; ".join(reasons) if reasons else ""))
-        name, path = new_playlist_target(user_dir, "RCT Screensaver " + (os.path.basename(os.path.normpath(folder)) or "parks"))
+        name, path = new_playlist_target(user_dir, title)
         os.makedirs(os.path.dirname(path), exist_ok=True)
         import tomlwrite
         data = {"name": name, "order": "playlist", "layout": "plugin", "park_plugins": True, "views": dict(NEW_PLAYLIST_VIEWS),
-                "park": [dict(e, file=entry_file(e["file"], path)) for e in entries]}
+                "park": [dict(e, file=entry_file(e["file"], path),
+                              **({"companions": [entry_file(c, path) for c in e["companions"]]} if e.get("companions") else {}))
+                         for e in entries]}
         write_playlist_text(path, tomlwrite.dumps(data, "Made in the screensaver's view editor from %s" % folder))
         forget_old_live(path, name, user_dir)
         register_generator(user_dir, name, path)
         note("ok", "Made \"%s\" of %d park%s in %s" % (name, len(entries), "s" if len(entries) != 1 else "", folder))
         for reason in reasons:
-            note("warn", "%s: left out or incomplete; the settings page's folder scan converts and installs" % reason)
+            note("warn", "%s: left out or incomplete" % reason)
+        if installed:
+            note("warn", OBJECTS_NOTE)
         # Its parks for the game's park list, to tick and order before the first build (owner, 2026-11-13):
         # names from the NE catalogue or the file, as reading every park would take seconds each
         parks = [{"key": park_key(e), "name": draft_name(e)} for e in entries]
@@ -4109,6 +4166,8 @@ def main():
                          "the running game (it starts this: screensaver.addPark); results in task-add.json and "
                          "build-<sequence>.json")
     ap.add_argument("--park", metavar="FILE", help="with --live-add: the park file or download to add")
+    ap.add_argument("--openrct2", metavar="EXE", help="with --live-new and --live-add: the OpenRCT2 executable that "
+                    "converts RCT1 and RCT2 saves (the game passes its own)")
     ap.add_argument("--live-new", metavar="FOLDER",
                     help="make a new playlist of the parks in a folder and build it, for the running game (it starts "
                          "this: screensaver.newPlaylist); results in task-new.json and build-<sequence>.json")
@@ -4163,9 +4222,9 @@ def main():
         if args.live_add:
             if not args.park:
                 ap.error("--live-add needs --park")
-            sys.exit(live_add(args.live_add, os.path.abspath(args.park), user_dir))
+            sys.exit(live_add(args.live_add, os.path.abspath(args.park), user_dir, args.openrct2))
         if args.live_new:
-            sys.exit(live_new(os.path.abspath(args.live_new), user_dir))
+            sys.exit(live_new(os.path.abspath(args.live_new), user_dir, args.openrct2))
         if args.live_copy:
             if not args.to:
                 ap.error("--live-copy needs --to")

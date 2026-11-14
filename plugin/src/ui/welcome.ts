@@ -174,7 +174,7 @@ export class Welcome {
         };
         const parksOff = !builder.parksAvailable || busy;
         action("new", "add", "New playlist from a folder of parks…",
-            "Pick a folder of parks (.park files or park downloads): a playlist of them is made, built and played", { x: x0, y, width: inner, height: ROW }, parksOff);
+            "Pick a folder of parks (.park files, RCT saves or park downloads): a playlist of them is made, built and played", { x: x0, y, width: inner, height: ROW }, parksOff);
         y += ROW + GAP;
         action("import", "import", "Import playlist…",
             "Pick a playlist bundle (.zip) someone exported: it is imported, built and played", { x: x0, y, width: inner, height: ROW }, !builder.bundlesAvailable || busy);

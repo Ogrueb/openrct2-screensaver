@@ -374,6 +374,62 @@ def write_playlist(path, name, records):
         f.write("\n".join(lines) + "\n")
 
 
+def run(paths, out, openrct2=None, user_dir=None, each=False, skip_known=(), name="RCT Screensaver Imported",
+        force=False, echo=print):
+    """Import the downloads into the library `out` (see the module doc); returns (the playlist written, the
+    records of every download, how many object files it installed). `echo` gets each line of progress."""
+    user_dir = user_dir or default_user_dir()
+    library = os.path.abspath(out)
+    os.makedirs(library, exist_ok=True)
+    manifest = os.path.join(library, "import.json")
+    previous = {}
+    if os.path.exists(manifest):
+        with open(manifest, encoding="utf-8") as f:
+            previous = {r["folder"]: r for r in json.load(f).get("downloads", [])}
+    args = argparse.Namespace(openrct2=openrct2, force=force)
+    args.known = known_hashes(list(skip_known))
+    # Loose objects: installed once per identifier; this import's claims are recorded afresh
+    args.owners = load_owners(user_dir)
+    args.claimed = set()
+    args.installed = installed_objects(user_dir, args.owners)
+    before = set(args.owners)
+
+    records = []
+    for path in downloads(paths, each):
+        record = import_one(path, args, user_dir, library, previous)
+        records.append(record)
+        state = record.get("skipped") or ("ok" if "file" in record else "not imported")
+        echo("%-60s %s" % (record["folder"][:60], state))
+        for w in record["warnings"]:
+            echo("  warning: %s" % w)
+    # Keyed by what was imported, so another folder imported into the same library keeps its objects
+    save_owners(user_dir, args.owners, "|".join(sorted(os.path.normcase(os.path.abspath(d)) for d in paths)),
+                args.claimed)
+    name_parks(records)
+    playlist = os.path.join(library, file_slug(name) + ".toml")
+    write_playlist(playlist, name, records)
+    with open(manifest, "w", encoding="utf-8") as f:
+        json.dump({"version": 1, "downloads": records}, f, indent=1, ensure_ascii=False)
+    done = [r for r in records if "file" in r]
+    echo("imported %d of %d downloads (%d converted, %d renamed); playlist: %s"
+         % (len(done), len(records), sum(r["kind"] == "legacy" for r in done),
+            sum(r["nameSource"] != "saved name" for r in done), playlist))
+    return playlist, records, len(set(args.owners) - before)
+
+
+def install_loose(path, user_dir=None):
+    """The loose object files of one download (a zip or folder) installed into the user object folder, as an
+    import does; returns how many files were new."""
+    user_dir = user_dir or default_user_dir()
+    owners = load_owners(user_dir)
+    before = set(owners)
+    claimed = set()
+    install_objects(parkinfo.Archive(path), user_dir, installed_objects(user_dir, owners), owners, claimed)
+    # (its own claims, keyed like an import of that one download, so importing it again replaces only its own)
+    save_owners(user_dir, owners, os.path.normcase(os.path.abspath(path)), claimed)
+    return len(set(owners) - before)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("downloads", nargs="+", help="park downloads: .zip files, folders, or folders of them")
@@ -387,40 +443,7 @@ def main():
     ap.add_argument("--name", default="RCT Screensaver Imported", help="playlist (title sequence) name")
     ap.add_argument("--force", action="store_true", help="convert and copy parks again even if unchanged")
     args = ap.parse_args()
-    user_dir = args.user_dir or default_user_dir()
-    library = os.path.abspath(args.out)
-    os.makedirs(library, exist_ok=True)
-    manifest = os.path.join(library, "import.json")
-    previous = {}
-    if os.path.exists(manifest):
-        with open(manifest, encoding="utf-8") as f:
-            previous = {r["folder"]: r for r in json.load(f).get("downloads", [])}
-    args.known = known_hashes(args.skip_known)
-    # Loose objects: installed once per identifier; this import's claims are recorded afresh
-    args.owners = load_owners(user_dir)
-    args.claimed = set()
-    args.installed = installed_objects(user_dir, args.owners)
-
-    records = []
-    for path in downloads(args.downloads, args.each):
-        record = import_one(path, args, user_dir, library, previous)
-        records.append(record)
-        state = record.get("skipped") or ("ok" if "file" in record else "not imported")
-        print("%-60s %s" % (record["folder"][:60], state))
-        for w in record["warnings"]:
-            print("  warning:", w)
-    # Keyed by what was imported, so another folder imported into the same library keeps its objects
-    save_owners(user_dir, args.owners, "|".join(sorted(os.path.normcase(os.path.abspath(d)) for d in args.downloads)),
-                args.claimed)
-    name_parks(records)
-    playlist = os.path.join(library, file_slug(args.name) + ".toml")
-    write_playlist(playlist, args.name, records)
-    with open(manifest, "w", encoding="utf-8") as f:
-        json.dump({"version": 1, "downloads": records}, f, indent=1, ensure_ascii=False)
-    done = [r for r in records if "file" in r]
-    print("imported %d of %d downloads (%d converted, %d renamed); playlist: %s"
-          % (len(done), len(records), sum(r["kind"] == "legacy" for r in done),
-             sum(r["nameSource"] != "saved name" for r in done), playlist))
+    run(args.downloads, args.out, args.openrct2, args.user_dir, args.each, args.skip_known, args.name, args.force)
 
 
 if __name__ == "__main__":
