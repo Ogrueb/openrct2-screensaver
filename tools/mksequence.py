@@ -2276,6 +2276,7 @@ def resolve_park(entry, index, base_dir, defaults, layout, edits=None, library=N
     profile = profiles.find(park_profiles or {}, entry, saved_name, map_size(parkinfo.chunk_reader(chunks, body, 0x30)),
                             os.path.basename(entry["file"]))
     own_views = set(entry.get("views", {}))  # set by the playlist's own entry: over any profile
+    own_entry = entry
     entry = profiles.apply(profile, entry, park_plugins)
     name = entry.get("name") or parkinfo.display_name(saved_name, path, member)[0]  # the profile's name under the entry's
     # The builders for the caption's byline: the entry's (written at import or scan), else checked against the
@@ -2429,6 +2430,11 @@ def resolve_park(entry, index, base_dir, defaults, layout, edits=None, library=N
     track_all = {(x, y, ride) for (x, y, _), ride in
                  parkinfo.track_rides(parkinfo.chunk_reader(chunks, body, 0x30), invisible=True).items()}
     found = companions.complete(found, library, storage, track_all, entry)
+    try:
+        events_facts = event_facts(found, storage, saved_name, track_all, profile, own_entry, opts)
+    except (ValueError, KeyError, TypeError) as e:
+        events_facts = None  # (the Events list goes without settings; the build itself reports what is wrong)
+        print("  %s: no event settings for the editor: %s" % (entry.get("name") or saved_name, e))
     companion_settings = profiles.companion_settings(profile)
     if opts["companion_pans"] == "pause":
         for label, code in found:
@@ -2498,7 +2504,8 @@ def resolve_park(entry, index, base_dir, defaults, layout, edits=None, library=N
             "savedName": saved_name, "mapSize": size, "hasStorage": bool(storage),
             "settings": park_settings(chosen, profile, own_views, saved_name, size,
                                       scripts=False if (profile or {}).get("companions") is False else True if found else None,
-                                      events=False if not chosen["events"] else True if animations or any(v.get("show") for v in defaults or []) else None),
+                                      events=False if not chosen["events"] else True if animations or any(v.get("show") for v in defaults or []) else None,
+                                      event_facts=events_facts),
             "companions": found,
             "companionCamera": bool(entry.get("companion_camera", False)),
             "companionSettings": companion_settings,
@@ -2596,11 +2603,63 @@ def scale_views(views, offset):
 PARK_SETTINGS = {
     "towers": "tower_views", "rides": "ride_pans", "count": "count", "zoomMin": "zoom_min", "zoomMax": "zoom_max",
     "pan": "pan", "panTolerance": "pan_tolerance", "parkCap": "park_cap", "returnPan": "return_pan",
-    "companionPans": "companion_pans", "events": "events",
+    "companionPans": "companion_pans", "events": "events", "showPan": "show_pan",
 }
+# The park's event settings (the drawing page's Events panel; owner, 2026-11-15): key -> the profile's [extras] key.
+PARK_EXTRAS = {"animationHold": "animation_hold", "show": "show"}
 
 
-def park_settings(opts, profile, own_views, saved_name, map_wh, scripts=None, events=None):
+def event_facts(found, storage, saved_name, track_all, profile, own_entry, opts):
+    """A park's animation spots and the shows its companions offer, with their settings, for the view
+    editor's Events list (as the drawing page's Events panel shows them, tools/settings.py park_facts),
+    whether or not event views are on: None when the park has neither. Read with the profile's extras and
+    [animation."<name>"] tables even where the playlist leaves extras out (park_plugins), as these are the
+    values a change edits."""
+    if not found:
+        return None
+    names = {companions.metadata(code, label)["name"] for label, code in found}
+    merged = profiles.apply(profile, own_entry, True)
+    limit = merged.get("animation_views", ANIMATION_VIEWS)
+    report, plain = [], []
+    companions.animation_spots(found, storage, saved_name, track_all, limit, (profile or {}).get("animation"), report)
+    companions.animation_spots(found, storage, saved_name, track_all, limit, None, plain)
+    off_by_default = {a["name"] for a in plain if a.get("status") == "off by default"}
+    own_anim = (profile or {}).get("animation", {})
+    spots = []
+    for a in report:
+        status = a.get("status", "")
+        own = own_anim.get(a["name"], {})
+        spot = {"name": a["name"], "companion": a["companion"], "on": not status.startswith("off"),
+                "offByDefault": a["name"] in off_by_default, "status": status}
+        if status.startswith("view: "):
+            spot["view"] = status[len("view: "):]
+        cue = a.get("used") or a.get("cue")
+        if cue:
+            spot["cue"] = cue
+        if "hold" in own:
+            spot["hold"] = float(own["hold"])
+        spots.append(spot)
+    own_shows = (profile or {}).get("show", {})
+    shows = []
+    for n, d in sorted(companions.SHOWS.items()):
+        if d["companion"] not in names or d.get("park") not in (None, saved_name):
+            continue
+        show = {"name": n, "hold": float(d.get("hold") or 0), "own": n in own_shows}
+        if d.get("view"):
+            show["view"] = {k: d["view"][k] for k in ("x", "y", "zoom", "rotation") if k in d["view"]}
+        if d.get("path"):
+            show["path"] = [dict(q) for q in d["path"]]
+        shows.append(show)
+    if not spots and not shows:
+        return None
+    hold = merged.get("animation_hold")
+    return {"spots": spots, "shows": shows, "show": merged.get("show") or "",
+            "animationHold": float(hold) if hold is not None else None,
+            "holdDefault": float(opts["hold"]), "cueHold": float(merged.get("cue_hold", CUE_HOLD)),
+            "locked": [k for k, extra in PARK_EXTRAS.items() if extra in own_entry]}
+
+
+def park_settings(opts, profile, own_views, saved_name, map_wh, scripts=None, events=None, event_facts=None):
     """A park's settings as the view editor shows them: the values in force, the park's profile (stem, or
     None) and how to match a new one, the keys its profile sets (`adjusted`) and the keys the playlist's
     entry sets (`locked`: a profile change would not show). `scripts`/`events` None: the park has none."""
@@ -2620,6 +2679,20 @@ def park_settings(opts, profile, own_views, saved_name, map_wh, scripts=None, ev
         out["scripts"] = scripts
     if events is not None:
         out["events"] = events
+    out["showPan"] = float(opts["show_pan"])
+    if event_facts:
+        out["eventFacts"] = event_facts
+        out["animationHold"] = event_facts["animationHold"]
+        out["show"] = event_facts["show"]
+        out["spots"] = {a["name"]: {"off": not a["on"], **({"hold": a["hold"]} if "hold" in a else {})}
+                        for a in event_facts["spots"]}
+        out["showDefs"] = {sh["name"]: {k: sh[k] for k in ("hold", "view", "path") if k in sh}
+                           for sh in event_facts["shows"] if sh["own"]}
+        out["locked"] += event_facts["locked"]
+        if (profile or {}).get("extras", {}).get("animation_hold") is not None:
+            out["adjusted"].append("animationHold")
+        if "show" in (profile or {}).get("extras", {}):
+            out["adjusted"].append("show")
     return out
 
 
@@ -2634,6 +2707,9 @@ def settings_changes(changes, defaults):
             if value not in (True, False, None):
                 raise ValueError("park setting scripts: %r is not acceptable" % (value,))
             out["companions"] = False if value is False else None
+            continue
+        if key in PARK_EXTRAS or key in ("spots", "showDefs"):
+            event_change(out, key, value)
             continue
         opt = PARK_SETTINGS.get(key)
         if opt is None:
@@ -2653,13 +2729,58 @@ def settings_changes(changes, defaults):
               "panTolerance": lambda v: isinstance(v, (int, float)) and 50 <= v <= 2000,
               "parkCap": lambda v: isinstance(v, (int, float)) and 10 <= v <= 3600,
               "returnPan": lambda v: isinstance(v, bool), "events": lambda v: isinstance(v, bool),
-              "companionPans": lambda v: v in ("run", "pause")}[key]
+              "companionPans": lambda v: v in ("run", "pause"),
+              "showPan": lambda v: isinstance(v, (int, float)) and 0 <= v <= 1}[key]
         if isinstance(value, bool) and key not in ("returnPan", "events") or not ok(value):
             raise ValueError("park setting %s: %r is not acceptable" % (key, value))
         views[opt] = None if value == defaults.get(opt) else value
     if views:
         out["views"] = views
     return out
+
+
+def event_change(out, key, value):
+    """One of the view editor's event settings (the drawing page's Events panel) into the profile change `out`
+    (profiles.change_data): animationHold and show into [extras], spots ({name: {off, hold}}, None: back to the
+    default) into [animation."<name>"], showDefs ({name: {hold, view, path}}) into the profile's [show.<name>]."""
+    num = lambda v, lo, hi: isinstance(v, (int, float)) and not isinstance(v, bool) and lo <= v <= hi
+    bad = ValueError("park setting %s: %r is not acceptable" % (key, value))
+    if key == "animationHold":
+        if value is not None and not num(value, 1, 600):
+            raise bad
+        out.setdefault("extras", {})["animation_hold"] = value
+    elif key == "show":
+        if value is not None and not isinstance(value, str):
+            raise bad
+        out.setdefault("extras", {})["show"] = value
+    elif key == "spots":
+        if not isinstance(value, dict):
+            raise bad
+        for name, change in value.items():
+            if change is None:
+                out.setdefault("animation", {})[name] = {"off": None, "hold": None}
+                continue
+            if not isinstance(change, dict) or not all(k in ("off", "hold") for k in change):
+                raise bad
+            if not any(change.get("off") is ok for ok in (True, False, None)) or (change.get("hold") is not None and not num(change["hold"], 1, 600)):
+                raise bad
+            out.setdefault("animation", {})[name] = {"off": change.get("off"), "hold": change.get("hold")}
+    elif key == "showDefs":
+        if not isinstance(value, dict):
+            raise bad
+        for name, change in value.items():
+            if not isinstance(change, dict) or not all(k in ("hold", "view", "path") for k in change):
+                raise bad
+            if change.get("hold") is not None and not num(change["hold"], 1, 3600):
+                raise bad
+            view = change.get("view")
+            if view is not None and not (isinstance(view, dict) and all(num(view.get(k), -3 if k == "zoom" else 0, 3 if k in ("zoom", "rotation") else 1000) and int(view[k]) == view[k]
+                                                                     for k in ("x", "y", "zoom", "rotation"))):
+                raise bad
+            path = change.get("path")
+            if path is not None and not (isinstance(path, list) and all(isinstance(q, dict) and num(q.get("ticks"), 0, 100000) for q in path)):
+                raise bad
+            out.setdefault("show", {})[name] = dict(change)
 
 
 def park_settings_profiles(park_props, defaults, park_profiles):

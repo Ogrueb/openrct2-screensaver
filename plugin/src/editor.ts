@@ -14,7 +14,7 @@
 import { toScreen, toWorld } from "./fit";
 import { Player } from "./player";
 import { scalingFor, scaleViews, screenOf } from "./scale";
-import { CHECKPOINTS_PER_PARK, View, filesApi, isCut, isPinned, loadCheckpoints, saveCheckpoints, saveSettings } from "./storage";
+import { CHECKPOINTS_PER_PARK, Cue, EventFacts, ShowDef, View, filesApi, isCut, isPinned, loadCheckpoints, saveCheckpoints, saveSettings } from "./storage";
 
 const CLASSIFICATION = "rctscreensaver.editor";
 const WIDTH = 300;
@@ -44,7 +44,21 @@ export interface EditorView {
 /** One view's row in the list. */
 export type EditorRow = [index: string, tile: string, angle: string, zoom: string, hold: string, pan: string, setBy: string];
 export const EDITOR_COLUMNS = ["#", "Tile", "Angle", "Zoom", "Hold", "Pan", "Set by"];
-export const EVENT_COLUMNS = ["#", "Kind", "Name", "Trigger", "Hold", "Plays"];
+export const EVENT_COLUMNS = ["#", "Name", "Trigger", "Hold", "Plays", "On"];
+/** One row of the Events list: an event view, an animation spot (with or without a view) or a show the
+ *  park's companions offer, with what its switch and steppers change (Player.eventSettings). */
+export interface EventItem {
+    id: string; // "v<view index>", "a:<spot name>" or "s:<show name>"
+    index?: number; // the event view it shows (absent: none in the build)
+    spot?: string;
+    show?: string;
+    cells: string[]; // #, name, trigger (a show's: its pan share), hold, plays (On is the switch)
+    on?: boolean; // the switch (absent: none, an event view without settings)
+    hold?: { value: number; step: number; min: number; max: number }; // with a stepper when selected
+    pan?: number; // the show's pan share (in the trigger column), with a stepper when selected
+    pending: number[]; // columns changed since the build (5: On)
+    dim: number[]; // columns showing a default
+}
 const TICKS_PER_SECOND = 40;
 /** The text format Copy views writes and Paste views reads, shared with the settings page's drawing
  *  page (tools/drawviews.html): {format, version, park, key, screen, views[, events]}. */
@@ -55,6 +69,17 @@ const CLIP_NOTE_MS = 2500; // how long the Copy/Paste buttons say what happened
 function clock(ticks: number): string {
     const s = Math.max(0, Math.round(ticks / TICKS_PER_SECOND));
     return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
+
+/** When an event view plays, in a few words: at a time on the park's clock, when a car arrives, or on its own. */
+function triggerText(cue: Cue | undefined): string {
+    if (!cue) {
+        return "runs on its own";
+    }
+    if (cue.tick !== undefined) {
+        return `at ${clock(cue.tick)}` + (cue.every ? `, every ${clock(cue.every)}` : "");
+    }
+    return (cue.ride !== undefined ? `a car of ride ${cue.ride}` : "listed cars") + (cue.tiles ? " on its tiles" : "");
 }
 
 /** Camera position: world coordinates of the screen centre, as the plugin moves it. */
@@ -851,9 +876,10 @@ export class Editor {
             return rest;
         });
         const name = this.player.parkNames[this.player.parkIndex];
+        const events = this.eventClip();
         api.clipboard = JSON.stringify({ format: CLIP_FORMAT, version: 1, park: name, key: this.player.parkKey,
-            screen: [ui.width, ui.height], views }, null, 1);
-        this.noteClip("copy", `Copied ${views.length}`);
+            screen: [ui.width, ui.height], views, ...(events ? { events } : {}) }, null, 1);
+        this.noteClip("copy", `Copied ${views.length}${events ? " + events" : ""}`);
     }
 
     /** Replaces the park's views with views from the clipboard (Copy's text, from here or the settings
@@ -865,7 +891,12 @@ export class Editor {
             return;
         }
         const pasted = parseClip(api.clipboard);
+        const events = this.pasteEvents(api.clipboard);
         if (typeof pasted === "string") {
+            if (events) {
+                this.noteClip("paste", "Pasted events");
+                return;
+            }
             this.noteClip("paste", pasted, true);
             return;
         }
@@ -882,7 +913,74 @@ export class Editor {
             const show = result.findIndex(v => !this.isEvent(v));
             this.save(result, Math.max(0, show), true);
         });
-        this.noteClip("paste", `Pasted ${views.length}`);
+        this.noteClip("paste", `Pasted ${views.length}${events ? " + events" : ""}`);
+    }
+
+    /** The park's event settings in the drawing page's Copy format (tools/drawviews.html eventSettings): the values
+     *  in force with the changes not built yet; undefined: the park has no animation spots or shows. */
+    private eventClip(): Record<string, unknown> | undefined {
+        const ev = this.player.eventSettings;
+        if (!ev) {
+            return undefined;
+        }
+        return {
+            extras: { ...(ev.animationHold !== null ? { animation_hold: ev.animationHold } : {}), show: ev.show },
+            views: { show_pan: ev.showPan, ...(ev.events !== undefined ? { events: ev.events } : {}) },
+            animation: ev.spots,
+            ...(Object.keys(ev.showDefs).length ? { show: ev.showDefs } : {}),
+        };
+    }
+
+    /** Applies the event settings in clipboard text (Copy's, from here or the drawing page) to the park, as
+     *  changes for the next build: only its own spots, a show its companions offer, a show definition its
+     *  profile has. Returns whether the text held any for this park. */
+    private pasteEvents(text: string): boolean {
+        const ev = this.player.eventSettings;
+        let data: { events?: { extras?: Record<string, unknown>; views?: Record<string, unknown>;
+            animation?: Record<string, { off?: boolean; hold?: number }>; show?: Record<string, ShowDef> } } | undefined;
+        try {
+            data = JSON.parse(text);
+        } catch {
+            return false;
+        }
+        const events = data?.events;
+        if (!ev || !events || typeof events !== "object") {
+            return false;
+        }
+        const p = this.player;
+        const extras = events.extras ?? {};
+        const num = (v: unknown, lo: number, hi: number) => typeof v === "number" && v >= lo && v <= hi;
+        // (absent from the text: the default, as the drawing page copies only what a profile sets)
+        const hold = extras.animation_hold;
+        p.setParkSetting("animationHold", num(hold, 1, 600) ? hold as number : null);
+        const show = typeof extras.show === "string" ? extras.show : "";
+        if (show === "" || ev.facts.shows.some(sh => sh.name === show)) {
+            p.setParkSetting("show", show);
+        }
+        const pan = events.views?.show_pan;
+        if (num(pan, 0, 1)) {
+            p.setParkSetting("showPan", pan as number);
+        }
+        if (typeof events.views?.events === "boolean" && ev.events !== undefined) {
+            p.setParkSetting("events", events.views.events);
+        }
+        for (const f of ev.facts.spots) {
+            const own = events.animation?.[f.name];
+            p.setSpot(f.name, {
+                off: typeof own?.off === "boolean" ? own.off : null,
+                hold: num(own?.hold, 1, 600) ? own!.hold! : null,
+            });
+        }
+        for (const [name, def] of Object.entries(events.show ?? {})) {
+            if (ev.facts.shows.some(sh => sh.name === name && sh.own) && def && typeof def === "object") {
+                p.setShowDef(name, {
+                    ...(num(def.hold, 1, 3600) ? { hold: def.hold } : {}),
+                    ...(def.view && typeof def.view === "object" ? { view: def.view } : {}),
+                    ...(Array.isArray(def.path) ? { path: def.path } : {}),
+                });
+            }
+        }
+        return true;
     }
 
     /** The panes stay shown (the pin); off, they hide with the cursor like the controls bar. */
@@ -1091,7 +1189,7 @@ export class Editor {
             if (cue && cue.tick !== undefined) {
                 kind = "clock";
                 // The effect's time; the cut comes its lead earlier, which "Plays" counts down to.
-                trigger = `at ${clock(cue.tick)}` + (cue.every ? `, every ${clock(cue.every)}` : "");
+                trigger = triggerText(cue);
                 if (cue.cut) {
                     const start = cue.tick - (cue.lead ?? 0) * TICKS_PER_SECOND;
                     let next = start;
@@ -1102,13 +1200,86 @@ export class Editor {
                 }
             } else if (cue) {
                 kind = "train";
-                trigger = (cue.ride !== undefined ? `a car of ride ${cue.ride}` : "listed cars") + (cue.tiles ? " on its tiles" : "");
+                trigger = triggerText(cue);
             } else if (v.show) {
                 kind = "show";
                 trigger = `show "${v.show.name}"`;
             }
             return [`E${k + 1}`, kind, v.animation ?? v.show?.name ?? "", trigger, `${v.hold} s`, plays];
         });
+    }
+
+    /** The Events list's rows (owner, 2026-11-15: its settings as on the drawing page's Events panel): the event
+     *  views in the order they play, each on its animation spot or show, then the spots and shows with no view in
+     *  the build (off, over the limit, or with event views off), each with its switch, hold and pan share. */
+    eventItems(): EventItem[] {
+        const views = this.player.currentViews;
+        const ev = this.player.eventSettings;
+        const rows = this.eventRows();
+        const items: EventItem[] = [];
+        const listed = new Set<string>();
+        const spotItem = (f: EventFacts["spots"][number], label: string, index: number | undefined, trigger: string, plays: string): EventItem => {
+            const set = ev!.spots[f.name];
+            const built = ev!.built.spots?.[f.name] ?? { off: !f.on };
+            const def = f.cue ? ev!.facts.cueHold : (ev!.animationHold ?? ev!.facts.holdDefault);
+            const hold = set.hold ?? def;
+            const pending = [...(set.off !== built.off ? [5] : []), ...(set.hold !== built.hold ? [3] : [])];
+            const why = set.off ? "off" : ev!.events === false ? "events off" : index === undefined
+                ? (built.off ? "next build" : f.status.startsWith("over the limit") ? "over the limit" : "next build") : plays;
+            const playsText = !set.off && built.off ? "next build" : set.off && !built.off && index !== undefined ? "off next build" : why;
+            if (set.off !== built.off || (playsText !== plays && index !== undefined)) {
+                pending.push(4);
+            }
+            listed.add(`a:${f.name}`);
+            return { id: `a:${f.name}`, index, spot: f.name, on: !set.off, cells: [label, f.name, trigger, `${hold} s`, playsText],
+                hold: { value: hold, step: 1, min: 1, max: 600 }, pending, dim: set.hold === undefined ? [3] : [] };
+        };
+        const showItem = (sh: EventFacts["shows"][number], label: string, index: number | undefined, plays: string): EventItem => {
+            const on = ev!.show === sh.name;
+            const builtOn = ev!.built.show === sh.name;
+            const def = sh.own ? ev!.showDefs[sh.name] : undefined;
+            const hold = def?.hold ?? sh.hold;
+            const pending = [...(on !== builtOn ? [5, 4] : []), ...(sh.own && def?.hold !== ev!.built.showDefs?.[sh.name]?.hold ? [3] : [])];
+            const hasPath = !!(def?.path ?? sh.path)?.length;
+            if (hasPath && ev!.changed.showPan) {
+                pending.push(2);
+            }
+            const playsText = on ? (builtOn ? (index !== undefined ? plays : ev!.events === false ? "events off" : "next build") : "next build")
+                : builtOn && index !== undefined ? "off next build" : "off";
+            listed.add(`s:${sh.name}`);
+            return { id: `s:${sh.name}`, index, show: sh.name, on, cells: [label, sh.name,
+                hasPath ? `show, pans ${Math.round(ev!.showPan * 100)}%` : "scripted show", `${hold} s`, playsText],
+                ...(sh.own ? { hold: { value: hold, step: 5, min: 5, max: 3600 } } : {}), ...(hasPath ? { pan: ev!.showPan } : {}),
+                pending, dim: [] };
+        };
+        this.eventIndices().forEach((i, k) => {
+            const v = views[i];
+            const r = rows[k];
+            const spots = ev && v.animation !== undefined ? ev.facts.spots.filter(f => (f.view ?? f.name) === v.animation) : [];
+            const show = ev && v.show ? ev.facts.shows.find(sh => sh.name === v.show!.name) : undefined;
+            if (spots.length) {
+                spots.forEach((f, j) => items.push(spotItem(f, j ? "" : r[0], i, r[3], r[5])));
+            } else if (show) {
+                items.push(showItem(show, r[0], i, r[5]));
+            } else {
+                items.push({ id: `v${i}`, index: i, cells: [r[0], r[2], r[3], r[4], r[5]], pending: [], dim: [] });
+            }
+        });
+        const route = this.routeIndices();
+        for (const f of ev?.facts.spots ?? []) {
+            if (!listed.has(`a:${f.name}`)) {
+                // (a continuous animation is a stop on the route: numbered as there)
+                const stop = route.find(i => views[i].animation !== undefined && views[i].animation === (f.view ?? f.name));
+                items.push(spotItem(f, stop !== undefined ? String(route.indexOf(stop) + 1) : "", stop, triggerText(f.cue),
+                    stop !== undefined ? "on the route" : ""));
+            }
+        }
+        for (const sh of ev?.facts.shows ?? []) {
+            if (!listed.has(`s:${sh.name}`)) {
+                items.push(showItem(sh, "", undefined, ""));
+            }
+        }
+        return items;
     }
 
     /** Moves the selected route view past its neighbor on the route (Ctrl+Up, Ctrl+Down), over any

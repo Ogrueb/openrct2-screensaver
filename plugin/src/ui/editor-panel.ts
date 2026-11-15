@@ -16,6 +16,7 @@
 import { builder, clock, ParkState, PlaylistInfo, readPlaylists } from "../builder";
 import type { Editor, EditorView, RestorePoint } from "../editor";
 import { EDITOR_COLUMNS, EVENT_COLUMNS } from "../editor";
+import type { EventItem } from "../editor";
 import { modeSettings } from "../mode";
 import type { MouseEvent, Overlay, ScreensaverApi } from "../mode";
 import type { Generation, ParkValues, PlaylistProps } from "../storage";
@@ -145,6 +146,7 @@ export class EditorPanel implements EditorView {
     private paneViews: Rect = { x: 0, y: 0, width: 0, height: 0 };
     private listRect: Rect = { x: 0, y: 0, width: 0, height: 0 }; // the route views' rows
     private eventsRect: Rect | undefined; // the event views' rows, when the park has any
+    private eventSel: string | undefined; // the Events list's selected row (EventItem.id), for its steppers
     private clockShown = -1; // the park clock's second the event list last showed
     private loadingShown = false; // a park change under way when the panes were last drawn
     private hovered: string | undefined; // the element under the mouse, from the last layout
@@ -286,7 +288,7 @@ export class EditorPanel implements EditorView {
             } else if (contains(this.listRect, this.mouse.x, this.mouse.y)) {
                 this.views.by(step, ed.routeIndices().length, EDITOR.visibleRows);
             } else if (this.eventsRect && contains(this.eventsRect, this.mouse.x, this.mouse.y)) {
-                this.events.by(step, ed.eventIndices().length, EDITOR.eventRows);
+                this.events.by(step, ed.eventItems().length, EDITOR.eventRows);
             } else if (this.pointsRect && contains(this.pointsRect, this.mouse.x, this.mouse.y)) {
                 this.points.by(step, ed.restorePoints().length, EDITOR.boxRows);
             } else if (this.messagesRect && contains(this.messagesRect, this.mouse.x, this.mouse.y)) {
@@ -361,7 +363,7 @@ export class EditorPanel implements EditorView {
             const scroll = this.scrollOf(which);
             const count = which === "parks" ? () => this.parkItems(ed).length : which === "points" ? () => ed.restorePoints().length
                 : which === "messages" ? () => builder.messages.length
-                : which === "events" ? () => ed.eventIndices().length : () => ed.routeIndices().length;
+                : which === "events" ? () => ed.eventItems().length : () => ed.routeIndices().length;
             const visible = which === "parks" ? this.parkRows() : which === "points" || which === "messages" ? EDITOR.boxRows
                 : which === "events" ? EDITOR.eventRows : EDITOR.visibleRows;
             this.thumbDrag = { scroll, y0: this.mouse.y, first0: scroll.first, count, visible };
@@ -372,7 +374,7 @@ export class EditorPanel implements EditorView {
                 : which === "events" ? EDITOR.eventRows : EDITOR.visibleRows;
             const count = which === "parks" ? this.parkItems(ed).length : which === "points" ? ed.restorePoints().length
                 : which === "messages" ? builder.messages.length
-                : which === "events" ? ed.eventIndices().length : ed.routeIndices().length;
+                : which === "events" ? ed.eventItems().length : ed.routeIndices().length;
             scroll.by(this.mouse.y < (scroll.thumb?.y ?? 0) ? -page : page, count, page);
         }
         return true;
@@ -492,7 +494,9 @@ export class EditorPanel implements EditorView {
                 if (this.parksRect && contains(this.parksRect, this.mouse.x, this.mouse.y)) {
                     continue; // under the park list
                 }
-                found = found ?? id;
+                // (an Events row's switch and steppers lie over the row)
+                const control = /^ev(on|hold|pan)\./.test(id) && !!found && /^(event|evrow)\./.test(found);
+                found = control ? id : found ?? id;
             }
         }
         return found;
@@ -552,7 +556,13 @@ export class EditorPanel implements EditorView {
         if (!e) {
             return;
         }
+        if (id.startsWith("ev")) {
+            if (this.eventAction(e, id)) {
+                return;
+            }
+        }
         if (id.startsWith("row.") || id.startsWith("event.")) {
+            this.eventSel = undefined;
             e.select(Number(id.slice(id.indexOf(".") + 1)));
             return;
         }
@@ -830,12 +840,19 @@ export class EditorPanel implements EditorView {
         // event views in their own list, when the park has any.
         const rows = e.rows();
         const route = e.routeIndices();
-        const events = e.eventIndices();
+        const events = e.eventItems();
         const sel = e.selectedIndex;
+        if (this.eventSel !== undefined) {
+            // (a row on a view stays selected only while its view does; one without a view while no view is picked anew)
+            const item = events.find(it => it.id === this.eventSel);
+            if (!item || (item.index !== undefined ? item.index !== sel : sel !== this.followed)) {
+                this.eventSel = undefined;
+            }
+        }
         if (sel !== this.followed) {
             this.followed = sel; // scroll to a newly selected view only, so the wheel can move away
             const r = route.indexOf(sel);
-            const k = events.indexOf(sel);
+            const k = events.findIndex(it => it.index === sel);
             if (r >= 0 && (r < this.views.first || r >= this.views.first + s.visibleRows)) {
                 this.views.first = r;
             }
@@ -1189,42 +1206,164 @@ export class EditorPanel implements EditorView {
     }
 
     /** The event views: when they play and on what, apart from the route, as no drag or list place
-     *  changes their timing (owner, 2026-11-10); a click selects one. */
-    private eventsList(e: Editor, scene: Scene, events: number[]): void {
+     *  changes their timing (owner, 2026-11-10); a click selects one. With the park's event settings (owner,
+     *  2026-11-15, as on the drawing page's Events panel): every animation spot and show, each with an On switch,
+     *  its hold (and a show's pan share) with a stepper on the selected row, the spots' default hold in the
+     *  title row; changes show amber until the next build bakes them into the park's profile. */
+    private eventsList(e: Editor, scene: Scene, items: EventItem[]): void {
         const s = EDITOR;
         const overlay = this.mode.overlay;
         const list = this.eventsRect!;
+        const ev = e.playback.eventSettings;
         const title = { x: list.x, y: list.y - s.rowHeight, width: list.width, height: s.rowHeight };
-        label(scene, "text.events", `Events  ${events.length}`, { x: title.x + 4, y: title.y, width: 0, height: title.height }, s.textSize, overlay, true);
-        const note = e.eventsLocked ? "play on the park's timing (locked)" : "play on the park's timing";
-        const noteX = title.x + 4 + measure(overlay, `Events  ${events.length}`, s.textSize, true).width + 12;
+        const head = `Events  ${items.length}`;
+        label(scene, "text.events", head, { x: title.x + 4, y: title.y, width: 0, height: title.height }, s.textSize, overlay, true);
+        const note = ev ? (e.eventsLocked ? "settings apply at the next build (views locked)" : "settings apply at the next build")
+            : e.eventsLocked ? "play on the park's timing (locked)" : "play on the park's timing";
+        const noteX = title.x + 4 + measure(overlay, head, s.textSize, true).width + 12;
         scene.set("text.events.note", { type: "text", text: note, size: s.hintSize, colour: THEME.textDim,
             x: noteX, y: Math.round(title.y + (title.height - s.hintSize * 1.25) / 2), z: Z.icon });
+        if (ev && ev.facts.spots.some(f => !f.cue)) {
+            // The default hold of a spot without its own (animation_hold), right of the title
+            const hold = ev.animationHold ?? ev.facts.holdDefault;
+            const w = 18;
+            const y = title.y + Math.round((title.height - w) / 2);
+            const more = this.place("evdef.more", { x: title.x + title.width - w, y, width: w, height: w }, "Default hold of a spot without its own", hold >= 600);
+            const text = `${hold} s`;
+            const tw = Math.max(40, measure(overlay, text, s.hintSize + 1).width + 8);
+            const less = this.place("evdef.less", { x: more.x - tw - w, y, width: w, height: w }, "Default hold of a spot without its own", hold <= 1);
+            button(scene, "evdef.less", less, this.state("evdef.less"), { icon: "less", iconSize: 12 }, overlay);
+            button(scene, "evdef.more", more, this.state("evdef.more"), { icon: "add", iconSize: 12 }, overlay);
+            scene.set("evdef.value", { type: "text", text, size: s.hintSize + 1, colour: ev.changed.animationHold ? THEME.pending : THEME.text,
+                align: "center", x: less.x + w + tw / 2, y: Math.round(y + (w - (s.hintSize + 1) * 1.25) / 2), z: Z.icon });
+            const lw = measure(overlay, "Default hold", s.hintSize).width;
+            scene.set("evdef.label", { type: "text", text: "Default hold", size: s.hintSize, colour: THEME.textDim,
+                x: less.x - 6 - lw, y: Math.round(title.y + (title.height - s.hintSize * 1.25) / 2), z: Z.icon });
+        }
         scene.set("events", { type: "rect", ...list, fill: THEME.editorList, z: Z.face });
-        const rows = e.eventRows();
         this.clockShown = Math.floor(e.playback.parkClock / 40);
-        const cols = columnStarts(list.width - s.grip, rows, overlay, EVENT_COLUMNS).map(c => c + s.grip);
+        // (the selected row's steppers and the switch take room: measured in with a row of their widest)
+        const measureRows = [...items.map(it => [...it.cells, it.on !== undefined ? "Off" : ""]),
+            ["", "", items.some(it => it.pan !== undefined) ? "MM 100% MM" : "", items.some(it => it.hold) ? "MM 600 s M" : "", "", ""]];
+        const cols = columnStarts(list.width - s.grip, measureRows, overlay, EVENT_COLUMNS).map(c => c + s.grip);
         EVENT_COLUMNS.forEach((h, c) => label(scene, `ehead.${c}`, h,
             { x: list.x + cols[c] + 4, y: list.y, width: 0, height: s.rowHeight }, s.textSize, overlay, true));
         const top = list.y + s.rowHeight;
         const hover = this.hovered;
+        const selected = (it: EventItem) => this.eventSel !== undefined ? it.id === this.eventSel
+            : it.index !== undefined && it.index === e.selectedIndex && items.find(o => o.index === it.index) === it;
         for (let i = 0; i < s.eventRows; i++) {
             const k = this.events.first + i;
-            const index = events[k];
-            if (index === undefined) {
+            const it = items[k];
+            if (it === undefined) {
                 break;
             }
-            const box = this.place(`event.${index}`, { x: list.x, y: top + i * s.rowHeight, width: list.width, height: s.rowHeight });
-            const fill = index === e.selectedIndex ? THEME.faceOn : hover === `event.${index}` ? THEME.faceHover : i % 2 ? THEME.face : undefined;
-            scene.set(`event.${index}`, { type: "rect", ...box, fill: fill ?? "#00000000", z: Z.face });
-            rows[k].forEach((cell, c) => label(scene, `ecell.${i}.${c}`, fit(overlay, cell, s.textSize, (cols[c + 1] ?? list.width) - cols[c] - 6),
-                { x: box.x + cols[c] + 4, y: box.y, width: 0, height: box.height }, s.textSize, overlay));
+            const id = it.index !== undefined && items.find(o => o.index === it.index) === it ? `event.${it.index}` : `evrow.${k}`;
+            const box = this.place(id, { x: list.x, y: top + i * s.rowHeight, width: list.width, height: s.rowHeight });
+            const on = selected(it);
+            const fill = on ? THEME.faceOn : hover === id ? THEME.faceHover : i % 2 ? THEME.face : undefined;
+            scene.set(id, { type: "rect", ...box, fill: fill ?? "#00000000", z: Z.face });
+            const colour = (c: number) => it.pending.includes(c) ? THEME.pending : it.dim.includes(c) || it.on === false ? THEME.textDim : undefined;
+            it.cells.forEach((cell, c) => {
+                const stepped = on && ((c === 3 && it.hold) || (c === 2 && it.pan !== undefined));
+                const x = box.x + cols[c] + 4;
+                const w = (cols[c + 1] ?? list.width) - cols[c] - 6;
+                const cid = `ecell.${i}.${c}`;
+                if (stepped) {
+                    const b = 18;
+                    const by = box.y + Math.round((box.height - b) / 2);
+                    const what = c === 3 ? "hold" : "pan";
+                    const value = c === 3 ? it.hold!.value : it.pan!;
+                    const [min, max] = c === 3 ? [it.hold!.min, it.hold!.max] : [0, 1];
+                    const less = this.place(`ev${what}.less.${k}`, { x, y: by, width: b, height: b }, c === 3 ? "Shorter hold" : "Less of the show panning", value <= min);
+                    const more = this.place(`ev${what}.more.${k}`, { x: x + w - b, y: by, width: b, height: b }, c === 3 ? "Longer hold" : "More of the show panning", value >= max);
+                    button(scene, `ev${what}.less.${k}`, less, this.state(`ev${what}.less.${k}`), { icon: "less", iconSize: 12 }, overlay);
+                    button(scene, `ev${what}.more.${k}`, more, this.state(`ev${what}.more.${k}`), { icon: "add", iconSize: 12 }, overlay);
+                    label(scene, cid, c === 2 ? `${Math.round(value * 100)}%` : cell, { x: x + w / 2, y: box.y, width: 0, height: box.height }, s.textSize, overlay);
+                    scene.set(cid, { ...scene.get(cid)!, align: "center" });
+                } else {
+                    label(scene, cid, fit(overlay, cell, s.textSize, w), { x, y: box.y, width: 0, height: box.height }, s.textSize, overlay);
+                }
+                const tint = colour(c);
+                if (tint) {
+                    scene.set(cid, { ...scene.get(cid)!, colour: tint });
+                }
+            });
+            if (it.on !== undefined) {
+                const sid = `evon.${k}`;
+                const b = { x: box.x + cols[5] + 2, y: box.y + 3, width: Math.min(40, list.width - cols[5] - 4), height: box.height - 6 };
+                const locked = it.show ? ev!.locked.includes("show") : false;
+                const tip = it.spot ? (it.on ? "On: a view on this animation (click: off)" : "Off: no view on it (click: on)")
+                    : it.on ? "Plays as the park's last view (click: none)" : "Not played (click: play it as the park's last view)";
+                this.place(sid, b, locked ? "Set by the playlist's own entry for the park" : tip, locked);
+                button(scene, sid, b, this.state(sid, it.on), { text: it.on ? "On" : "Off", textSize: 11 }, overlay);
+                if (it.pending.includes(5)) {
+                    scene.set(`${sid}.mark`, { type: "rect", x: b.x, y: b.y + b.height - 2, width: b.width, height: 2, fill: THEME.pending, z: Z.icon + 1 });
+                }
+            }
         }
         this.events.draw(scene, "events");
         if (this.events.track) {
             this.place("events.track", this.events.track);
             this.place("events.thumb", this.events.thumb!);
         }
+    }
+
+    /** A click in the Events list: a row selects it (and its view), the switch and steppers change the park's
+     *  event settings (Player.setSpot, setShowDef, setParkSetting). False: not one of its controls. */
+    private eventAction(e: Editor, id: string): boolean {
+        const items = e.eventItems();
+        const ev = e.playback.eventSettings;
+        const at = (k: string) => items[Number(k)];
+        const [what, part, k] = id.split(".");
+        if (what === "evrow") {
+            const it = at(part);
+            if (it) {
+                this.eventSel = it.id;
+                if (it.index !== undefined) {
+                    e.select(it.index);
+                }
+                this.followed = e.selectedIndex;
+                this.render();
+            }
+            return true;
+        }
+        if (what === "evdef" && ev) {
+            const def = ev.facts.holdDefault;
+            const next = Math.max(1, Math.min(600, (ev.animationHold ?? def) + (part === "more" ? 1 : -1)));
+            e.playback.setParkSetting("animationHold", next === def ? null : next);
+            this.render();
+            return true;
+        }
+        if (what === "evon" && ev) {
+            const it = at(part);
+            if (it?.spot) {
+                e.playback.setSpot(it.spot, { off: !!it.on });
+            } else if (it?.show) {
+                e.playback.setParkSetting("show", it.on ? "" : it.show);
+            }
+            this.render();
+            return true;
+        }
+        if ((what === "evhold" || what === "evpan") && ev) {
+            const it = at(k);
+            const dir = part === "more" ? 1 : -1;
+            if (it && what === "evhold" && it.hold) {
+                const next = Math.max(it.hold.min, Math.min(it.hold.max, it.hold.value + dir * it.hold.step));
+                if (it.spot) {
+                    const f = ev.facts.spots.find(x => x.name === it.spot)!;
+                    const def = f.cue ? ev.facts.cueHold : (ev.animationHold ?? ev.facts.holdDefault);
+                    e.playback.setSpot(it.spot, { hold: next === def ? null : next });
+                } else if (it.show) {
+                    e.playback.setShowDef(it.show, { hold: next });
+                }
+            } else if (it && what === "evpan" && it.pan !== undefined) {
+                e.playback.setParkSetting("showPan", Math.max(0, Math.min(1, Math.round((it.pan + dir * 0.05) * 100) / 100)));
+            }
+            this.render();
+            return true;
+        }
+        return false;
     }
 
     /** A row's cells as shown: who set each view, event views marked locked while they are. */

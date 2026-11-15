@@ -241,6 +241,26 @@ The panel became three panes (round 8 of the mockups accepted, built the same da
   visit, "after view N" for the rest). No drag handles; a click selects, and the lock applies as above. A
   route row dragged (or Ctrl+Up/Down) moves among the route views only. The map numbers events E1, E2 too
   and draws pan lines along the route only.
+  **Event settings** (owner, 2026-11-15; what the drawing page's Events panel edits, so the game needs neither
+  it nor the settings page): with a build that lists the park's event facts (`mksequence.py event_facts`:
+  every animation spot of its companions and each show they offer, whether or not event views are on) the
+  list holds a row per spot and show as well as the event views: an event view's row is its spot's (spots
+  merged onto one view share it), a continuous spot shows its route number and "on the route", and spots or
+  shows with no view follow (Plays "off", "over the limit", "events off", "next build"). Columns: #, name,
+  trigger (a show with a camera path: "show, pans 50%"), hold, plays, and an **On** switch: a spot off or on
+  (`[animation."<name>"] off`; AdvancedTrack lifts start off), a show played as the park's last view or not
+  (`[extras] show`, one at a time). The selected row has − / + steppers on its hold (a spot's own hold, 1 s
+  steps, back at the default it has none; a show of the park's own profile: its longest time, 5 s steps) and
+  on a show's pan share (`[views] show_pan`, 5% steps). "Default hold" right of the title is `[extras]
+  animation_hold` (spots without a cue). A spot's hold shows dim while it is the default. Every change is a
+  park setting (`Player.setSpot`, `setShowDef`, `setParkSetting`; Playlist properties `parks[key].set`:
+  `spots`, `showDefs`, `animationHold`, `show`, `showPan`), saved at once and shown amber (the switch with an
+  amber underline) until the next build bakes it into the park's profile in the user folder
+  (`settings_changes` → `profiles.change`). The show's camera view and path stay as the profile writes them
+  (owner, 2026-11-15: no detailed show camera in the game; the drawing page still edits them). Copy views
+  writes the park's event settings in the drawing page's format (`events`: extras, views, animation, show),
+  and Paste applies the text's to this park's own spots and shows (a spot the text leaves out goes back to
+  its defaults, as on the drawing page); text with only events pastes those.
 - **Toolbox, bottom left.** The **Frame | Map** switch on top (Map olive while on, "M" beside it), a
   one-line hint for the mode, then icon buttons under small labels: VIEW (add, set to camera, delete),
   CAMERA (rotate left and right, zoom in and out), EVENTS (the lock: sparkles over a padlock, usable on the
