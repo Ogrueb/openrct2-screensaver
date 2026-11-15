@@ -22,20 +22,32 @@ file's embedded screenshot, which saves older than the embedded previews
 and RCT2 saves lack; the pane leaves out the park summary when the file
 has none.
 ---
- src/openrct2-ui/windows/LoadSave.cpp  | 300 +++++++++++++++++++++++---
- src/openrct2/interface/Screenshot.cpp | 195 ++++++++++++++++-
- 2 files changed, 466 insertions(+), 29 deletions(-)
+ src/openrct2-ui/windows/LoadSave.cpp  | 312 +++++++++++++++++++++++---
+ src/openrct2/interface/Screenshot.cpp | 195 +++++++++++++++-
+ 2 files changed, 478 insertions(+), 29 deletions(-)
 
 diff --git a/src/openrct2-ui/windows/LoadSave.cpp b/src/openrct2-ui/windows/LoadSave.cpp
-index 7a11a92..8d1cc5f 100644
+index 7a11a92..ef04256 100644
 --- a/src/openrct2-ui/windows/LoadSave.cpp
 +++ b/src/openrct2-ui/windows/LoadSave.cpp
-@@ -8,6 +8,15 @@
+@@ -8,6 +8,27 @@
   *****************************************************************************/
  
  #include <SDL_keycode.h>
 +#ifdef _WIN32
++    #ifndef NOMINMAX
++        #define NOMINMAX
++    #endif
++    #ifndef WIN32_LEAN_AND_MEAN
++        #define WIN32_LEAN_AND_MEAN
++    #endif
 +    #include <windows.h>
++    // windows.h's macros would rename the game's own functions
++    #undef CreateDirectory
++    #undef CreateWindow
++    #undef DrawText
++    #undef GetMessage
++    #undef LoadImage
 +#else
 +    #include <fcntl.h>
 +    #include <sys/wait.h>
@@ -46,7 +58,7 @@ index 7a11a92..8d1cc5f 100644
  #include <ctime>
  #include <iterator>
  #include <memory>
-@@ -21,6 +30,7 @@
+@@ -21,6 +42,7 @@
  #include <openrct2/Game.h>
  #include <openrct2/OpenRCT2.h>
  #include <openrct2/ParkImporter.h>
@@ -54,7 +66,7 @@ index 7a11a92..8d1cc5f 100644
  #include <openrct2/SpriteIds.h>
  #include <openrct2/audio/Audio.h>
  #include <openrct2/config/Config.h>
-@@ -29,6 +39,7 @@
+@@ -29,6 +51,7 @@
  #include <openrct2/core/FileScanner.h>
  #include <openrct2/core/FileStream.h>
  #include <openrct2/core/Guard.hpp>
@@ -62,7 +74,7 @@ index 7a11a92..8d1cc5f 100644
  #include <openrct2/core/Path.hpp>
  #include <openrct2/core/String.hpp>
  #include <openrct2/drawing/ColourMap.h>
-@@ -88,8 +99,169 @@ namespace OpenRCT2::Ui::Windows
+@@ -88,8 +111,169 @@ namespace OpenRCT2::Ui::Windows
          std::vector<PaletteIndex> pixels;
          ImageIndex imageId{ kImageIndexUndefined };
          uint32_t lastUsed{};
@@ -232,7 +244,7 @@ index 7a11a92..8d1cc5f 100644
      // Thumbnails stay for the session, keyed by path and modification time; their image slots
      // are allocated while a window shows them and freed when it closes.
      static std::unordered_map<u8string, Thumbnail> _thumbnails;
-@@ -124,7 +296,7 @@ namespace OpenRCT2::Ui::Windows
+@@ -124,7 +308,7 @@ namespace OpenRCT2::Ui::Windows
  
      // The preview image of the kind the preview setting asks for (else the other kind), reduced by
      // whole steps to fit a tile: palette images can only be sampled, not blended.
@@ -241,7 +253,7 @@ index 7a11a92..8d1cc5f 100644
      {
          const auto wanted = Config::Get().general.fileBrowserPreviewType == ParkPreviewPref::miniMap
              ? PreviewImageType::miniMap
-@@ -137,6 +309,11 @@ namespace OpenRCT2::Ui::Windows
+@@ -137,6 +321,11 @@ namespace OpenRCT2::Ui::Windows
          }
  
          Thumbnail thumbnail;
@@ -253,7 +265,7 @@ index 7a11a92..8d1cc5f 100644
          if (image == nullptr || image->width == 0 || image->height == 0)
              return thumbnail;
  
-@@ -253,7 +430,16 @@ namespace OpenRCT2::Ui::Windows
+@@ -253,7 +442,16 @@ namespace OpenRCT2::Ui::Windows
          ParkPreview _preview;
          BackgroundWorker::Job _previewLoadJob;
          BackgroundWorker::Job _thumbnailLoadJob;
@@ -271,7 +283,7 @@ index 7a11a92..8d1cc5f 100644
  
          bool ShowPreviews()
          {
-@@ -470,7 +656,9 @@ namespace OpenRCT2::Ui::Windows
+@@ -470,7 +668,9 @@ namespace OpenRCT2::Ui::Windows
              if (_listItems[selectedListItem].type == FileType::directory)
                  return;
  
@@ -282,7 +294,7 @@ index 7a11a92..8d1cc5f 100644
  
              auto& bgWorker = GetContext()->GetBackgroundWorker();
  
-@@ -480,7 +668,17 @@ namespace OpenRCT2::Ui::Windows
+@@ -480,7 +680,17 @@ namespace OpenRCT2::Ui::Windows
              }
  
              _previewLoadJob = bgWorker.addJob(
@@ -301,7 +313,7 @@ index 7a11a92..8d1cc5f 100644
                  [](const ParkPreview preview) {
                      auto* windowMgr = GetContext()->GetUiContext().GetWindowManager();
                      auto* wnd = windowMgr->FindByClass(WindowClass::loadsave);
-@@ -580,6 +778,10 @@ namespace OpenRCT2::Ui::Windows
+@@ -580,6 +790,10 @@ namespace OpenRCT2::Ui::Windows
                  return;
              }
  
@@ -312,7 +324,7 @@ index 7a11a92..8d1cc5f 100644
              auto summaryCoords = windowPos
                  + ScreenCoordsXY(width - previewPaneSize.width - kPadding, widget.top + previewHeight + kListRowHeight);
  
-@@ -668,12 +870,15 @@ namespace OpenRCT2::Ui::Windows
+@@ -668,12 +882,15 @@ namespace OpenRCT2::Ui::Windows
              if (it == _thumbnails.end())
              {
                  if (_thumbnailsWanted.size() < 64)
@@ -329,7 +341,7 @@ index 7a11a92..8d1cc5f 100644
              if (thumbnail.hasImage && thumbnail.imageId == kImageIndexUndefined)
              {
                  G1Element g1{};
-@@ -685,38 +890,79 @@ namespace OpenRCT2::Ui::Windows
+@@ -685,38 +902,79 @@ namespace OpenRCT2::Ui::Windows
              return &thumbnail;
          }
  
@@ -430,7 +442,7 @@ index 7a11a92..8d1cc5f 100644
  
              const int32_t columns = GetGridColumns();
              for (int32_t i = 0; i < numListItems; i++)
-@@ -839,6 +1085,8 @@ namespace OpenRCT2::Ui::Windows
+@@ -839,6 +1097,8 @@ namespace OpenRCT2::Ui::Windows
  
              if (_thumbnailLoadJob.isValid())
                  _thumbnailLoadJob.cancel();
