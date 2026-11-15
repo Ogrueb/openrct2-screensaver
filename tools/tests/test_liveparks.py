@@ -5,7 +5,7 @@ from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, ".."))
-import livefile, mksequence  # noqa: E402
+import livefile, mksequence, parkinfo  # noqa: E402
 
 PLAYLIST = '''name = "My List"  # the sequence
 
@@ -124,12 +124,92 @@ class LiveParks(unittest.TestCase):
         self.assertIs(self.task("add")["ok"], False)
         self.assertIn("in the playlist already", self.task("add")["error"])
 
-    def test_add_of_an_rct_save_says_where_to_convert_it(self):
+    def test_add_of_an_rct_save_without_openrct2_says_so(self):
         save = os.path.join(self.lib, "old.sv6")
         self.park(save)
         code, _ = self.run_task(mksequence.live_add, "My List", save, self.user)
         self.assertEqual(code, 1)
-        self.assertIn("folder scan", self.task("add")["error"])
+        self.assertIn("no OpenRCT2", self.task("add")["error"])
+        self.assertTrue(any("needs --openrct2" in m["text"] for m in self.task("add")["messages"]))
+
+    def fake_import(self, made):
+        """importparks.run stubbed: it 'converts' into the library, writing the parks named in `made`."""
+        def run(paths, library, openrct2, user_dir, name="x", echo=print, **kw):
+            os.makedirs(library, exist_ok=True)
+            lines = []
+            for f in made:
+                self.park(os.path.join(library, f))
+                lines += ["[[park]]", 'file = "%s"' % f, 'name = "%s"' % f[:-5].title(), "author = false"]
+            if made:
+                os.makedirs(os.path.join(library, "x"), exist_ok=True)
+                lines.append('companions = ["x/show.js"]')
+            playlist = os.path.join(library, "imported.toml")
+            with open(playlist, "w") as fh:
+                fh.write('name = "%s"\n' % name + "\n".join(lines) + "\n")
+            records = [{"folder": os.path.basename(paths[0]), "warnings": [], "kind": "legacy", "member": "old.SV6",
+                        "file": made[0], "name": "Old"}] if made else []
+            self.calls.append((paths, library, openrct2))
+            return playlist, records, 1
+        self.calls = []
+        import importparks
+        return mock.patch.object(importparks, "run", side_effect=run)
+
+    def test_add_of_an_rct_save_converts_it_into_a_library(self):
+        save = os.path.join(self.lib, "old.sv6")
+        self.park(save)
+        with self.fake_import(["old.park"]):
+            code, build = self.run_task(mksequence.live_add, "My List", save, self.user, "/games/openrct2")
+        self.assertEqual(code, 0)
+        build.assert_called_once()
+        paths, library, openrct2 = self.calls[0]
+        self.assertEqual((paths, openrct2), ([save], "/games/openrct2"))
+        self.assertTrue(library.startswith(os.path.join(self.user, "screensaver", "library")))
+        added = self.read()["park"][-1]["file"]
+        self.assertTrue(os.path.isfile(os.path.join(self.lib, added)), added)
+        texts = [m["text"] for m in self.task("add")["messages"]]
+        self.assertTrue(any("converted from SV6" in t for t in texts), texts)
+        self.assertTrue(any("restart the game" in t.lower() for t in texts), "new objects need a restart")
+        self.assertIs(self.read()["park"][-1]["author"], False, "a save has no builders to warn about")
+
+    def test_new_of_a_folder_with_saves_imports_it(self):
+        folder = os.path.join(self.tmp.name, "RCT2 saves")
+        os.makedirs(folder)
+        for n in ("one.sv6", "two.sv6"):
+            self.park(os.path.join(folder, n))
+        with self.fake_import(["one.park", "two.park"]):
+            code, _ = self.run_task(mksequence.live_new, folder, self.user, "/games/openrct2")
+        self.assertEqual(code, 0)
+        result = self.task("new")
+        data = self.read(result["playlist"])
+        base = os.path.dirname(result["playlist"])
+        self.assertEqual([e["name"] for e in data["park"]], ["One", "Two"])
+        self.assertTrue(all(os.path.isfile(os.path.join(base, e["file"])) for e in data["park"]))
+        self.assertTrue(os.path.isdir(os.path.join(base, data["park"][-1]["companions"][0].rsplit("/", 1)[0])),
+                        "the parks' scripts are found from the new playlist")
+
+    def test_add_of_a_download_with_objects_installs_them_and_reads_it_in_place(self):
+        import zipfile
+        dl = os.path.join(self.tmp.name, "pack.zip")
+        with zipfile.ZipFile(dl, "w") as z:
+            z.writestr("pack/park.park", parkinfo.PARK_MAGIC + b"\x00" * 60)
+            z.writestr("pack/WALL1.DAT", b"\x00" * 4 + b"WALL1   " + b"\x00" * 8)
+        code, _ = self.run_task(mksequence.live_add, "My List", dl, self.user)
+        self.assertEqual(code, 0, self.task("add"))
+        self.assertEqual(self.read()["park"][-1]["file"], "../pack.zip")
+        self.assertEqual(self.task("add")["park"], "pack.zip", "its key, for the game to go to it")
+        self.assertIn("WALL1.DAT", os.listdir(os.path.join(self.user, "object", "rct-screensaver")))
+        self.assertTrue(any("restart the game" in m["text"].lower() and m.get("park") == "pack.zip" for m in self.task("add")["messages"]),
+                        "about the park, so the game flags its square")
+        # Added again elsewhere (an earlier try installed its objects): still the restart note
+        other = os.path.join(self.lib, "other.toml")
+        with open(other, "w") as f:
+            f.write('name = "Other"\n\n[[park]]\nfile = "a.park"\n')
+        mksequence.register_generator(self.user, "Other", other)
+        code, _ = self.run_task(mksequence.live_add, "Other", dl, self.user)
+        self.assertEqual(code, 0, self.task("add"))
+        texts = [m["text"] for m in self.task("add")["messages"]]
+        self.assertTrue(any("load its objects (installed" in t for t in texts), texts)
+        self.assertTrue(any(m.get("installed") for m in self.task("add")["messages"]), "with when, for the game to judge")
 
     def test_add_bakes_the_games_edits_first(self):
         os.makedirs(livefile.folder(self.user), exist_ok=True)
@@ -155,6 +235,31 @@ class LiveParks(unittest.TestCase):
         # its parks, for the game's park list before the first build
         self.assertEqual([p["key"] for p in result["parks"]], ["a.park", "b.park", "c.park", "d.park"])
         self.assertTrue(all(p["name"] for p in result["parks"]))
+
+    def test_add_to_a_new_playlist_works(self):
+        """Add park on a playlist New playlist made (its parks as [[park]] tables)."""
+        os.remove(os.path.join(self.lib, "d.park"))
+        self.run_task(mksequence.live_new, self.lib, self.user)
+        made = self.task("new")
+        with open(made["playlist"], encoding="utf-8") as f:
+            self.assertIn("[[park]]", f.read())
+        self.park(os.path.join(self.lib, "d.park"))
+        code, _ = self.run_task(mksequence.live_add, made["sequence"], os.path.join(self.lib, "d.park"), self.user)
+        self.assertEqual(code, 0, self.task("add"))
+        self.assertEqual(len(self.read(made["playlist"])["park"]), 4)
+
+    def test_add_to_a_playlist_with_inline_parks_rewrites_them_as_tables(self):
+        """Playlists New playlist made before 2026-11-14 hold their parks as one inline list."""
+        with open(self.playlist, "w", encoding="utf-8") as f:
+            f.write('# Made from lib\n\nname = "My List"\npark = [\n    {file = "a.park"},\n    {file = "b.park", use = false},\n]\n\n[views]\nmotion = "pans"\n')
+        code, _ = self.run_task(mksequence.live_add, "My List", os.path.join(self.lib, "d.park"), self.user)
+        self.assertEqual(code, 0, self.task("add"))
+        data = self.read()
+        self.assertEqual([e["file"] for e in data["park"]], ["a.park", "b.park", "d.park"])
+        self.assertEqual((data["park"][1]["use"], data["views"]["motion"]), (False, "pans"))
+        with open(self.playlist, encoding="utf-8") as f:
+            text = f.read()
+        self.assertTrue(text.startswith("# Made from lib\n"), text)
 
     def test_a_second_new_playlist_of_the_folder_gets_its_own_name(self):
         self.run_task(mksequence.live_new, self.lib, self.user)
@@ -211,3 +316,24 @@ class LiveParks(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AtomicWrite(unittest.TestCase):
+    def test_a_busy_file_is_retried_and_no_temp_file_stays(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "build-x.json")
+            real, calls = os.replace, []
+
+            def flaky(a, b):
+                calls.append(a)
+                if len(calls) < 3:
+                    raise PermissionError(5, "Access is denied")
+                real(a, b)
+            with mock.patch.object(mksequence.os, "replace", side_effect=flaky):
+                mksequence.write_json_atomic(path, {"ok": True})
+            with open(path) as f:
+                self.assertEqual(json.load(f), {"ok": True})
+            with mock.patch.object(mksequence.os, "replace", side_effect=PermissionError(5, "Access is denied")):
+                with self.assertRaises(PermissionError):
+                    mksequence.write_json_atomic(path, {"ok": False}, wait=0.1)
+            self.assertEqual(os.listdir(d), ["build-x.json"], "no temporary file stays behind")

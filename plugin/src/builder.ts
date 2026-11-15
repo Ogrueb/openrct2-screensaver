@@ -110,6 +110,7 @@ export interface ParkState {
     name?: string;
     state: "pending" | "building" | "cached" | "built" | "failed" | "missing";
     warnings?: number;
+    restart?: number; // what needs a game restart first (objects or scripts installed for it)
 }
 
 /** A line of the build pane's messages; `park` (a park key) when it is about one park. */
@@ -117,6 +118,7 @@ export interface BuildMessage {
     level: "info" | "ok" | "warn" | "error";
     text: string;
     park?: string;
+    installed?: number; // objects installed then (ms): a restart note the game leaves out when it started later
 }
 
 /** What mksequence.py --live-build writes for the plugin (build-<sequence>.json in the live folder). */
@@ -160,6 +162,7 @@ export interface TaskResult {
     missing?: string[]; // import: parks neither in the bundle nor the park folder
     parks?: { key: string; name: string }[]; // new: the new playlist's parks, before its first build
     built?: boolean; // copy: the playing build was copied along (applyBuild plays the copy without a rebuild)
+    park?: string; // add: the added park's key
     messages?: BuildMessage[];
 }
 
@@ -225,6 +228,8 @@ export class Builder {
     private lastPoll = 0;
     private progress: BuildResult | undefined; // the running build's last progress
     private last: BuildResult | undefined; // the last build's result (its squares and messages stay shown)
+    private flags: Record<string, { warnings: number; restart: boolean }> = {}; // the last task's warnings about parks (Add park's restart): on their squares
+    private readonly gameStarted = Date.now(); // the plugin's load, the game's start near enough: objects installed before it are loaded
     private notes: BuildMessage[] = []; // the plugin's own lines about the last task, before the generator's
     private earlier: BuildMessage[] = []; // an import's own lines (unpacking), older than its build's: after them
     private outcome: BuildLine | undefined;
@@ -241,6 +246,7 @@ export class Builder {
     onReady: ((result: BuildResult, imported: boolean) => string | undefined) | undefined;
 
     /** The playlist New or Duplicate made last (not built yet): the editor opens the PLAYLIST list on it. */
+    added: { key: string; at: number } | undefined; // the park Add park added, once its build plays: the editor goes to it
     made: { sequence: string; at: number; task: "new" | "copy"; playlist?: string; parks?: { key: string; name: string }[] } | undefined;
 
     /** Plays a copy of the playing playlist from the copied build (no rebuild); an error message, or
@@ -427,6 +433,12 @@ export class Builder {
         this.outcome = undefined;
         this.notes = [];
         this.earlier = [];
+        this.flags = {};
+    }
+
+    /** A task's message counts here: not a note about objects installed before this game started. */
+    private current(m: BuildMessage): boolean {
+        return !(m.installed && m.installed < this.gameStarted);
     }
 
     cancel(): void {
@@ -453,6 +465,15 @@ export class Builder {
         let imported: TaskResult | undefined;
         if (this.task !== "build" && this.task !== "open") {
             imported = fresh(readTaskResult(this.task));
+            // Its warnings about a park flag that park's square (owner, 2026-11-14: Add park's restart)
+            this.flags = {};
+            for (const m of imported?.messages ?? []) {
+                if (m.park && (m.level === "warn" || m.level === "error") && this.current(m)) {
+                    const f = this.flags[m.park] ?? (this.flags[m.park] = { warnings: 0, restart: false });
+                    f.warnings += 1;
+                    f.restart ||= /restart the game/i.test(m.text);
+                }
+            }
             if (imported?.ok && imported.sequence && !this.sequence) {
                 this.sequence = imported.sequence;
                 if (!FILE_ONLY.includes(this.task)) {
@@ -471,7 +492,8 @@ export class Builder {
         this.sequence = undefined;
         this.progress = undefined;
         const took = Date.now() - this.started;
-        const from = (r: { messages?: BuildMessage[] } | undefined) => [...(r?.messages ?? [])].reverse();
+        // (a note about objects installed before this game started needs no restart: left out)
+        const from = (r: { messages?: BuildMessage[] } | undefined) => [...(r?.messages ?? [])].filter(m => this.current(m)).reverse();
         const what = { build: "Build", open: "Switch", import: "Import", add: "Adding the park", new: "New playlist", copy: "Duplicate", export: "Export" }[task];
         if (task !== "build" && task !== "open" && !(imported?.ok && sequence)) {
             const why = status.state === "cancelled" ? "cancelled" : imported?.error || status.error || "the generator failed";
@@ -505,8 +527,11 @@ export class Builder {
             log(`${NOUN[task]} "${made}" made`);
             return;
         }
-        // (the task's own lines come before its build's, so they are listed under them: newest first)
-        this.earlier = task !== "build" && task !== "open" ? from(imported) : [];
+        // (the task's own lines come before its build's, so they are listed under them: newest first; its
+        // warnings, as a restart for objects it installed, go on top, where they are seen: owner, 2026-11-14)
+        const own = task !== "build" && task !== "open" ? from(imported) : [];
+        const lifted = own.filter(m => m.level === "warn" || m.level === "error");
+        this.earlier = own.filter(m => !lifted.includes(m));
         this.last = current;
         if (status.state === "cancelled") {
             this.outcome = { phase: "idle", text: "Build cancelled" };
@@ -544,8 +569,14 @@ export class Builder {
         this.outcome = {
             phase: "done", text: `${done} at ${at}, now playing${warnings ? `; ${warnings} warning${warnings > 1 ? "s" : ""}` : ""}`,
         };
+        if (task === "add" && imported?.park) {
+            this.added = { key: imported.park, at: Date.now() };
+        }
         this.notes = [{ level: "ok", text: task === "build" || task === "add" ? `Built ${at} in ${clock(took)}, now playing`
-            : `${done} "${sequence}" ${at} in ${clock(took)}, now playing` }];
+            : `${done} "${sequence}" ${at} in ${clock(took)}, now playing` }, ...lifted];
+        if (lifted.some(m => /restart the game/i.test(m.text))) {
+            this.outcome = { phase: "done", text: `${done} at ${at}; restart the game to load its new objects`, warning: true };
+        }
         for (const w of current.warnings ?? []) {
             log(`build warning: ${w}`);
         }
@@ -635,6 +666,14 @@ export class Builder {
      *  not reached yet keeping its state from before, dimmed only when it needs a build (owner,
      *  2026-11-11). */
     get parks(): (ParkState & { stale?: boolean })[] {
+        return this.squareStates().map(p => {
+            const f = p.key ? this.flags[p.key] : undefined;
+            return f && (p.state === "built" || p.state === "cached")
+                ? { ...p, warnings: (p.warnings ?? 0) + f.warnings, restart: (p.restart ?? 0) + (f.restart ? 1 : 0) } : p;
+        });
+    }
+
+    private squareStates(): (ParkState & { stale?: boolean })[] {
         const dirty = this.dirty();
         const before = new Map((this.last?.parkStates ?? []).filter(p => p.key).map(p => [p.key!, p]));
         const carried = (key: string, p?: ParkState): ParkState & { stale?: boolean } => {
@@ -642,16 +681,38 @@ export class Builder {
             const base = old && old.state !== "pending" && old.state !== "building" ? old : { key, name: p?.name, state: "built" as const };
             return { ...base, stale: dirty.has(key) };
         };
-        if (this.building) {
-            return (this.progress?.parkStates ?? []).map(p => p.state === "pending" && p.key ? carried(p.key, p) : p);
+        // The squares react the moment a task starts (owner, 2026-11-14), before the generator writes any
+        // progress: a park being added gets an empty square, lit; a playlist not known yet (New, Import, a
+        // switch to a playlist never built) one lit bar in place of the playing playlist's squares.
+        const adding: ParkState[] = this.task === "add" ? [{ name: "The park being added", state: "building" }] : [];
+        const unknown: ParkState[] = [{ name: this.task === "import" ? "The imported playlist" : "The new playlist", state: "building" }];
+        const states = this.progress?.parkStates;
+        if (this.building && states?.length) {
+            // (a rebuild of the playing playlist shows its waiting parks as they were; another playlist's
+            // waiting parks are empty squares until the generator reaches them)
+            // (a park the build before did not have, as one just added, is empty too: owner, 2026-11-14)
+            const same = this.task === "build" || this.task === "add";
+            return states.map(p => same && p.state === "pending" && p.key && before.has(p.key) ? carried(p.key, p) : p);
+        }
+        if (this.task === "new" || this.task === "import" || this.task === "copy" && !this.sequence) {
+            return unknown;
+        }
+        if (this.task === "open") {
+            // (a playlist New made lists its parks; another's squares come with the build's first progress)
+            const made = this.made?.sequence === this.sequence ? this.made?.parks : undefined;
+            return made?.length ? made.map((p, i) => ({ key: p.key, name: p.name, state: i ? "pending" as const : "building" as const })) : unknown;
         }
         const order = this.orderOf?.() ?? [];
-        if (!order.length) {
-            return this.last?.parkStates ?? [];
-        }
         // (a park the last build left out, as its file was missing, stays at the end)
         const shown = new Set(order);
-        return [...order.map(key => carried(key)), ...(this.last?.parkStates ?? []).filter(p => p.key && !shown.has(p.key))];
+        const idle: (ParkState & { stale?: boolean })[] = order.length ? [...order.map(key => carried(key)), ...(this.last?.parkStates ?? []).filter(p => p.key && !shown.has(p.key) && p.state === "missing")]
+            : this.last?.parkStates ?? [];
+        if (this.task === "build" || this.task === "add") {
+            // Started, no progress yet: the first park needing a build is lit (the generator starts there)
+            const first = this.task === "build" ? Math.max(0, idle.findIndex(p => p.stale)) : -1;
+            return [...idle.map((p, i) => i === first ? { ...p, state: "building" as const, stale: false } : p), ...adding];
+        }
+        return idle;
     }
 
     /** The messages of the running build, else of the last one, newest first (the plugin's own lines

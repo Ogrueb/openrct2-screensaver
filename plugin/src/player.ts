@@ -529,6 +529,21 @@ export class Player {
         return [...this.parkOrder];
     }
 
+    /** A park's orders (circuit_variants, circuit_reverse) for the park list: how many, how many of them
+     *  reversed, and which (1-based) plays now (the playing park) or on its next visit; undefined with one
+     *  order, or with its views set by hand. */
+    ordersOf(index: number): { count: number; reversed: number; order: number; now: boolean } | undefined {
+        const park = this.playlist.parks[index];
+        const count = 1 + (park?.variants?.length ?? 0);
+        if (!park || count < 2 || park.handSet || (park.key !== undefined && this.edits[park.key]?.views)) {
+            return undefined;
+        }
+        const visit = this.visits[park.key ?? park.fileName];
+        const now = index === this.parkIndex && !this.loadingPark;
+        const order = visit === undefined ? 0 : now ? visit % count : (visit + 1) % count;
+        return { count, reversed: park.variants!.filter(v => v.reverse).length, order: order + 1, now };
+    }
+
     /** How many views each park has (by playlist index): its edits', else the playlist's. */
     viewCountOf(index: number): number {
         if (index === this.parkIndex && !this.loadingPark) {
@@ -733,8 +748,13 @@ export class Player {
 
     /** The Generation section differs from the build: the next build applies it. */
     get generationChanged(): boolean {
+        return this.generationChangedKeys.length > 0;
+    }
+
+    /** The Generation options changed since the build. */
+    get generationChangedKeys(): (keyof Generation)[] {
         const built = this.generationBuilt;
-        return Object.entries(this.props.generation ?? {}).some(([k, v]) => built[k as keyof Generation] !== v);
+        return Object.entries(this.props.generation ?? {}).filter(([k, v]) => built[k as keyof Generation] !== v).map(([k]) => k as keyof Generation);
     }
 
     /** Drops the Generation changes a new build has made its own (equal to the build, they change nothing). */
@@ -807,9 +827,14 @@ export class Player {
     }
 
     /** The current park's settings differ from its build: the next build applies them. */
-    get parkSettingsChanged(): boolean {
+    /** The current park's settings changed since the build (only among `keys` when given). */
+    parkSettingsChangedIn(keys?: (keyof ParkValues)[]): boolean {
         const park = this.currentPark();
-        return !!park && Object.keys(this.props.parks?.[park.key ?? park.fileName]?.set ?? {}).length > 0;
+        return !!park && Object.keys(this.props.parks?.[park.key ?? park.fileName]?.set ?? {}).some(k => !keys || keys.includes(k as keyof ParkValues));
+    }
+
+    get parkSettingsChanged(): boolean {
+        return this.parkSettingsChangedIn();
     }
 
     /** Changes one of the current park's settings, saved at once (and so in the live file; the next build's
@@ -833,7 +858,7 @@ export class Player {
     }
 
     /** The current park's settings back to the playlist's: its profile's keys go at the next build. */
-    resetParkSettings(): void {
+    resetParkSettings(keys?: (keyof ParkValues)[]): void {
         const park = this.currentPark();
         const built = park?.settings;
         if (!park || !built) {
@@ -841,8 +866,10 @@ export class Player {
         }
         const pk = park.key ?? park.fileName;
         const change = this.parkChange(pk, park, built);
-        change.set = {};
-        for (const k of built.adjusted.filter(k => !built.locked.includes(k))) {
+        // (only `keys` when given: the park's playback settings and its generation settings reset apart)
+        const within = (k: keyof ParkValues) => !keys || keys.includes(k);
+        change.set = Object.fromEntries(Object.entries(change.set).filter(([k]) => !within(k as keyof ParkValues)));
+        for (const k of built.adjusted.filter(k => !built.locked.includes(k) && within(k))) {
             change.set[k] = null;
         }
         this.saveParkChange(pk, change);

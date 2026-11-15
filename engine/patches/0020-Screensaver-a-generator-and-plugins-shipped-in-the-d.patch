@@ -19,15 +19,15 @@ screensaver.generator ({ available, shipped, python, script, reason }) tells
 a plugin whether a generator can run and why not, so it can gray out its
 build buttons before a click.
 ---
- src/openrct2-ui/screensaver/Build.cpp       | 158 ++++++++++++++++----
+ src/openrct2-ui/screensaver/Build.cpp       | 178 ++++++++++++++++----
  src/openrct2-ui/screensaver/Build.h         |  13 ++
  src/openrct2-ui/screensaver/Overlay.cpp     |   6 +-
  src/openrct2-ui/scripting/ScScreensaver.hpp |  15 ++
  src/openrct2/scripting/ScriptEngine.cpp     |  20 +++
- 5 files changed, 184 insertions(+), 28 deletions(-)
+ 5 files changed, 201 insertions(+), 31 deletions(-)
 
 diff --git a/src/openrct2-ui/screensaver/Build.cpp b/src/openrct2-ui/screensaver/Build.cpp
-index 2cf6083..107aa70 100644
+index 2cf6083..d2a60dc 100644
 --- a/src/openrct2-ui/screensaver/Build.cpp
 +++ b/src/openrct2-ui/screensaver/Build.cpp
 @@ -112,49 +112,139 @@ namespace OpenRCT2::Ui::Screensaver::Build
@@ -218,6 +218,54 @@ index 2cf6083..107aa70 100644
      bool Start(const std::string& sequence, std::string& error)
      {
          if (!IsSequenceName(sequence))
+@@ -569,6 +673,20 @@ namespace OpenRCT2::Ui::Screensaver::Build
+             }
+             return (name.empty() ? u8string(fallback) : name) + extension;
+         }
++
++        // This game's executable, for the generator to convert RCT1 and RCT2 saves with (`openrct2 convert`);
++        // on Windows the console build beside it, as the GUI build writes no output to read.
++        std::string ConverterPath()
++        {
++            auto exe = Platform::GetCurrentExecutablePath();
++#ifdef _WIN32
++            auto com = fs::u8path(exe).replace_extension(".com");
++            std::error_code ec;
++            if (fs::is_regular_file(com, ec))
++                return com.u8string();
++#endif
++            return exe;
++        }
+     } // namespace
+ 
+     bool AddPark(const std::string& sequence, bool& cancelled, std::string& error)
+@@ -585,7 +703,7 @@ namespace OpenRCT2::Ui::Screensaver::Build
+         desc.Type = Ui::FileDialogType::open;
+         desc.Title = "Add a park to the playlist";
+         desc.InitialDirectory = ParkFolder();
+-        desc.Filters.emplace_back("Park or park download", "*.park;*.zip");
++        desc.Filters.emplace_back("Park, RCT save or park download", "*.park;*.zip;*.sv6;*.sc6;*.sv4;*.sc4");
+         u8string path;
+         try
+         {
+@@ -608,7 +726,7 @@ namespace OpenRCT2::Ui::Screensaver::Build
+             error = "Not a file: " + path;
+             return false;
+         }
+-        return StartTask("add", sequence, { "--live-add", sequence, "--park", path }, error);
++        return StartTask("add", sequence, { "--live-add", sequence, "--park", path, "--openrct2", ConverterPath() }, error);
+     }
+ 
+     bool NewPlaylist(bool& cancelled, std::string& error)
+@@ -639,7 +757,7 @@ namespace OpenRCT2::Ui::Screensaver::Build
+             return false;
+         }
+         ParkFolder() = path;
+-        return StartTask("new", "", { "--live-new", path }, error);
++        return StartTask("new", "", { "--live-new", path, "--openrct2", ConverterPath() }, error);
+     }
+ 
+     bool CopyPlaylist(const std::string& sequence, bool& cancelled, std::string& error)
 diff --git a/src/openrct2-ui/screensaver/Build.h b/src/openrct2-ui/screensaver/Build.h
 index a1741c3..77eb82b 100644
 --- a/src/openrct2-ui/screensaver/Build.h
@@ -330,3 +378,6 @@ index bb88d98..9d6af5b 100644
      return pluginFiles;
  }
  
+-- 
+2.43.0
+

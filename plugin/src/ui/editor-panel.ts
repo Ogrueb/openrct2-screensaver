@@ -7,8 +7,10 @@
 //   views (cut-ins, car cues, shows) in a list of their own, by when they play (owner, 2026-11-10);
 // - the toolbox, bottom left: Frame | Map, a hint, the view, camera and event tools, hold and pan, then
 //   undo, redo, Reset view, the pin (the panes stay shown) and Play; tooltips name each tool and its key;
-// - the top-right box: the park's restore points and the Playlist properties (motion, timing,
-//   presentation), folded to its header when the window is too narrow for it beside the views pane.
+// - the top-right box: the park's restore points and Settings (the playlist's or the park's, a switch between
+//   them; owner, 2026-11-14), folded to its header when the window is too narrow for it beside the views pane;
+// - the New playlist pane, top centre, opened by the playlist row's New button: the generation options (they
+//   matter only when a playlist is made), then the folder dialog.
 // Live editing (docs/screensaver-ui.md): a drag on the park moves the selected view, the wheel zooms it.
 
 import { builder, clock, ParkState, PlaylistInfo, readPlaylists } from "../builder";
@@ -21,6 +23,7 @@ import { saveOtherPlaylistProps } from "../storage";
 import { Layer, Rect, Scene, backing, bevel, button, contains, iconPath, iconPixels, label, measure, tooltip } from "./kit";
 import { CRAWL, EDITOR, THEME, TIMING, Z } from "./theme";
 import { ViewMap } from "./view-map";
+import { GEN_CHOICES, GEN_STEPS, GenStep, generationClick } from "./generation";
 
 const PAN_SHARE_STEP = 0.1;
 const HINT_FRAME = "Drag the park: moves the view. Wheel: zooms it.";
@@ -38,24 +41,6 @@ const CHOICES: Partial<Record<keyof PlaylistProps, Choice[]>> = {
         ["Unset", "keep", "Viewer's setting"]],
     titles: [["Overview", "overview", "First view"], ["On", "on", "Every view"],
         ["Off", "off", "No names"], ["Unset", null, "Viewer's setting"]],
-};
-
-/** The Generation section's choices (the settings page's labels), and its steppers' steps and ranges. */
-const GEN_CHOICES: Partial<Record<keyof Generation, Choice[]>> = {
-    motion: [["Pans", "pans", "Glide from view to view"], ["Static", "static", "Hold each view, then cut"]],
-    route: [["Circuit", "circuit", "Loop around the park"], ["Random", "random", "The generator's pick order, varying angle and zoom"]],
-    reverse: [["Off", false, "Orders as found"], ["On", true, "Each order reversed too"]],
-    ridePans: [["Include", "include", "Adds a pan along a ride's track"], ["Exclude", "exclude", "No ride pans"],
-        ["Only", "only", "Overview and ride pans only"]],
-    parkScripts: [["Off", false, "The parks' own scripts stay off"], ["On", true, "Run the parks' own scripts (companion plugins)"]],
-    parkViews: [["Off", false, "No views on scripted events"], ["On", true, "Views on the parks' scripted animations and shows"]],
-};
-type GenStep = "variants" | "parkMin" | "parkCap" | "timeScale";
-const GEN_STEPS: Record<GenStep, { step: number; min: number; max: number; text: (v: number) => string }> = {
-    variants: { step: 1, min: 1, max: 10, text: v => `${v}` },
-    parkMin: { step: 5, min: 0, max: 300, text: v => (v ? `${v} s` : "none") },
-    parkCap: { step: 5, min: 10, max: 300, text: v => `${v} s` },
-    timeScale: { step: 0.25, min: 0.5, max: 3, text: v => `× ${v.toFixed(2)}` },
 };
 
 /** The park settings (the views pane's settings button): the switches' choices, and the steppers' values. */
@@ -79,6 +64,12 @@ const PARK_STEPS: Record<ParkStep, { label: string; tip: string; text: (v: numbe
     panTolerance: { label: "Pan speed", tip: "How fast pans may move, px/s at zoom -2: lower is smoother but drops views", text: v => `${v}` },
     parkCap: { label: "Longest park", tip: "Longest time in the park: the lowest-scoring views drop to fit", text: v => `${v} s` },
 };
+const PARK_LABELS: Record<ParkSeg, string> = {
+    scripts: "Park scripts", companionPans: "Scripts in pans", events: "Event views", towers: "Tower views", rides: "Ride pans", returnPan: "Return pan",
+};
+/** The park settings the editor shows (the Settings foldout's Park group): those that apply to any views
+ *  (owner, 2026-11-14); the park's generation settings stay with the settings page. */
+const PARK_PLAYBACK: (keyof ParkValues)[] = ["scripts", "companionPans", "events", "returnPan", "panTolerance"];
 const LOCKED_TIP = "Set in the playlist's own entry for this park";
 
 /** A list that scrolls: its first row shown, and the thumb's drag. */
@@ -130,7 +121,7 @@ class Scroll {
 /** A row press that becomes a drag once the mouse moves (views or parks). */
 /** A row of the open park list. */
 type ParkItem = { kind: "park"; p: number } | { kind: "unused"; i: number } | { kind: "playlist"; i: number }
-    | { kind: "head"; text: string } | { kind: "add" } | { kind: "new" } | { kind: "copy" } | { kind: "build" } | { kind: "plbuttons" };
+    | { kind: "head"; text: string };
 
 interface RowDrag {
     list: "views" | "parks";
@@ -171,14 +162,16 @@ export class EditorPanel implements EditorView {
     private dropdown: { persistent: boolean; downAt: number } | undefined; // the park list
     private playlists: PlaylistInfo[] | undefined; // the open list is the playlist field's (read as it opens)
     private useNote: { text: string; at: number } | undefined; // why a tick did nothing, for a moment
+    private seenAdded = 0; // the last park Add park added that the editor went to (builder.added.at)
     private seenMade = 0; // the last playlist New or Duplicate made that the list was opened on (builder.made.at)
     // A playlist New just made, not built yet: the park list shows its parks to tick and order, and builds
     // it on Build and play (owner, 2026-11-13); gone when the list closes
     private draft: { sequence: string; source?: string; parks: { key: string; name: string }[]; props: PlaylistProps } | undefined;
     private picked: string | undefined; // the restore point highlighted
-    private propsOpen = true; // the Playlist properties unfolded
-    private genOpen = false; // and their Generation section
-    private settingsOpen = false; // the views pane shows the park's settings in place of its views
+    private setOpen = true; // the Settings foldout (top right) unfolded
+    private setGroup: "playlist" | "park" = "playlist"; // and which group it shows
+    private newGen: Generation | undefined; // the New playlist pane (top centre) open, with its generation choices
+    private madeGen: Generation | undefined; // the choices of the New playlist the dialog is making
     private clipShown = false; // a Copy/Paste note is on its button (it goes after a moment)
     private buildShown = ""; // the build pane's state as last drawn (buildSignature)
     private buildOpen: boolean | undefined; // the build pane unfolded by hand (undefined: when there is room)
@@ -341,8 +334,9 @@ export class EditorPanel implements EditorView {
     private pressed(inside: boolean): boolean {
         const ed = this.editor!;
         const hit = this.hit();
-        if (this.dropdown && (!hit || (!hit.startsWith("park.") && !hit.startsWith("parks.")))) {
-            // Another click closes the open list (a click on either field too); it does nothing else.
+        if (this.dropdown && (!hit || (!hit.startsWith("park.") && !hit.startsWith("parks.") && !(hit === "build" && this.draft) && hit !== "parkAdd"))) {
+            // Another click closes the open list (a click on either field too); it does nothing else (but
+            // Build and play builds a new playlist's parks as the list shows them).
             this.dropdown = undefined;
             return true;
         }
@@ -618,19 +612,12 @@ export class EditorPanel implements EditorView {
             }
             return;
         }
-        if (id.startsWith("gstep.")) {
-            const [, key, sign] = id.split(".");
-            const k = key as GenStep;
-            const g = e.playback.generation;
-            const st = GEN_STEPS[k];
-            let v = Math.round((g[k] + (sign === "more" ? st.step : -st.step)) * 100) / 100;
-            v = Math.max(st.min, Math.min(st.max, v));
-            // (the shortest park time stays under the longest, as on the settings page)
-            v = k === "parkMin" ? Math.min(v, g.parkCap - 5) : k === "parkCap" ? Math.max(v, g.parkMin + 5) : v;
-            if (v !== g[k]) {
-                e.playback.setGeneration(k, v);
+        if (this.newGen) {
+            const g = generationClick(this.newGen, id, "n");
+            if (g) {
+                this.newGen = g;
+                return;
             }
-            return;
         }
         if (id.startsWith("step.")) {
             const [, key, sign] = id.split(".");
@@ -667,10 +654,15 @@ export class EditorPanel implements EditorView {
             case "copy": e.copyViews(); break;
             case "paste": e.pasteViews(); break;
             case "boxHead": this.boxOpen = this.boxFolded(); break;
-            case "propsHead": this.propsOpen = !this.propsOpen; break;
-            case "genHead": this.genOpen = !this.genOpen; break;
-            case "parkSet": this.settingsOpen = !this.settingsOpen; break;
-            case "parkReset": e.playback.resetParkSettings(); break;
+            case "setHead": this.setOpen = !this.setOpen; break;
+            case "setGroup.0": this.setGroup = "playlist"; this.setOpen = true; break;
+            case "setGroup.1": this.setGroup = "park"; this.setOpen = true; break;
+            case "plNew": this.newGen = this.newGen ? undefined : { ...e.playback.generation }; break;
+            case "plCopy": this.messages.first = 0; builder.copyPlaylist(e.playback.sequenceName); break;
+            case "parkAdd": this.dropdown = undefined; this.messages.first = 0; builder.addPark(e.playback.sequenceName); break;
+            case "newCancel": this.newGen = undefined; break;
+            case "newGo": this.startNew(); break;
+            case "parkReset": e.playback.resetParkSettings(PARK_PLAYBACK); break;
             case "buildHead": this.buildOpen = this.buildFolded(); break;
             case "build": this.toggleBuild(); break;
             case "import": this.bundle("import"); break;
@@ -683,12 +675,24 @@ export class EditorPanel implements EditorView {
         const e = this.editor;
         if (builder.running) {
             builder.cancel();
+        } else if (this.draft && builder.available) {
+            this.buildDraft();
         } else if (e && builder.available && builder.pendingEdits(e.playback.installedAt)) {
             e.playback.savePlaylistProps(); // saved already; the build takes the live file
             this.messages.first = 0;
             builder.start(e.playback.sequenceName);
         }
         this.render();
+    }
+
+    /** The New playlist's first build (Build and play while its park list is open): its parks as ticked and
+     *  ordered, then played. */
+    private buildDraft(): void {
+        const name = this.draft!.sequence;
+        this.draft = undefined;
+        this.dropdown = undefined;
+        this.messages.first = 0;
+        builder.openPlaylist(name);
     }
 
     /** Import playlist or Export playlist: the system's file dialog (the game waits while it is open),
@@ -760,6 +764,9 @@ export class EditorPanel implements EditorView {
         this.viewsPane(e, scene);
         this.toolbox(e, scene);
         this.topRight(e, scene);
+        if (this.newGen) {
+            this.newPane(e, scene);
+        }
         this.buildPane(e, scene);
         // The tooltip of the button under the mouse: above it, or below near the window's top.
         const hover = this.hit();
@@ -793,24 +800,29 @@ export class EditorPanel implements EditorView {
         let y = s.y + s.pad;
         const t = s.titleHeight;
         // The playlist, a heading of its own over the park (owner, 2026-11-12)
-        const plField = this.place("plfield", { x: x0, y, width: inner, height: s.playlistHeight },
-            "The playlist: click to switch to another, make a new one or duplicate this one");
+        // New playlist and Duplicate, two icon buttons at the row's end (owner, 2026-11-14)
+        const plBtn = s.playlistHeight;
+        const plField = this.place("plfield", { x: x0, y, width: inner - 2 * (plBtn + s.gap), height: s.playlistHeight },
+            "The playlist: click to switch to another");
+        const parksOn = builder.parksAvailable;
+        const busy = builder.running;
+        const why = !parksOn ? (builder.available ? "needs the patched engine with these dialogs" : builder.unavailableReason) : busy ? `wait for the ${builder.noun} to finish` : "";
+        this.place("plNew", { x: x0 + inner - 2 * plBtn - s.gap, y, width: plBtn, height: s.playlistHeight },
+            why ? `New playlist: ${why}` : this.newGen ? "Close the New playlist pane" : "New playlist: pick how its views are made, then a folder of parks", !!why);
+        this.place("plCopy", { x: x0 + inner - plBtn, y, width: plBtn, height: s.playlistHeight },
+            why ? `Duplicate: ${why}` : "Duplicate this playlist: name a copy (with your edits); the copy plays at once", !!why);
         y += s.playlistHeight + s.gap;
         const order = e.playback.playOrder;
         const pos = order.indexOf(e.parkIndex);
         const many = order.length > 1;
         this.place("prevPark", { x: x0, y, width: t, height: t }, "Previous park", !many || e.playback.isLoading);
         // (no Close button: E and the bar's edit button close the editor; owner, 2026-11-12)
-        const nextX = x0 + inner - t;
+        // Add park, an icon button at the row's end like New playlist above (owner, 2026-11-14)
+        this.place("parkAdd", { x: x0 + inner - t, y, width: t, height: t }, why ? `Add park: ${why}`
+            : "Add park (.park, RCT save or download): added, built, then shown", !!why);
+        const nextX = x0 + inner - 2 * t - s.gap;
         this.place("nextPark", { x: nextX, y, width: t, height: t }, "Next park", !many || e.playback.isLoading);
-        const setX = nextX - s.gap - t;
-        const hasSettings = e.playback.parkSettings !== undefined;
-        this.place("parkSet", { x: setX, y, width: t, height: t }, !hasSettings ? "Park settings: build the playlist first"
-            : this.settingsOpen ? "Back to the park's views" : "Park settings: views, zoom, pans, scripts", !hasSettings);
-        if (!hasSettings) {
-            this.settingsOpen = false;
-        }
-        const field = this.place("field", { x: x0 + t + s.gap, y, width: setX - s.gap - (x0 + t + s.gap), height: t },
+        const field = this.place("field", { x: x0 + t + s.gap, y, width: nextX - s.gap - (x0 + t + s.gap), height: t },
             many ? "Hold: jump to a park. Click: reorder" : undefined);
         y += t + s.gap;
         // The views list: a header row, then up to visibleRows rows, a scroll bar past that.
@@ -836,7 +848,7 @@ export class EditorPanel implements EditorView {
         this.listRect = { x: x0, y, width: inner - bar, height: listH };
         this.views.layout({ x: x0 + inner - s.scrollBar, y: y + s.rowHeight, width: s.scrollBar, height: s.visibleRows * s.rowHeight }, route.length, s.visibleRows);
         let bottom = y + listH;
-        if (events.length && !this.settingsOpen) {
+        if (events.length) {
             const shown = Math.min(events.length, s.eventRows);
             const top = bottom + s.eventsGap + s.rowHeight; // under the list's title
             const ebar = events.length > s.eventRows ? s.scrollBar + 2 : 0;
@@ -854,6 +866,22 @@ export class EditorPanel implements EditorView {
         if (!this.dropdown) {
             this.draft = undefined;
         }
+        // A park Add park added, built and playing: the editor goes to it, and the playlist order opens
+        // scrolled to its row (owner, 2026-11-14)
+        const added = builder.added;
+        if (added && added.at !== this.seenAdded) {
+            const index = e.playback.parkIndexOf(added.key);
+            if (index >= 0) {
+                this.seenAdded = added.at;
+                if (index !== e.parkIndex) {
+                    e.goToPark(index);
+                }
+                this.playlists = undefined;
+                this.dropdown = { persistent: true, downAt: this.now() };
+                const row = e.playback.playOrder.indexOf(index);
+                this.parks.first = Math.max(0, row - Math.max(1, this.parkRows()) + 1);
+            }
+        }
         const made = builder.made;
         if (made && made.at !== this.seenMade) {
             this.seenMade = made.at;
@@ -861,7 +889,13 @@ export class EditorPanel implements EditorView {
             if (made.task === "new" && made.parks?.length) {
                 // Its parks, to tick and order before its first build
                 this.playlists = undefined;
-                this.draft = { sequence: made.sequence, source: made.playlist, parks: made.parks, props: {} };
+                // with the New playlist pane's generation choices, for its first build's bake
+                const props: PlaylistProps = this.madeGen ? { generation: this.madeGen } : {};
+                this.madeGen = undefined;
+                this.draft = { sequence: made.sequence, source: made.playlist, parks: made.parks, props };
+                if (props.generation) {
+                    saveOtherPlaylistProps(made.sequence, made.playlist, props);
+                }
                 this.parks.first = 0;
             } else {
                 this.playlists = readPlaylists();
@@ -891,7 +925,9 @@ export class EditorPanel implements EditorView {
         // Park row
         button(scene, "prevPark", this.boxes.get("prevPark")!, this.state("prevPark"), { icon: "prev-view", iconSize: s.toolIcon }, overlay);
         button(scene, "nextPark", this.boxes.get("nextPark")!, this.state("nextPark"), { icon: "next-view", iconSize: s.toolIcon }, overlay);
-        button(scene, "parkSet", this.boxes.get("parkSet")!, this.state("parkSet", this.settingsOpen), { icon: "settings", iconSize: s.toolIcon }, overlay);
+        button(scene, "plNew", this.boxes.get("plNew")!, this.state("plNew", !!this.newGen), { icon: "add", iconSize: s.toolIcon - 6 }, overlay);
+        button(scene, "plCopy", this.boxes.get("plCopy")!, this.state("plCopy"), { icon: "copy", iconSize: s.toolIcon - 6 }, overlay);
+        button(scene, "parkAdd", this.boxes.get("parkAdd")!, this.state("parkAdd"), { icon: "add", iconSize: s.toolIcon - 6 }, overlay);
         const fieldOpen = this.dropdown !== undefined && this.playlists === undefined;
         scene.set("field", { type: "rect", ...field, fill: fieldOpen ? THEME.faceDown : this.hit() === "field" ? THEME.faceHover : THEME.editorList, z: Z.face });
         bevel(scene, "field", field, THEME.bevelDark, THEME.bevelLight, THEME.bevel, Z.bevel);
@@ -908,11 +944,7 @@ export class EditorPanel implements EditorView {
         if (count) {
             label(scene, "text.count", count, { x: field.x + field.width - 6 - countW, y: field.y, width: 0, height: field.height }, s.textSize, overlay, true);
         }
-        if (this.settingsOpen) {
-            this.parkSettings(e, scene);
-        } else {
-            this.viewsList(e, scene, rows, route);
-        }
+        this.viewsList(e, scene, rows, route);
         if (this.eventsRect) {
             this.eventsList(e, scene, events);
         }
@@ -923,87 +955,193 @@ export class EditorPanel implements EditorView {
         }
     }
 
-    /** The park's settings in place of its views (the settings page's park switches and parameters): saved as
-     *  they change into the park's profile at the next build; in two columns, a header row with Reset. */
-    private parkSettings(e: Editor, scene: Scene): void {
+    /** Rows of labeled controls in columns (the gear panels and the Generation pane): a section header,
+     *  segmented buttons and steppers, `rowH` tall, each column filled from the top. */
+    private form(scene: Scene, cols: number[], colW: number, y0: number, rowH = 26) {
         const s = EDITOR;
         const overlay = this.mode.overlay;
-        const area = { ...this.listRect, width: this.paneViews.width - 2 * s.pad };
-        const v = e.playback.parkSettings!;
-        const built = e.playback.parkSettingsBuilt!;
-        const changed = e.playback.parkSettingsChanged;
-        const set = e.playback.parkSettingsSet;
-        const rowH = 26;
-        // Header: what the settings are and where they go, and Reset
-        this.sectionLabel(scene, "pset.head", "PARK SETTINGS", area.x, area.y + 5);
-        const resetW = 92;
-        const reset = this.place("parkReset", { x: area.x + area.width - resetW, y: area.y, width: resetW, height: s.segHeight },
-            "Back to the playlist's values (the park's profile changes go at the next build)", !built.adjusted.length && !changed);
-        button(scene, "parkReset", reset, this.state("parkReset"), { text: "Playlist's", textSize: 13 }, overlay);
-        const note = changed ? "changed · next build" : built.profile ? `profile ${built.profile}` : "the playlist's values";
-        const nw = measure(overlay, note, 12).width;
-        label(scene, "pset.note", note, { x: reset.x - 10 - nw, y: area.y, width: 0, height: s.segHeight }, 12, overlay);
-        scene.set("pset.note", { ...scene.get("pset.note")!, colour: changed ? THEME.pending : THEME.textDim });
-        const colW = Math.floor((area.width - 16) / 2);
-        const cols = [area.x, area.x + colW + 16];
-        const ys = [area.y + rowH + 4, area.y + rowH + 4];
-        const rowLabel = (c: number, key: keyof ParkValues, text: string) => {
-            const id = `pset.label.${key}`;
+        const ys = cols.map(() => y0);
+        const rowLabel = (c: number, id: string, text: string, colour?: string) => {
             label(scene, id, text, { x: cols[c], y: ys[c], width: 0, height: rowH }, 13, overlay);
-            const colour = built.locked.includes(key) ? THEME.textDim : key in set ? THEME.pending : undefined;
             if (colour) {
                 scene.set(id, { ...scene.get(id)!, colour });
             }
         };
-        const segments = (c: number, key: ParkSeg, text: string) => {
-            rowLabel(c, key, text);
-            const choices = PARK_CHOICES[key];
-            const widths = choices.map(([t]) => Math.ceil(measure(overlay, t, 12, true).width) + 16);
-            let sx = cols[c] + colW - widths.reduce((a, w) => a + w, 0) - s.gap * (choices.length - 1);
-            const sy = ys[c] + Math.round((rowH - 22) / 2);
-            const locked = built.locked.includes(key);
-            choices.forEach(([t, value, tip], i) => {
-                const id = `pseg.${key}.${i}`;
-                const r = this.place(id, { x: sx, y: sy, width: widths[i], height: 22 }, locked ? LOCKED_TIP : tip, locked);
-                button(scene, id, r, this.state(id, v[key] === value), { text: t, textSize: 12 }, overlay);
-                sx += widths[i] + s.gap;
-            });
-            ys[c] += rowH;
+        return {
+            ys,
+            section: (c: number, id: string, text: string) => {
+                this.sectionLabel(scene, id, text, cols[c], ys[c] + 6);
+                ys[c] += s.labelHeight + 10;
+            },
+            /** Segmented buttons, ids `${id}.${i}`; `disabled` with `tip` in place of each choice's. */
+            segments: (c: number, id: string, text: string, choices: Choice[], current: unknown,
+                o: { colour?: string; disabled?: boolean; tip?: string } = {}) => {
+                rowLabel(c, `${id}.label`, text, o.colour);
+                const widths = choices.map(([t]) => Math.ceil(measure(overlay, t, 12, true).width) + 16);
+                let sx = cols[c] + colW - widths.reduce((a, w) => a + w, 0) - s.gap * (choices.length - 1);
+                const sy = ys[c] + Math.round((rowH - 22) / 2);
+                choices.forEach(([t, value, tip], i) => {
+                    const bid = `${id}.${i}`;
+                    const r = this.place(bid, { x: sx, y: sy, width: widths[i], height: 22 }, o.tip ?? tip, o.disabled);
+                    button(scene, bid, r, this.state(bid, current === value), { text: t, textSize: 12 }, overlay);
+                    sx += widths[i] + s.gap;
+                });
+                ys[c] += rowH;
+            },
+            /** A stepper, ids `${id}.less` and `${id}.more`, its value text `${valueId}`. */
+            stepper: (c: number, id: string, valueId: string, text: string, value: string, tip: string,
+                o: { colour?: string; less?: boolean; more?: boolean; disabled?: boolean } = {}) => {
+                rowLabel(c, `${id}.label`, text, o.colour);
+                const w = 22;
+                const sy = ys[c] + Math.round((rowH - w) / 2);
+                const more = this.place(`${id}.more`, { x: cols[c] + colW - w, y: sy, width: w, height: w }, tip, o.disabled || o.more === false);
+                const box = { x: more.x - s.gap - 52, y: sy, width: 52, height: w };
+                const less = this.place(`${id}.less`, { x: box.x - s.gap - w, y: sy, width: w, height: w }, tip, o.disabled || o.less === false);
+                button(scene, `${id}.less`, less, this.state(`${id}.less`), { icon: "less", iconSize: 16 }, overlay);
+                button(scene, `${id}.more`, more, this.state(`${id}.more`), { icon: "add", iconSize: 16 }, overlay);
+                scene.set(`${valueId}.box`, { type: "rect", ...box, fill: THEME.editorList, z: Z.face });
+                label(scene, valueId, value, { x: box.x + box.width / 2, y: sy, width: 0, height: w }, 13, overlay);
+                scene.set(valueId, { ...scene.get(valueId)!, align: "center" });
+                ys[c] += rowH;
+            },
         };
-        const stepper = (c: number, key: ParkStep) => {
-            const st = PARK_STEPS[key];
-            rowLabel(c, key, st.label);
-            const w = 22;
-            const sy = ys[c] + Math.round((rowH - w) / 2);
+    }
+
+    /** The park's settings in the Settings foldout (owner, 2026-11-14): its scripts, event views, return pan
+     *  and pan speed; saved as they change into the park's profile at the next build. Returns the y below. */
+    private parkSettings(e: Editor, scene: Scene, x0: number, y: number, inner: number): number {
+        const s = EDITOR;
+        const overlay = this.mode.overlay;
+        const v = e.playback.parkSettings;
+        const built = e.playback.parkSettingsBuilt;
+        if (!v || !built) {
+            label(scene, "pset.note", "Build the playlist first: its parks' settings come with the build", { x: x0, y, width: 0, height: s.segHeight }, 13, overlay);
+            scene.set("pset.note", { ...scene.get("pset.note")!, colour: THEME.textDim });
+            return y + s.segHeight + 4;
+        }
+        const changed = e.playback.parkSettingsChangedIn(PARK_PLAYBACK);
+        const note = changed ? "changed · next build" : built.profile ? `profile ${built.profile}` : "the playlist's values";
+        const reset = this.place("parkReset", { x: x0 + inner - 92, y, width: 92, height: s.segHeight },
+            "Back to the playlist's values (the park's profile changes go at the next build)", !built.adjusted.some(k => PARK_PLAYBACK.includes(k)) && !changed);
+        button(scene, "parkReset", reset, this.state("parkReset"), { text: "Playlist's", textSize: 13 }, overlay);
+        const name = fit(overlay, (e.parkNames[e.parkIndex] ?? "").toUpperCase(), s.labelSize, inner - 230);
+        this.sectionLabel(scene, "pset.head", name, x0, y + 5);
+        const nw = measure(overlay, note, 12).width;
+        label(scene, "pset.note", note, { x: reset.x - 10 - nw, y, width: 0, height: s.segHeight }, 12, overlay);
+        scene.set("pset.note", { ...scene.get("pset.note")!, colour: changed ? THEME.pending : THEME.textDim });
+        const f = this.form(scene, [x0], inner, y + s.segHeight + 4, 26);
+        const set = e.playback.parkSettingsSet;
+        for (const key of PARK_PLAYBACK) {
             const locked = built.locked.includes(key);
-            const tip = locked ? LOCKED_TIP : st.tip;
-            const more = this.place(`pstep.${key}.more`, { x: cols[c] + colW - w, y: sy, width: w, height: w }, tip,
-                locked || parkStep(key, v, 1) === undefined);
-            const value = { x: more.x - s.gap - 52, y: sy, width: 52, height: w };
-            const less = this.place(`pstep.${key}.less`, { x: value.x - s.gap - w, y: sy, width: w, height: w }, tip,
-                locked || parkStep(key, v, -1) === undefined);
-            button(scene, `pstep.${key}.less`, less, this.state(`pstep.${key}.less`), { icon: "less", iconSize: 16 }, overlay);
-            button(scene, `pstep.${key}.more`, more, this.state(`pstep.${key}.more`), { icon: "add", iconSize: 16 }, overlay);
-            scene.set(`pstepv.${key}`, { type: "rect", ...value, fill: THEME.editorList, z: Z.face });
-            const vid = `pstept.${key}`;
-            label(scene, vid, st.text(v[key]), { x: value.x + value.width / 2, y: sy, width: 0, height: w }, 13, overlay);
-            scene.set(vid, { ...scene.get(vid)!, align: "center" });
-            ys[c] += rowH;
-        };
-        if (v.scripts !== undefined) {
-            segments(0, "scripts", "Park scripts");
-            if (v.scripts) {
-                segments(0, "companionPans", "Scripts in pans");
+            const colour = locked ? THEME.textDim : key in set ? THEME.pending : undefined;
+            if (key === "panTolerance") {
+                const st = PARK_STEPS.panTolerance;
+                f.stepper(0, "pstep.panTolerance", "pstept.panTolerance", st.label, st.text(v.panTolerance), locked ? LOCKED_TIP : st.tip,
+                    { colour, disabled: locked, less: parkStep("panTolerance", v, -1) !== undefined, more: parkStep("panTolerance", v, 1) !== undefined });
+                continue;
             }
+            const k = key as ParkSeg;
+            if (v[k] === undefined || k === "companionPans" && !v.scripts) {
+                continue; // (no scripts or event views in the park; scripts in pans only while they run)
+            }
+            f.segments(0, `pseg.${k}`, PARK_LABELS[k], PARK_CHOICES[k], v[k], { colour, disabled: locked, tip: locked ? LOCKED_TIP : undefined });
         }
-        if (v.events !== undefined) {
-            segments(0, "events", "Event views");
+        return f.ys[0];
+    }
+
+    /** The playlist's settings in the Settings foldout: motion feel, holds, titles and music, the parks'
+     *  scripts; saved as they change (owner, 2026-11-14). Returns the y below. */
+    private playlistSettings(e: Editor, scene: Scene, x0: number, y: number, inner: number): number {
+        const s = EDITOR;
+        const props = e.playback.playlistProps;
+        const g = e.playback.generation;
+        const f = this.form(scene, [x0], inner, y - 6, 25);
+        const hold = (key: "changeHold" | "arriveHold" | "returnHold", text: string, tip: string) =>
+            f.stepper(0, `step.${key}`, `stept.${key}`, text, `${props[key].toFixed(1)} s`, tip,
+                { less: props[key] > 0, more: props[key] < s.holdMax });
+        f.section(0, "sec.MOTION", "MOTION");
+        f.segments(0, "seg.inertia", "Inertia", CHOICES.inertia!, props.inertia);
+        f.segments(0, "seg.panChanges", "Angle and zoom change", CHOICES.panChanges!, props.panChanges);
+        if (props.panChanges !== "off") {
+            // Off: no pan turns or zooms, so these do not apply (owner, 2026-11-10).
+            hold("changeHold", "Change hold", "Pause after a turn or zoom");
+            hold("arriveHold", "Arrival hold", "Pause before a turn or zoom");
         }
-        segments(0, "towers", "Tower views");
-        segments(0, "rides", "Ride pans");
-        segments(0, "returnPan", "Return pan");
-        for (const key of ["count", "zoomMin", "zoomMax", "pan", "panTolerance", "parkCap"] as ParkStep[]) {
-            stepper(1, key);
+        hold("returnHold", "Return hold", "Pause at first view before next park");
+        f.section(0, "sec.PRESENTATION", "PRESENTATION");
+        f.segments(0, "seg.titleMusic", "Title music", CHOICES.titleMusic!, props.titleMusic);
+        f.segments(0, "seg.titles", "Show titles", CHOICES.titles!, props.titles);
+        const pending = (key: keyof Generation) => (e.playback.generationChangedKeys.includes(key) ? THEME.pending : undefined);
+        f.segments(0, "gseg.parkScripts", "Park scripts", GEN_CHOICES.parkScripts!, g.parkScripts, { colour: pending("parkScripts") });
+        if (g.parkScripts) {
+            f.segments(0, "gseg.parkViews", "Event views", GEN_CHOICES.parkViews!, g.parkViews, { colour: pending("parkViews") });
+        }
+        return f.ys[0];
+    }
+
+    /** The New playlist pane, top centre (owner, 2026-11-14): how the new playlist's views are made (the
+     *  generation options matter only when a playlist is made), then the folder dialog. */
+    private newPane(e: Editor, scene: Scene): void {
+        const s = EDITOR;
+        const overlay = this.mode.overlay;
+        const g = this.newGen!;
+        const width = s.boxWidth;
+        const left = s.x + s.width + s.x;
+        const right = this.boxFolded() ? ui.width - s.x : ui.width - s.x - s.boxWidth - s.x;
+        const x = Math.round(Math.max(left, (left + right - width) / 2));
+        const x0 = x + s.pad;
+        const inner = width - 2 * s.pad;
+        let y = s.y + s.pad;
+        label(scene, "new.title", "New playlist", { x: x0, y, width: 0, height: s.propHeader }, 16, overlay, true);
+        const tw = measure(overlay, "New playlist", 16, true).width;
+        label(scene, "new.sub", "how its views are made", { x: x0 + tw + 8, y: y + 1, width: 0, height: s.propHeader }, 13, overlay);
+        scene.set("new.sub", { ...scene.get("new.sub")!, colour: THEME.textDim });
+        y += s.propHeader;
+        const f = this.form(scene, [x0], inner, y - 4);
+        const segments = (key: keyof Generation, text: string) => f.segments(0, `nseg.${key}`, text, GEN_CHOICES[key]!, g[key]);
+        const stepper = (key: GenStep, text: string, tip: string) => {
+            const st = GEN_STEPS[key];
+            f.stepper(0, `nstep.${key}`, `nstept.${key}`, text, st.text(g[key]), tip, { less: g[key] > st.min, more: g[key] < st.max });
+        };
+        f.section(0, "sec.NEWGEN", "GENERATION");
+        segments("motion", "Motion");
+        segments("route", "View order");
+        if (g.route === "circuit") {
+            stepper("variants", "Variants", "Most orders per park, one per visit");
+            segments("reverse", "Include reverse");
+        }
+        if (g.motion === "pans") {
+            segments("ridePans", "Ride pans");
+        }
+        stepper("parkMin", "Shortest park", "Shortest time per park");
+        stepper("parkCap", "Longest park", "Longest time per park: the lowest-scoring views drop to fit");
+        stepper("timeScale", "Time scale", "Multiplies every generated hold and pan: above 1 is slower");
+        y = f.ys[0] + 8;
+        const half = Math.floor((inner - 4) / 2);
+        const off = !builder.parksAvailable || builder.running;
+        const go = this.place("newGo", { x: x0, y, width: half, height: s.boxButton },
+            off ? "New playlist: wait for the running task to finish" : "Pick a folder of parks: a playlist of them is made with these settings, its parks listed to tick and order", off);
+        button(scene, "newGo", go, this.state("newGo"), { icon: "add", iconSize: s.toolIcon, text: "Choose folder…", textSize: 14, left: true }, overlay);
+        const cancel = this.place("newCancel", { x: x0 + inner - half, y, width: half, height: s.boxButton }, "Close without making a playlist");
+        button(scene, "newCancel", cancel, this.state("newCancel"), { icon: "close", iconSize: s.toolIcon, text: "Cancel", textSize: 14, left: true }, overlay);
+        y += s.boxButton;
+        const frame = { x, y: s.y, width, height: y + s.pad - s.y };
+        this.frames.push(frame);
+        backing(scene, "new.frame", frame, THEME.editorBacking);
+    }
+
+    /** New playlist's Choose folder: the folder dialog, then the playlist made with the pane's choices
+     *  (saved with its draft for the first build's bake). */
+    private startNew(): void {
+        const chosen = this.newGen;
+        if (!chosen || !builder.parksAvailable || builder.running) {
+            return;
+        }
+        this.messages.first = 0;
+        builder.newPlaylist();
+        if (builder.running) {
+            this.madeGen = chosen;
+            this.newGen = undefined;
         }
     }
 
@@ -1126,17 +1264,18 @@ export class EditorPanel implements EditorView {
             return rows.map((_, p) => ({ kind: "park", p }));
         }
         if (this.playlists) {
-            // New and Duplicate side by side on top (owner, 2026-11-13), then the playlists
-            return [{ kind: "plbuttons" }, ...this.playlists.map((_, i) => ({ kind: "playlist", i }) as ParkItem)];
+            // (New and Duplicate are icon buttons on the playlist row since 2026-11-14)
+            return this.playlists.map((_, i) => ({ kind: "playlist", i }) as ParkItem);
         }
         if (this.draft) {
-            return [...rows.map((_, p) => ({ kind: "park", p }) as ParkItem), { kind: "build" }];
+            // (built by the Build pane's Build and play: owner, 2026-11-14)
+            return rows.map((_, p) => ({ kind: "park", p }) as ParkItem);
         }
         // (a left-out park ticked on joins the order above, to be placed before the build)
         const unused = e.playback.unusedParks.map((park, i) => ({ park, i })).filter(u => !u.park.on);
         return [...rows.map((_, p) => ({ kind: "park", p }) as ParkItem),
             ...(unused.length ? [{ kind: "head", text: "NOT IN THE BUILD" } as ParkItem] : []),
-            ...unused.map(u => ({ kind: "unused", i: u.i }) as ParkItem), { kind: "add" }];
+            ...unused.map(u => ({ kind: "unused", i: u.i }) as ParkItem)]; // (Add park: the park row's button since 2026-11-14)
     }
 
     /** A click on a row or button of the open park list (its id after "parks."). */
@@ -1158,12 +1297,6 @@ export class EditorPanel implements EditorView {
                 d.props = { ...d.props, use };
                 saveOtherPlaylistProps(d.sequence, d.source, d.props);
             }
-        } else if (what === "build" && this.draft) {
-            const name = this.draft.sequence;
-            this.draft = undefined;
-            this.dropdown = undefined;
-            this.messages.first = 0;
-            builder.openPlaylist(name);
         } else if (what.startsWith("tick.")) {
             const row = this.orderRows(e)[Number(what.slice(5))];
             const on = row ? (row.index >= 0 ? p.parkInUse(row.index) : true) : false;
@@ -1174,18 +1307,6 @@ export class EditorPanel implements EditorView {
             const park = p.unusedParks[Number(what.slice(7))];
             if (park) {
                 p.setParkUse(park.key, !park.on);
-            }
-        } else if (what === "add") {
-            this.dropdown = undefined;
-            this.messages.first = 0;
-            builder.addPark(p.sequenceName);
-        } else if (what === "new" || what === "copy") {
-            // (the list stays open: the new playlist shows in it once made, to pick; owner, 2026-11-12)
-            this.messages.first = 0;
-            if (what === "new") {
-                builder.newPlaylist();
-            } else {
-                builder.copyPlaylist(p.sequenceName);
             }
         } else if (what.startsWith("pl.")) {
             const other = this.playlists?.[Number(what.slice(3))];
@@ -1274,7 +1395,13 @@ export class EditorPanel implements EditorView {
                         : used ? "Playing: click to leave it out (it stays in the playlist)" : "Left out: click to play it again");
                     this.tickBox(scene, `ptick.${i}`, tick, used, this.hit() === `parks.tick.${p}`, z + 2);
                 }
-                const box = this.place(`park.${p}`, rowRect);
+                // Its orders (circuit_variants, circuit_reverse; owner, 2026-11-14): how many and how many reversed,
+                // and the row's tooltip says which plays when
+                const orders = waiting || this.draft ? undefined : e.playback.ordersOf(index);
+                const ordersTip = orders ? `${orders.count} view orders, one per visit${orders.reversed
+                    ? ` (${orders.reversed === orders.count - 1 && orders.count === 2 ? "the circuit and its reverse" : `${orders.reversed} reversed`})` : ""}: `
+                    + `order ${orders.order} ${orders.now ? "plays now" : "plays on its next visit"}` : undefined;
+                const box = this.place(`park.${p}`, rowRect, ordersTip);
                 // Held to jump, the park under the mouse is the one a release goes to: gold (owner, 2026-11-10).
                 const jump = !persistent && hover === `park.${p}`;
                 const fill = jump ? THEME.faceAltHover : index === e.parkIndex ? THEME.faceOn
@@ -1285,8 +1412,15 @@ export class EditorPanel implements EditorView {
                 }
                 const dim = used && (!waiting || this.draft) ? undefined : THEME.textDim;
                 text(`pn.${i}`, String(p + 1), box.x + s.grip + 4 + tickW, y, dim);
+                let ordersW = 0;
+                if (orders) {
+                    const t = `${orders.count} orders${orders.reversed ? ` (${orders.reversed} rev.)` : ""}`;
+                    ordersW = measure(overlay, t, s.textSize - 1).width + 12;
+                    label(scene, `pord.${i}`, t, { x: box.x + width - 8 - countW - ordersW, y, width: 0, height: s.parkRow }, s.textSize - 1, overlay);
+                    scene.set(`pord.${i}`, { ...scene.get(`pord.${i}`)!, z: z + 2, colour: THEME.textDim });
+                }
                 const name = row.name + (used ? "" : " (left out)");
-                text(`pname.${i}`, fit(overlay, name, s.textSize, width - s.grip - 40 - tickW - countW - 16), box.x + s.grip + 40 + tickW, y,
+                text(`pname.${i}`, fit(overlay, name, s.textSize, width - s.grip - 40 - tickW - countW - ordersW - 16), box.x + s.grip + 40 + tickW, y,
                     dim, index === e.parkIndex);
                 const n = waiting ? 0 : e.playback.viewCountOf(index);
                 const views = this.draft ? "" : waiting ? "needs a build" : `${n} view${n === 1 ? "" : "s"}`;
@@ -1324,30 +1458,6 @@ export class EditorPanel implements EditorView {
                 text(`pcount.${i}`, right, area.x + width - 8 - rw, y, pl.missing ? THEME.warning : fresh ? THEME.pending : THEME.textDim);
                 continue;
             }
-            if (item.kind === "plbuttons") {
-                const off = !parksOn || busy;
-                const why = !parksOn ? (builder.available ? "needs the patched engine with these dialogs" : builder.unavailableReason) : busy ? `wait for the ${builder.noun} to finish` : "";
-                const half = Math.floor((width - 12) / 2);
-                const pair: [string, string, string, string][] = [
-                    ["parks.new", "New playlist from a folder…", "Pick a folder of parks: a playlist of them is made, its parks listed to tick and order", "add"],
-                    ["parks.copy", "Duplicate this playlist…", "Name a copy of this playlist (with your edits); the copy plays at once", "copy"]];
-                pair.forEach(([id, text0, tip, icon], k) => {
-                    const box = this.place(id, { x: area.x + 4 + k * (half + 4), y: y + 2, width: half, height: s.parkRow - 4 },
-                        why ? `${text0.replace("…", "")}: ${why}` : tip, off);
-                    button(scene, id, box, this.state(id), { icon, iconSize: 16, text: fit(overlay, text0, s.textSize, half - 34, true), textSize: s.textSize, left: true }, overlay);
-                    lift(scene, id, z);
-                });
-                continue;
-            }
-            // The action rows: Add park; Build and play the new playlist
-            const [label0, tip, icon] = item.kind === "add" ? ["Add park…", "Pick a park file or download (.park, .zip); it is added and the playlist built", "add"]
-                : ["Build and play this playlist", "Build the new playlist with these parks, in this order, and play it", "build"];
-            const off = (item.kind === "build" ? !builder.available : !parksOn) || busy;
-            const why = !parksOn ? (builder.available ? "needs the patched engine with these dialogs" : builder.unavailableReason) : busy ? `wait for the ${builder.noun} to finish` : "";
-            const id = `parks.${item.kind}`;
-            const row = this.place(id, { x: area.x + 4, y: y + 2, width: width - 8, height: s.parkRow - 4 }, why ? `${label0.replace("…", "")}: ${why}` : tip, off);
-            button(scene, id, row, this.state(id), { icon, iconSize: 16, text: label0, textSize: s.textSize, left: true }, overlay);
-            lift(scene, id, z);
         }
         if (this.parks.track) {
             scene.set("parks.track", { type: "rect", ...this.parks.track, fill: THEME.editorList, z: z + 1 });
@@ -1562,22 +1672,29 @@ export class EditorPanel implements EditorView {
             }
         }
         y += s.boxButton + 10;
-        // Playlist properties, folded under their header.
-        const ph = this.place("propsHead", { x: x0, y, width: inner, height: s.propHeader }, this.propsOpen ? "Fold" : "Unfold");
-        scene.set("propsHead", { type: "rect", ...ph, fill: this.hit() === "propsHead" ? THEME.faceHover : "#00000000", z: Z.face });
-        bevel(scene, "propsHead", ph, THEME.backingLight, THEME.backingDark, THEME.bevel, Z.bevel);
-        foldMark(scene, "props.mark", this.propsOpen, x0 + 4, y + s.propHeader / 2, overlay);
-        label(scene, "props.title", "Playlist", { x: x0 + 24, y, width: 0, height: s.propHeader }, 16, overlay, true);
-        const tw = measure(overlay, "Playlist", 16, true).width;
-        label(scene, "props.sub", "properties", { x: x0 + 24 + tw + 8, y: y + 1, width: 0, height: s.propHeader }, 13, overlay);
-        scene.set("props.sub", { ...scene.get("props.sub")!, colour: THEME.textDim });
-        const subW = measure(overlay, "properties", 13).width;
-        const seq = fit(overlay, e.playback.sequenceName, 13, inner - 24 - tw - 8 - subW - 24);
-        const qw = measure(overlay, seq, 13).width;
-        label(scene, "props.name", seq, { x: x0 + inner - 8 - qw, y, width: 0, height: s.propHeader }, 13, overlay);
+        // Settings (owner, 2026-11-14): the playlist's or the park's, a switch between the two in the header;
+        // the generation options are in the New playlist pane, as they matter only when a playlist is made.
+        const groups: [string, string, string][] = [["Playlist", "playlist", "The playlist's settings"], ["Park", "park", "This park's settings, in every playlist that plays it"]];
+        const gw = groups.map(([t]) => Math.ceil(measure(overlay, t, 13, true).width) + 2 * s.segPad);
+        const gx0 = x0 + inner - 4 - gw.reduce((a, w) => a + w, 0) - s.gap;
+        // (the header folds left of the switch)
+        const ph = this.place("setHead", { x: x0, y, width: gx0 - 8 - x0, height: s.propHeader }, this.setOpen ? "Fold" : "Unfold");
+        const band = { x: x0, y, width: inner, height: s.propHeader };
+        scene.set("setHead", { type: "rect", ...band, fill: this.hit() === "setHead" ? THEME.faceHover : "#00000000", z: Z.face });
+        bevel(scene, "setHead", band, THEME.backingLight, THEME.backingDark, THEME.bevel, Z.bevel);
+        foldMark(scene, "set.mark", this.setOpen, ph.x + 4, y + s.propHeader / 2, overlay);
+        label(scene, "set.title", "Settings", { x: x0 + 24, y, width: 0, height: s.propHeader }, 16, overlay, true);
+        let gx = gx0;
+        const gy = y + Math.round((s.propHeader - s.segHeight) / 2);
+        groups.forEach(([t, key, tip], i) => {
+            const id = `setGroup.${i}`;
+            const r = this.place(id, { x: gx, y: gy, width: gw[i], height: s.segHeight }, tip);
+            button(scene, id, r, this.state(id, this.setGroup === key), { text: t, textSize: 13 }, overlay);
+            gx += gw[i] + s.gap;
+        });
         y += s.propHeader + 4;
-        if (this.propsOpen) {
-            y = this.properties(e, scene, x0, y, inner);
+        if (this.setOpen) {
+            y = (this.setGroup === "park" ? this.parkSettings(e, scene, x0, y, inner) : this.playlistSettings(e, scene, x0, y, inner)) + 4;
         }
         const frame = { x: x0 - s.pad, y: top, width, height: y - top + s.pad - 6 };
         this.frames.push(frame);
@@ -1696,7 +1813,8 @@ export class EditorPanel implements EditorView {
         y += squareH + 8;
         // Build and play, or Cancel build while one runs.
         const unavailable = line.phase === "unavailable";
-        const nothing = !running && !unavailable && !builder.pendingEdits(e.playback.installedAt);
+        const draft = !!this.draft && !running;
+        const nothing = !running && !unavailable && !draft && !builder.pendingEdits(e.playback.installedAt);
         const task = builder.runningTask;
         const build = this.place("build", { x: x0, y, width: inner, height: s.buildButton },
             unavailable ? line.text : task === "export" ? "Stop the export (Ctrl+B)"
@@ -1704,6 +1822,7 @@ export class EditorPanel implements EditorView {
                 : task === "new" || task === "copy" || task === "open" ? `Stop the ${builder.noun}; the playlist plays on as it was (Ctrl+B)`
                 : task === "add" ? "Stop adding the park; the playlist plays on as it was (Ctrl+B)"
                 : running ? "Stop the build; the playlist plays on as it was (Ctrl+B)"
+                : draft ? "Build the new playlist with its parks as ticked and ordered, then play it (Ctrl+B)"
                 : nothing ? "Nothing to build: the playlist files hold every edit"
                 : "Save your live edits to the playlist and build it in the background, then play it (Ctrl+B)", unavailable || nothing);
         const st = this.state("build");
@@ -1799,7 +1918,8 @@ export class EditorPanel implements EditorView {
         parks.forEach((p, i) => {
             const r = { x: Math.round(x0 + i * (w + gap)), y, width: Math.max(1, Math.round(w)), height };
             const what = p.state === "missing" ? "file missing" : p.state === "failed" ? "failed" : p.state === "building" ? "building"
-                : p.state === "pending" ? "waiting" : `${p.state === "cached" ? "unchanged" : "built"}${p.warnings ? `, ${p.warnings} warning${p.warnings > 1 ? "s" : ""}` : ""}`;
+                : p.state === "pending" ? "waiting" : `${p.state === "cached" ? "unchanged" : "built"}${p.warnings ? `, ${p.warnings} warning${p.warnings > 1 ? "s" : ""}` : ""}`
+                + (p.restart ? "; restart the game to load what was installed for it, then build again" : "");
             const name = (p.key && builder.nameOf?.(p.key)) || p.name || `Park ${i + 1}`;
             this.place(`sq.${i}`, r, `${name}: ${p.stale ? "edited, needs a build" : what}`);
             // A park with edits since the last build: its colour dimmed until the build reaches it
@@ -1833,132 +1953,6 @@ export class EditorPanel implements EditorView {
     }
 
     /** Motion, timing and presentation; returns the y below them. */
-    private properties(e: Editor, scene: Scene, x0: number, y: number, inner: number): number {
-        const s = EDITOR;
-        const overlay = this.mode.overlay;
-        const props = e.playback.playlistProps;
-        const section = (name: string) => {
-            this.sectionLabel(scene, `sec.${name}`, name, x0, y);
-            y += s.labelHeight + 3;
-        };
-        const rowLabel = (key: string, text: string) =>
-            label(scene, `prop.${key}`, text, { x: x0, y, width: 0, height: s.propRow }, s.textSize, overlay);
-        const segments = (key: keyof PlaylistProps, text: string) => {
-            rowLabel(key, text);
-            const choices = CHOICES[key]!;
-            const widths = choices.map(([t]) => Math.ceil(measure(overlay, t, 13, true).width) + 2 * s.segPad);
-            let sx = x0 + inner - widths.reduce((a, w) => a + w, 0) - s.gap * (choices.length - 1);
-            const sy = y + Math.round((s.propRow - s.segHeight) / 2);
-            choices.forEach(([t, value, tip], i) => {
-                const id = `seg.${key}.${i}`;
-                const r = this.place(id, { x: sx, y: sy, width: widths[i], height: s.segHeight }, tip);
-                button(scene, id, r, this.state(id, props[key as keyof typeof props] === value), { text: t, textSize: 13 }, overlay);
-                sx += widths[i] + s.gap;
-            });
-            y += s.propRow;
-        };
-        const stepper = (key: "changeHold" | "arriveHold" | "returnHold", text: string, tip: string) => {
-            rowLabel(key, text);
-            const w = s.stepButton;
-            const sy = y + Math.round((s.propRow - w) / 2);
-            const right = x0 + inner;
-            const more = this.place(`step.${key}.more`, { x: right - w, y: sy, width: w, height: w }, tip);
-            const value = { x: more.x - s.gap - s.stepValueBox, y: sy, width: s.stepValueBox, height: w };
-            const less = this.place(`step.${key}.less`, { x: value.x - s.gap - w, y: sy, width: w, height: w }, tip);
-            button(scene, `step.${key}.less`, less, this.state(`step.${key}.less`), { icon: "less", iconSize: 16 }, overlay);
-            button(scene, `step.${key}.more`, more, this.state(`step.${key}.more`), { icon: "add", iconSize: 16 }, overlay);
-            scene.set(`stepv.${key}`, { type: "rect", ...value, fill: THEME.editorList, z: Z.face });
-            const vid = `stept.${key}`;
-            label(scene, vid, `${props[key].toFixed(1)} s`, { x: value.x + value.width / 2, y: sy, width: 0, height: w }, 13, overlay);
-            scene.set(vid, { ...scene.get(vid)!, align: "center" });
-            y += s.propRow;
-        };
-        section("MOTION");
-        segments("inertia", "Inertia");
-        segments("panChanges", "Angle and zoom change");
-        section("TIMING");
-        if (props.panChanges !== "off") {
-            // Off: no pan turns or zooms, so these do not apply (owner, 2026-11-10).
-            stepper("changeHold", "Change hold", "Pause after a turn or zoom");
-            stepper("arriveHold", "Arrival hold", "Pause before a turn or zoom");
-        }
-        stepper("returnHold", "Return hold", "Pause at first view before next park");
-        section("PRESENTATION");
-        segments("titleMusic", "Title music");
-        segments("titles", "Show titles");
-        return this.generation(e, scene, x0, y + 4, inner) + 6;
-    }
-
-    /** The playlist-wide generator options, folded under their header: saved as they change, they take
-     *  effect at the next build (the Build pane shows "edits not built"); returns the y below them. */
-    private generation(e: Editor, scene: Scene, x0: number, y: number, inner: number): number {
-        const s = EDITOR;
-        const overlay = this.mode.overlay;
-        const g = e.playback.generation;
-        const changed = e.playback.generationChanged;
-        const head = this.place("genHead", { x: x0, y, width: inner, height: s.labelHeight + 6 },
-            this.genOpen ? "Fold" : "How the next build makes the views");
-        scene.set("genHead", { type: "rect", ...head, fill: this.hit() === "genHead" ? THEME.faceHover : "#00000000", z: Z.face });
-        foldMark(scene, "gen.mark", this.genOpen, x0, y + head.height / 2, overlay);
-        this.sectionLabel(scene, "sec.GENERATION", "GENERATION", x0 + 20, y + 3);
-        const note = changed ? "changed · next build" : "at the next build";
-        const nw = measure(overlay, note, 12).width;
-        label(scene, "gen.note", note, { x: x0 + inner - nw, y: y + 3, width: 0, height: s.labelHeight }, 12, overlay);
-        scene.set("gen.note", { ...scene.get("gen.note")!, colour: changed ? THEME.pending : THEME.textDim });
-        y += head.height + 3;
-        if (!this.genOpen) {
-            return y;
-        }
-        const rowLabel = (key: string, text: string) =>
-            label(scene, `gprop.${key}`, text, { x: x0, y, width: 0, height: s.propRow }, s.textSize, overlay);
-        const segments = (key: keyof Generation, text: string) => {
-            rowLabel(key, text);
-            const choices = GEN_CHOICES[key]!;
-            const widths = choices.map(([t]) => Math.ceil(measure(overlay, t, 13, true).width) + 2 * s.segPad);
-            let sx = x0 + inner - widths.reduce((a, w) => a + w, 0) - s.gap * (choices.length - 1);
-            const sy = y + Math.round((s.propRow - s.segHeight) / 2);
-            choices.forEach(([t, value, tip], i) => {
-                const id = `gseg.${key}.${i}`;
-                const r = this.place(id, { x: sx, y: sy, width: widths[i], height: s.segHeight }, tip);
-                button(scene, id, r, this.state(id, g[key] === value), { text: t, textSize: 13 }, overlay);
-                sx += widths[i] + s.gap;
-            });
-            y += s.propRow;
-        };
-        const stepper = (key: GenStep, text: string, tip: string) => {
-            rowLabel(key, text);
-            const st = GEN_STEPS[key];
-            const w = s.stepButton;
-            const sy = y + Math.round((s.propRow - w) / 2);
-            const more = this.place(`gstep.${key}.more`, { x: x0 + inner - w, y: sy, width: w, height: w }, tip, g[key] >= st.max);
-            const value = { x: more.x - s.gap - s.stepValueBox, y: sy, width: s.stepValueBox, height: w };
-            const less = this.place(`gstep.${key}.less`, { x: value.x - s.gap - w, y: sy, width: w, height: w }, tip, g[key] <= st.min);
-            button(scene, `gstep.${key}.less`, less, this.state(`gstep.${key}.less`), { icon: "less", iconSize: 16 }, overlay);
-            button(scene, `gstep.${key}.more`, more, this.state(`gstep.${key}.more`), { icon: "add", iconSize: 16 }, overlay);
-            scene.set(`gstepv.${key}`, { type: "rect", ...value, fill: THEME.editorList, z: Z.face });
-            const vid = `gstept.${key}`;
-            label(scene, vid, st.text(g[key]), { x: value.x + value.width / 2, y: sy, width: 0, height: w }, 13, overlay);
-            scene.set(vid, { ...scene.get(vid)!, align: "center" });
-            y += s.propRow;
-        };
-        segments("motion", "Motion");
-        segments("route", "View order");
-        if (g.route === "circuit") {
-            stepper("variants", "Variants", "Most orders per park, one per visit");
-            segments("reverse", "Include reverse");
-        }
-        if (g.motion === "pans") {
-            segments("ridePans", "Ride pans");
-        }
-        stepper("parkMin", "Shortest park", "Shortest time per park");
-        stepper("parkCap", "Longest park", "Longest time per park: the lowest-scoring views drop to fit");
-        stepper("timeScale", "Time scale", "Multiplies every hold and pan: above 1 is slower");
-        segments("parkScripts", "Park scripts");
-        if (g.parkScripts) {
-            segments("parkViews", "Event views");
-        }
-        return y;
-    }
 }
 
 /** An open (pointing down) or folded (pointing right) mark, its left edge at x, centred on cy. */

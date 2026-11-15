@@ -27,8 +27,10 @@ const parkValues = { towers: true, rides: true, count: 8, zoomMin: -2, zoomMax: 
     returnPan: true, companionPans: "run" };
 playlist.parkDefaults = { ...parkValues, scripts: true, events: true };
 playlist.parks.forEach((p, i) => {
-    p.settings = { ...parkValues, ...(i === 1 ? { count: 6, scripts: true } : {}), profile: i === 1 ? "p1" : null, savedName: `Park ${i}`,
-        mapSize: [64, 64], adjusted: i === 1 ? ["count"] : [], locked: i === 1 ? ["parkCap"] : [] };
+    // (the third park the same, for the Generation pane once the second's views are set by hand)
+    const p1 = i === 1 || i === 2;
+    p.settings = { ...parkValues, ...(p1 ? { count: 6, scripts: true } : {}), profile: p1 ? "p1" : null, savedName: `Park ${i}`,
+        mapSize: [64, 64], adjusted: p1 ? ["count"] : [], locked: p1 ? ["parkCap"] : [] };
 });
 const store = { RCTScreensaver: { playlist, settings: { fadeMs: 0, titleMusic: "ride", window: "windowed" } } };
 const lookup = key => key.split(".").reduce((o, k) => (o == null ? undefined : o[k]), store);
@@ -281,11 +283,11 @@ assert.ok(scene.get("rcts.bar.titles.icon").src.includes("titles-off"), "on -> o
     assert.equal(ed("redo").fill, "#2a2e2c80", "an inactive tool is flat and gray (nothing to redo)");
     assert.equal(ed("redo.icon").opacity, 0.35, "its icon dimmed");
     assert.equal(ed("update").fill, "#2a2e2c80", "Set to camera waits for the map: in Frame mode the view follows the camera");
-    assert.ok(ed("box.mark").src.includes("/fold-open-") && ed("props.mark").src.includes("/fold-open-"), "fold marks are icons");
+    assert.ok(ed("box.mark").src.includes("/fold-open-") && ed("set.mark").src.includes("/fold-open-"), "fold marks are icons");
     {
         const sg = ed("seg.inertia.1");
         mouse("move", sg.x + 3, sg.y + 3);
-        assert.equal(ed("tip.text").text, "Eased pans", "the playlist's buttons have tooltips");
+        assert.equal(ed("tip.text").text, "Eased pans", "the settings' buttons have tooltips");
         mouse("move", 1200, 650);
     }
     dump("editor");
@@ -649,6 +651,21 @@ assert.ok(scene.get("rcts.bar.titles.icon").src.includes("titles-off"), "on -> o
         assert.equal(ed("parks.head").text, "Playlist order", "as the playlist's order");
         dump("parks");
         assert.ok(ed("pname.1").text.length > 0 && ed("pcount.0").text.endsWith("views"), "names and view counts");
+        {
+            // A park with alternative orders (circuit_variants, circuit_reverse) shows them on its row
+            const parks = store.RCTScreensaver.playlist.parks;
+            const row = [0, 1, 2].find(i => ed(`pname.${i}`).text === (parks[2].name ?? ""));
+            parks[2].variants = [{ views: parks[2].views }, { views: parks[2].views, reverse: true }];
+            mouse("move", fx, fy + 200); tick();
+            const at = row ?? 2;
+            if (ed(`pord.${at}`)) {
+                assert.equal(ed(`pord.${at}`).text, "3 orders (1 rev.)", "its orders, reversed ones counted");
+                dump("parks-orders");
+            } else {
+                console.log("note: the player holds its own copy of the playlist; orders not shown");
+            }
+            delete parks[2].variants;
+        }
         // Drag the first park below the third: the order changes, saved at once.
         const p0 = ed("park.0"), p2 = ed("park.2");
         mouse("move", p0.x + 6, p0.y + 8); mouse("down", p0.x + 6, p0.y + 8);
@@ -710,9 +727,11 @@ assert.ok(scene.get("rcts.bar.titles.icon").src.includes("titles-off"), "on -> o
         assert.ok(ed("points.thumb"), "the list scrolls past three and a half rows");
         dump("points");
     }
-    // Playlist properties: applied and saved at once; Off hides the change and arrival holds.
+    // Settings, top right (owner, 2026-11-14): the playlist's or the park's, a switch between them; applied and
+    // saved at once. Off hides the change and arrival holds.
     {
-        assert.equal(ed("save"), undefined, "no Save button: the properties save as they change");
+        assert.equal(ed("save"), undefined, "no Save button: the settings save as they change");
+        assert.equal(ed("setGroup.0").fill, "#3d7a50b3", "the playlist's settings first");
         assert.ok(ed("step.changeHold.less"), "the change hold shows");
         edClick("seg.panChanges.0");
         assert.equal(ed("step.changeHold.less"), undefined, "Angle and zoom change Off hides the change hold");
@@ -731,73 +750,54 @@ assert.ok(scene.get("rcts.bar.titles.icon").src.includes("titles-off"), "on -> o
         assert.equal(props.titleMusic, "theme");
         assert.equal(props.titles, null, "Unset titles saved as null");
         assert.equal(props.order.length, 3, "the park order kept");
-        edClick("propsHead");
-        assert.equal(ed("seg.inertia.0"), undefined, "the Playlist header folds the properties");
-        edClick("propsHead");
+        edClick("setHead");
+        assert.equal(ed("seg.inertia.0"), undefined, "the Settings header folds them");
+        edClick("setHead");
         edClick("seg.panChanges.2");
         assert.equal(saved["RCTScreensaver.playlistProps"][playlist.sequence].panChanges, "end", "saved at once");
-    }
-    // Park settings: the settings button shows them in place of the views; saved as they change, for the next
-    // build's bake into the park's profile.
-    {
-        assert.ok(ed("parkSet"), "the park row has the settings button");
-        edClick("parkSet");
-        assert.ok(ed("pset.head"), "the settings show in place of the views");
-        const park = playlist.parks.find(p => p.name === ed("text.park").text);
-        assert.equal(park.settings.profile, "p1", "(the second park, as the editor opened on it)");
-        const parks = () => saved["RCTScreensaver.playlistProps"][playlist.sequence].parks;
-        assert.equal(ed("pstept.count").text, "6");
-        assert.equal(ed("pset.note").text, "profile p1");
-        assert.ok(ed("pseg.scripts.1"), "a park with scripts has the switch");
-        assert.equal(ed("pseg.events.0"), undefined, "one without event views has none");
-        edClick("pstep.count.more");
-        assert.equal(parks()[park.key].set.count, 7, "saved at once");
-        assert.equal(parks()[park.key].savedName, "Park 1", "with how the profile finds the park");
-        assert.equal(ed("pset.note").text, "changed · next build");
-        edClick("pseg.towers.0");
-        assert.equal(parks()[park.key].set.towers, false);
-        edClick("pstep.pan.more");
-        assert.equal(ed("pstept.pan").text, "0%", "the pan share steps from auto to 0%");
-        edClick("pstep.parkCap.more");
-        assert.equal(parks()[park.key].set.parkCap, undefined, "the playlist's own entry sets the park cap: locked");
-        for (const id of ["pstep.pan.less", "pseg.towers.1", "pstep.count.less"]) edClick(id);
-        assert.equal(parks(), undefined, "back at the build's values, nothing is changed");
-        edClick("parkReset");
-        assert.equal(JSON.stringify(parks()[park.key].set), '{"count":null}', "Playlist's: the profile's keys go");
-        assert.equal(ed("pstept.count").text, "8", "showing the playlist's value");
-        edClick("pstep.count.less");
-        edClick("pstep.count.less");
-        assert.equal(parks(), undefined, "back at the profile's value: no change");
-        edClick("parkSet");
-        assert.equal(ed("pset.head"), undefined, "the button brings the views back");
-        assert.ok(ed("cell.0.1"), "and the views list");
-    }
-    // Generation: folded under its header; saved as it changes, for the next build.
-    {
-        assert.equal(ed("gseg.motion.0"), undefined, "Generation starts folded");
-        assert.equal(ed("gen.note").text, "at the next build");
-        edClick("genHead");
-        assert.ok(ed("gseg.motion.0"), "its header unfolds it");
-        assert.ok(ed("gstep.variants.less"), "a circuit shows its variants");
-        edClick("gseg.route.1");
+        // The parks' scripts, saved for the next build
         const gen = () => saved["RCTScreensaver.playlistProps"][playlist.sequence].generation;
-        assert.equal(gen().route, "random", "saved at once");
-        assert.equal(ed("gstep.variants.less"), undefined, "Random has no variants");
-        assert.equal(ed("gen.note").text, "changed · next build");
-        edClick("gstep.timeScale.more");
-        assert.equal(ed("gstept.timeScale").text, "× 1.25");
-        assert.equal(gen().timeScale, 1.25);
-        edClick("gstep.parkMin.less");
-        assert.equal(gen().parkMin, 25);
         assert.ok(ed("gseg.parkViews.0"), "event views show while park scripts run");
         edClick("gseg.parkScripts.0");
         assert.equal(ed("gseg.parkViews.0"), undefined, "and hide when they do not");
         assert.equal(gen().parkScripts, false);
-        for (const id of ["gseg.route.0", "gstep.timeScale.less", "gstep.parkMin.more", "gseg.parkScripts.1"]) edClick(id);
-        assert.equal(gen(), undefined, "back at the build's values, nothing is changed");
-        assert.equal(ed("gen.note").text, "at the next build");
-        edClick("genHead");
-        assert.equal(ed("gseg.motion.0"), undefined, "and folds again");
+        edClick("gseg.parkScripts.1");
+        assert.equal(gen(), undefined, "back at the build's value, nothing is changed");
+        assert.equal(ed("gseg.motion.0"), undefined, "no generation options: those are New playlist's");
+        dump("settings-playlist");
+    }
+    // The park's settings: the switch's other side; saved as they change, for the next build's bake into the
+    // park's profile.
+    {
+        edClick("setGroup.1");
+        assert.ok(ed("pset.head") && !ed("seg.inertia.0"), "the park's settings in the playlist's place");
+        const park = playlist.parks.find(p => p.name === ed("text.park").text);
+        assert.equal(park.settings.profile, "p1", "(the second park, as the editor opened on it)");
+        const parks = () => saved["RCTScreensaver.playlistProps"][playlist.sequence].parks;
+        assert.equal(ed("pset.note").text, "profile p1");
+        assert.ok(ed("pseg.scripts.1"), "a park with scripts has the switch");
+        assert.equal(ed("pseg.events.0"), undefined, "one without event views has none");
+        assert.ok(ed("pstep.panTolerance.more") && ed("pseg.returnPan.0"), "pan speed and return pan");
+        assert.ok(!ed("pseg.towers.0") && !ed("pstep.count.more"), "no generation settings");
+        dump("settings-park");
+        edClick("pseg.returnPan.0");
+        assert.equal(parks()[park.key].set.returnPan, false, "saved at once");
+        assert.equal(parks()[park.key].savedName, "Park 1", "with how the profile finds the park");
+        assert.equal(ed("pset.note").text, "changed · next build");
+        edClick("pstep.panTolerance.less");
+        assert.equal(parks()[park.key].set.panTolerance, 450);
+        edClick("parkReset");
+        assert.equal(parks(), undefined, "Playlist's: back at the build's values");
+        assert.equal(ed("parkReset").fill, "#2a2e2c80", "nothing of these the profile sets (its count is generation's)");
+        edClick("setGroup.0");
+        assert.ok(ed("seg.inertia.0"), "and back to the playlist's");
+    }
+    // New playlist and Duplicate: icon buttons at the playlist row's end; New opens a pane top centre with the
+    // generation options (they matter only when a playlist is made).
+    {
+        assert.ok(ed("plNew").y === ed("plfield").y && ed("plCopy").x > ed("plNew").x && ed("plNew").x > ed("plfield").x + ed("plfield").width,
+            "New and Duplicate at the playlist row's end");
+        assert.equal(ed("plNew").fill, "#2a2e2c80", "inactive without the engine's dialogs");
     }
     // The pin: off, the panes hide once the mouse rests; a move brings them back.
     {
@@ -1236,7 +1236,8 @@ console.log("ok: Import and Export playlist through the file dialogs");
     edClick("field"); tick();
     assert.equal(scene.get("rcts.ed.parks.head").text, "Playlist order");
     assert.ok(ed("ptick.0") && ed("ptick.0.check"), "every park has a tick, on");
-    assert.equal(ed("parks.add").fill, gray, "Add park is inactive on an engine without the dialogs");
+    assert.equal(ed("parkAdd").fill, gray, "Add park is inactive on an engine without the dialogs");
+    assert.equal(ed("parks.add"), undefined, "Add park is the park row's button, not a row of the list");
     // Tick the second park in the order off: saved at once, shown left out, skipped in play.
     edClick("ptick.1"); tick();
     const use = saved["RCTScreensaver.playlistProps"][playlist.sequence].use;
@@ -1298,12 +1299,16 @@ console.log("ok: Import and Export playlist through the file dialogs");
     shortcuts["rctscreensaver.edit"]();
     tick(2);
     edClick("field"); tick();
-    assert.notEqual(ed("parks.add").fill, gray, "with them, Add park is active");
-    edClick("parks.add"); tick(2);
+    assert.notEqual(ed("parkAdd").fill, gray, "with them, Add park is active");
+    assert.ok(ed("parkAdd").x > ed("nextPark").x && Math.abs(ed("parkAdd").y - ed("nextPark").y) < 2, "at the park row's end");
+    edClick("parkAdd"); tick(2);
     assert.deepEqual(mode.added, [playlist.sequence], "Add park asks the engine for the playing playlist");
     assert.ok(!ed("parks"), "the list closes");
     assert.equal(ed("build.state").text, "adding the park");
     assert.equal(scene.get("rcts.ed.build.text")?.text, "Cancel park");
+    // The squares react at once (owner, 2026-11-14): the park being added gets one, lit
+    assert.equal(ed("sq.3")?.fill, "#6fcf8a", "an empty square, lit, for the park being added");
+    assert.notEqual(ed("sq.0").fill, "#6fcf8a", "the playlist's own squares as they were");
     mode.files.set("task-add.json", JSON.stringify({ taskVersion: 1, task: "add", started: now, ok: false, finished: now,
         sequence: playlist.sequence, error: "a.park is in the playlist already",
         messages: [{ level: "error", text: "Adding the park failed: a.park is in the playlist already" }] }));
@@ -1311,6 +1316,47 @@ console.log("ok: Import and Export playlist through the file dialogs");
     tick(6);
     assert.equal(ed("build.state").text, "failed");
     assert.match(ed("msgt.0").text, /^Adding the park failed: a.park/, "the generator's reason");
+    {
+        // Added and built: the new park's square stays empty until the build reaches it, and the add's
+        // warnings go on top (a restart for objects installed since the game started; one about objects
+        // installed before it is left out)
+        edClick("parkAdd"); tick(2);
+        const keys = playlist.parks.map(p => p.key ?? p.fileName);
+        const addFile = "build-" + playlist.sequence.replace(/[^A-Za-z0-9._-]/g, "_") + ".json";
+        mode.files.set("task-add.json", JSON.stringify({ taskVersion: 1, task: "add", started: now, ok: true, finished: now,
+            sequence: playlist.sequence, playlist: "C:/x/mini.toml", park: keys[1], messages: [
+                { level: "info", text: "Star: converted from SV6" },
+                { level: "warn", text: "Restart the game to load its objects (installed in your object folder at 2026-11-14 10:00), then build again", installed: -1, park: "star.park" }, // (before the mock clock started)
+                { level: "warn", text: "Restart the game to load the objects just installed in your object folder, then build again", park: "star.park" },
+                { level: "ok", text: "Added star.park to mini.toml" }] }));
+        mode.files.set(addFile, JSON.stringify({ buildVersion: 1, sequence: playlist.sequence, started: Date.now(), ok: null, park: 1, parks: 4,
+            parkName: "A", parkStates: [{ key: keys[0], name: "A", state: "building" }, { key: keys[1], state: "pending" },
+                { key: keys[2], state: "pending" }, { key: "star.park", name: "Star", state: "pending" }] }));
+        tick(6);
+        assert.ok(ed("sq.3") && !ed("sqi.3") && ed("sq.3").fill === ed("build.list").fill, "the added park's square is empty until it is built");
+        assert.ok([1, 2].every(i => !ed(`sqi.${i}`)), "and so are the parks still to come");
+        mode.files.set(addFile, JSON.stringify({ buildVersion: 1, sequence: playlist.sequence, started: Date.now(), ok: null, park: 4, parks: 4,
+            parkName: "Star", parkStates: [...keys.map(k => ({ key: k, state: "cached", warnings: 0 })), { key: "star.park", name: "Star", state: "built", warnings: 0 }] }));
+        tick(6);
+        assert.equal(ed("sq.3").fill, "#c8962a", "built, the added park's square is flagged by the add's restart note");
+        assert.match(ed("sqi.3").src, /alert/, "with the warning mark, not a check");
+        assert.ok([0, 1, 2].every(i => /check/.test(ed(`sqi.${i}`).src)), "the others built");
+        mode.files.set(addFile, JSON.stringify({ buildVersion: 1, sequence: playlist.sequence, started: Date.now(), ok: true, finished: Date.now(),
+            playlist: JSON.parse(JSON.stringify(store.RCTScreensaver.playlist)),
+            parkStates: keys.map(k => ({ key: k, state: "cached", warnings: 0 })).concat([{ key: "star.park", name: "Star", state: "built", warnings: 0 }]),
+            messages: [{ level: "ok", text: "Built 4 parks" }] }));
+        mode.buildStatus = { ...mode.buildStatus, state: "done", finished: Date.now() };
+        tick(6);
+        assert.match(ed("msgt.0").text, /^Built .* now playing/, ed("msgt.0").text);
+        assert.match(ed("msgt.1").text, /^Restart the game to load the objects just/, "the restart note right under it");
+        tick(2);
+        assert.equal(ed("text.park").text, playlist.parks.find(p => (p.key ?? p.fileName) === keys[1]).name, "the editor goes to the added park");
+        assert.ok(ed("parks.open"), "and the playlist order opens on it");
+        dump("park-added");
+        edClick("field"); tick();
+
+        assert.ok(![0, 1, 2, 3, 4, 5].some(i => ed(`msgt.${i}`)?.text.startsWith("Restart the game to load its objects")), "not the one from before the game started");
+    }
     // The playlists: the playing one marked, another built and played on a click.
     mode.files.set("playlists.json", JSON.stringify({ playlistsVersion: 1, playlists: [
         { name: "Evening", file: "evening.toml", parks: 2 }, { name: playlist.sequence, file: "mini.toml", parks: 3 },
@@ -1318,18 +1364,17 @@ console.log("ok: Import and Export playlist through the file dialogs");
     edClick("plfield"); tick();
     assert.equal(scene.get("rcts.ed.parks.head").text, "Switch to another playlist");
     assert.equal(ed("text.plname").text, playlist.sequence, "the playlist field names the playing one");
-    assert.equal(ed("pname.1").text, "Evening");
-    assert.equal(ed("pcount.2").text, "playing", "the playing one is marked");
-    assert.equal(ed("pcount.3").text, "file missing");
-    assert.ok(ed("parks.new") && ed("parks.copy"), "New playlist and Duplicate");
-    assert.equal(ed("parks.new").y, ed("parks.copy").y, "side by side");
-    assert.ok(ed("parks.new").y < ed("ppl.1").y, "on top of the playlists");
+    assert.equal(ed("pname.0").text, "Evening");
+    assert.equal(ed("pcount.1").text, "playing", "the playing one is marked");
+    assert.equal(ed("pcount.2").text, "file missing");
+    assert.equal(ed("parks.new"), undefined, "New and Duplicate are no longer in the list");
     dump("parks-playlists");
     mode.builds.length = 0;
-    edClick("ppl.1"); tick(2);
+    edClick("ppl.0"); tick(2);
     assert.deepEqual(mode.builds, ["Evening"], "a click builds the other playlist");
     assert.equal(ed("build.state").text, "building");
     assert.equal(scene.get("rcts.ed.build.text")?.text, "Cancel switch");
+    assert.ok(ed("sq.0")?.fill === "#6fcf8a" && !ed("sq.1"), "the playing playlist's squares give way to one lit bar");
     mode.files.set("build-Evening.json", JSON.stringify({ buildVersion: 1, sequence: "Evening", started: now, ok: null, park: 1, parks: 2,
         parkName: "Harbor", parkStates: [{ key: "h.park", name: "Harbor", state: "building" }, { state: "pending" }] }));
     tick(6);
@@ -1350,11 +1395,21 @@ console.log("ok: Import and Export playlist through the file dialogs");
         tick(6);
     };
     mode.builds.length = 0;
-    edClick("plfield"); tick();
-    edClick("parks.new"); tick(2);
-    assert.equal(mode.made, 1);
+    edClick("plNew"); tick();
+    assert.ok(ed("new.frame") && ed("nseg.motion.0"), "New opens its pane with the generation options");
+    assert.ok(ed("new.frame").x > ed("frame").x + ed("frame").width, "top centre, right of the views pane");
+    assert.equal(mode.made, 0, "no dialog yet");
+    edClick("nseg.reverse.1");
+    edClick("nseg.route.1");
+    assert.equal(ed("nstep.variants.less"), undefined, "Random has no variants");
+    edClick("nstep.timeScale.more");
+    assert.equal(ed("nstept.timeScale").text, "× 1.25");
+    dump("new-pane");
+    edClick("newGo"); tick(2);
+    assert.equal(mode.made, 1, "Choose folder opens the dialog");
+    assert.equal(ed("new.frame"), undefined, "and the pane closes");
     assert.equal(ed("build.state").text, "making the playlist");
-    assert.ok(ed("parks.new"), "the list stays open");
+    assert.ok(ed("sq.0")?.fill === "#6fcf8a" && !ed("sq.1"), "New: one lit bar in place of the playing playlist's squares");
     // New: the park list opens on the new playlist's parks, to tick and order before its first build
     // (owner, 2026-11-13).
     const loose = ["Dreamport", "Mandala", "Morow World"].map(name => ({ key: name.toLowerCase() + ".park", name }));
@@ -1379,23 +1434,27 @@ console.log("ok: Import and Export playlist through the file dialogs");
     assert.equal(draftLive.source, "C:/x/RCT Screensaver loose.toml");
     assert.equal(draftLive.props.use["mandala.park"], false, "the ticks in its live file, for its build");
     assert.equal(draftLive.props.order[0], "morow world.park", "and the order");
+    assert.equal(draftLive.props.generation.route, "random", "and the New pane's generation choices, for its first build");
+    assert.equal(draftLive.props.generation.timeScale, 1.25);
+    assert.equal(draftLive.props.generation.reverse, true, "Include reverse is kept");
     mouse("move", 900, 700);
     dump("parks-made");
-    edClick("parks.build"); tick(2);
+    assert.equal(ed("parks.build"), undefined, "no Build row in the park list: the Build pane's button builds it");
+    assert.notEqual(ed("build").fill, "#2a2e2c80", "Build and play is on for the new playlist");
+    edClick("build"); tick(2);
     assert.deepEqual(mode.builds, ["RCT Screensaver loose"], "Build and play builds the new playlist");
     mode.buildStatus = { ...mode.buildStatus, state: "cancelled", finished: Date.now() };
     mode.cancelBuild = function () { return true; };
     tick(6);
     mode.builds.length = 0;
-    edClick("plfield"); tick();
-    edClick("parks.copy"); tick(2);
+    edClick("plCopy"); tick(2);
     assert.deepEqual(mode.copied, [playlist.sequence], "Duplicate copies the playing playlist");
     assert.equal(ed("build.state").text, "copying the playlist");
     // (built: the playing build copied along; the mock can't play it, so the copy is listed to pick)
     finish("copy", "Mini copy", [{ name: "RCT Screensaver loose", file: "loose.toml", parks: 5 }, { name: "Mini copy", file: "mini copy.toml", parks: 3 }], { built: true });
     assert.equal(mode.applied.at(-1), "Mini copy", "the copy's build is applied, no rebuild");
-    assert.equal(ed("pname.4").text, "Mini copy");
-    assert.equal(ed("pcount.4").text, "new · 3 parks");
+    assert.equal(ed("pname.3").text, "Mini copy");
+    assert.equal(ed("pcount.3").text, "new · 3 parks");
     assert.equal(mode.builds.length, 0, "a copy needs no rebuild");
     edClick("plfield"); tick(); // (closes the list)
     // Back as it was for the tests below.
@@ -1448,13 +1507,29 @@ console.log("ok: parks ticked on and off, Add park, and switching, new and dupli
     assert.notEqual(wl("new").fill, "#2a2e2c80", "with a generator New is on");
     assert.equal(wl("why.0"), undefined);
     wlClick("new"); tick(2);
-    assert.equal(mode.made, 1, "New opens the folder dialog");
+    assert.equal(mode.made, 0, "New shows the generation options first");
+    assert.equal(wl("title").text, "New playlist");
+    wlClick("back"); tick();
+    assert.equal(wl("title").text, "No playlist yet", "Back returns");
+    wlClick("new"); tick();
+    wlClick("wseg.reverse.1"); tick();
+    wlClick("wstep.variants.more"); tick();
+    assert.equal(wl("wstept.variants").text, "2");
+    wlClick("wseg.route.1"); tick();
+    assert.equal(wl("wstept.variants"), undefined, "variants only for circuits");
+    wlClick("wseg.route.0"); tick();
+    dump("welcome-new");
+    wlClick("go"); tick(2);
+    assert.equal(mode.made, 1, "Choose folder opens the folder dialog");
     mode.files.set("task-new.json", JSON.stringify({ taskVersion: 1, task: "new", started: now, ok: true, finished: now,
         sequence: "RCT Screensaver parks", playlist: "C:/x/parks.toml", parks: [{ key: "a.park", name: "A" }], messages: [] }));
     mode.files.set("playlists.json", JSON.stringify({ playlistsVersion: 1, playlists: [{ name: "RCT Screensaver parks", file: "parks.toml", parks: 1 }] }));
     mode.buildStatus = { ...mode.buildStatus, state: "done", finished: now };
     tick(32); // (the playlists file is read every 3 s)
     assert.deepEqual(mode.builds, ["RCT Screensaver parks"], "the new playlist is built at once");
+    const newLive = JSON.parse(mode.files.get("RCT_Screensaver_parks.json"));
+    assert.equal(newLive.props.generation.reverse, true, "with the options picked, in its live file");
+    assert.equal(newLive.props.generation.variants, 2);
     assert.match(wl("pl.0.text").text, /^RCT Screensaver parks/, "and listed");
     mode.files.set("build-RCT_Screensaver_parks.json", JSON.stringify({ buildVersion: 1, sequence: "RCT Screensaver parks", started: now, ok: true,
         finished: now, playlist: { ...installed, sequence: playlist.sequence }, parkStates: [], messages: [] }));

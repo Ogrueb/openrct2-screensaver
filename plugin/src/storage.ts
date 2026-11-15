@@ -163,7 +163,7 @@ export interface ParkEntry {
     bounds?: Bounds; // absent: show views exactly as listed
     viewCount?: number; // views the park should get when fitting merges some; default views.length
     parkTime?: number; // seconds the park's generated views should last in all, however many are left
-    variants?: { views: View[]; parkTime?: number }[]; // alternative orders of the generated views, played in turn
+    variants?: { views: View[]; parkTime?: number; reverse?: boolean }[]; // alternative orders of the generated views, played in turn (reverse: a reversed circuit)
     viewScreen?: [number, number]; // with handSet: the window the views were set in (absent: played as set)
     returnPan?: boolean; // false: the park's last view cuts to the next park instead of panning back to its first
 }

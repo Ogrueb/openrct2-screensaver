@@ -217,7 +217,9 @@ The panel became three panes (round 8 of the mockups accepted, built the same da
 - **Views pane, top left.** The PLAYLIST field, then previous park, the park field (name, "N / M ▾" its place
   in the play order), next park (no close button since 2026-11-12, owner: E and the pencil close the editor). A press on the field held past 0.3 s opens the park list over the views and jumps to
   the park the button is released on; a click opens it as **Playlist order**: rows with grips, Use ticks
-  (2026-11-12, "Parks and playlists" below), numbers, names and view counts, dragged to reorder the parks (saved in the game at once, `RCTScreensaver.
+  (2026-11-12, "Parks and playlists" below), numbers, names and view counts (a park built with alternative orders,
+  `circuit_variants`/`circuit_reverse`, says "3 orders (1 rev.)" beside them, the build marking reversed ones `reverse`
+  in the playlist's `variants`; its row's tooltip says which order plays now or on its next visit; owner, 2026-11-14), dragged to reorder the parks (saved in the game at once, `RCTScreensaver.
   playlistProps.<sequence>.order`, and played in that order at once), clicked to go to a park (the list
   stays); a click anywhere else closes it (Esc is the engine's: it leaves the mode). The views list has a
   grip column: a row dragged 5 px lifts (the dragged row follows the mouse, its place dims, an orange line
@@ -306,7 +308,16 @@ closed.
 - **Squares:** one per park in play order, as the generator lists them (`parkStates`, the playlist file's
   order with the game's edits baked in), so a rebuild of one park keeps its square's place; between builds
   they follow the playing order, so reordering parks moves the squares at once. The generator lists every
-  park first, and while a build runs a park not reached yet shows its state from the build before. Only a
+  park first, and while a build runs a park not reached yet shows its state from the build before. The
+  squares react the moment a task starts, before the generator writes anything (owner, 2026-11-14): Build
+  and play lights the first park that needs a build, Add park adds an empty lit square for the park being
+  added, and New playlist, Import, Duplicate and a switch to a playlist never built show one lit bar in place
+  of the playing playlist's squares (a playlist New made shows its own parks). While a build runs, a park the
+  build before did not have (one just added, or any of another playlist's) stays empty until the generator
+  reaches it. A task's warnings (Add park's restart for objects it installed) sit right under the build's
+  "Built" line, and the header says to restart; a task's warning about a park (its message's `park` key) flags
+  that park's square amber with the warning mark once it is built, its tooltip saying to restart; a restart note about objects installed before the game
+  started is left out (the message's `installed` time against the plugin's load). Only a
   park edited since the last build (or the install) is dimmed, with "edited, needs a build" in its tooltip,
   and it dims as soon as the edit is saved; Playlist properties dim none, as no park needs building for
   them (owner's test, 2026-11-11). The plugin keeps the edits each build took in (`RCTScreensaver.builtEdits`;
@@ -407,13 +418,17 @@ click on the park field (Playlist order):
   playlist (`unused`: key and name), shown under NOT IN THE BUILD with their ticks. Ticked on, a park moves up into the order (after the rest by default),
   marked "needs a build", and can be dragged to where it should play before the build (owner, 2026-11-12); its
   place is saved with the order (`order` names its key) and the build bakes it there.
-- **Add park…** (the list's last row) calls `screensaver.addPark(<sequence>)`: the engine shows the system's Open
-  dialog (`*.park;*.zip`, starting where the last park or bundle was picked) and runs `mksequence.py --live-add
+- **Add park…** (an icon button at the park row's end since 2026-11-14, owner; it was the list's last row; once
+  the build plays, the editor goes to the added park, `task-add.json` `park`, and the playlist order opens on its row) calls `screensaver.addPark(<sequence>)`: the engine shows the system's Open
+  dialog (`*.park;*.zip;*.sv6;*.sc6;*.sv4;*.sc4`, starting where the last park or bundle was picked) and runs `mksequence.py --live-add
   <sequence> --park <file>`. The generator bakes the game's edits, appends a `[[park]]` with the file relative to
   the playlist (absolute on another drive) and its builders from the NE catalogue or the file name, or ticks the
-  park on again when the playlist has it unticked; a park already in use, a clash of file names, an RCT save or a
-  file that is no park fails with the reason (saves and loose objects: the settings page's folder scan converts
-  and installs them). Its result goes to `live/task-add.json`, then the playlist builds and plays as with Build
+  park on again when the playlist has it unticked; a park already in use, a clash of file names or a file that is
+  no park fails with the reason. An RCT save is converted with the game's own executable (the engine passes
+  `--openrct2 <its exe>`, on Windows the `.com` beside it) into `screensaver/library/added/<slug>/` through
+  `importparks.run`, and that `.park` is added; a download that ships loose objects is read in place and its
+  objects installed into `object/rct-screensaver/` (`importparks.install_loose`), with "restart the game so it
+  loads them" when any were new (the running game scanned its objects at start; 2026-11-14). Its result goes to `live/task-add.json`, then the playlist builds and plays as with Build
   and play.
 - **Playlists** (the PLAYLIST field, a heading of its own over the park field, owner 2026-11-12: it names the
   playing playlist and its parks; a click opens its list from under it over the park row): every playlist the game can build, from
@@ -422,16 +437,19 @@ click on the park field (Playlist order):
   on another builds it (`screensaver.build(<name>)`, only changed parks thanks to the park cache) and plays it as an
   import is played (`applyBuild` of a sequence that is not playing): its edits come from its live file, the
   playing playlist's edits leave the storage and stay in its own live file.
-- **New playlist…** and **Duplicate…** sit side by side at the top of the PLAYLIST list (owner, 2026-11-13; a
-  plus and a copy icon), above the playlists.
+- **New playlist…** and **Duplicate…** are icon buttons (a plus and a copy icon) on the playlist row since
+  2026-11-14 (they were at the top of the PLAYLIST list); New opens the New playlist pane first.
 - **New playlist from a folder…** calls `screensaver.newPlaylist()`: the system's folder dialog, then
   `mksequence.py --live-new <folder>`, which reads the folder as the settings page's scan does (`parkinfo.
-  scan_folder`; parks and downloads in place, RCT saves and loose objects listed as warnings), writes
+  scan_folder`; parks and downloads in place; a folder with RCT saves or loose objects goes through
+  `importparks.run` into `screensaver/library/<slug>/` as the settings page's scan does, saves converted with
+  the game's executable, objects installed, the parks' scripts copied along; 2026-11-14), writes
   `screensaver/playlists/<slug>.toml` named "RCT Screensaver <folder>" (" 2" and so on when taken), registers it
   and lists it (`live/task-new.json`, with its parks: key and a name from the NE catalog or the file). No build
   follows (owner's tests, 2026-11-12/13): the park list opens on the new playlist's parks ("New playlist: its parks",
-  PLAYLIST showing it "not built"), to tick off and drag into order (saved to its own live file), and **Build and play
-  this playlist** builds it with them and plays it. Closed without building, it stays in the PLAYLIST list.
+  PLAYLIST showing it "not built"), to tick off and drag into order (saved to its own live file), and the Build pane's
+  **Build and play** (or Ctrl+B) builds it with them and plays it (the park list's own Build row went, owner 2026-11-14:
+  one Build button). Its squares stay empty until the generator reaches each park. Closed without building, it stays in the PLAYLIST list.
 - **Duplicate this playlist…** calls `screensaver.copyPlaylist(<sequence>)`: the system's Save dialog in
   `screensaver/playlists` ("<name> copy.toml"), then `mksequence.py --live-copy <sequence> --to <file>`: the
   game's edits baked, the playlist copied with its views file, named after the file (another name than any other
@@ -466,28 +484,46 @@ stock sequence with nothing on top, and every build button failed after a click 
   needed ..."); the build pane's header says "needs Python" or "no generator".
 - **No playlist.** The mode shows a panel in the middle of the window (`ui/welcome.ts`) over the stock title
   sequence: "No playlist yet" (or "Playlist not found" when the installed one's sequence is gone), New
-  playlist from a folder of parks (made, then built and played at once: there is nothing to keep playing
-  while its parks are ticked), Import playlist, the playlists `live/playlists.json` lists (built and played
+  playlist from a folder of parks (first the generation options, as the editor's New playlist pane, with Choose
+  folder… and Back, owner 2026-11-14; then made, its options saved to its live file, built and played at once:
+  there is nothing to keep playing while its parks are ticked), Import playlist, the playlists `live/playlists.json` lists (built and played
   on a click), the running task's line, and "Esc leaves the screensaver". No controls bar until a playlist
   plays; the build that finishes starts the player and the panel goes.
 
-Still open from the handoff: `.sv6` saves and loose objects through New playlist and Add park (the settings
-page's folder scan still does those).
+The handoff's items are done (2026-11-14): `.sv6` saves and loose objects now go through New playlist and Add
+park too (see "Parks and playlists"). A conversion runs OpenRCT2's `convert` with its own user folder (v0.5.6's
+convert takes no `--user-data-path`), so a portable install's objects are not seen by it.
 
-### Park settings (2026-11-14)
+### Settings and the New playlist pane (owner, 2026-11-14)
 
-The views pane's park row has a settings button (between the park field and Next park): it shows the park's
-settings in place of its views, the settings page's park switches and Edit parameters in two columns: Park
-scripts and Scripts in pans (for a park with scripts), Event views (a park with event views), Tower views, Ride
-pans, Return pan; Most views, Closest and Widest zoom, Pan share (auto, 0-100%), Pan speed (`pan_tolerance`),
-Longest park. As on the settings page they belong to the park, not the playlist: the next build's bake writes
-them into the park's profile in the user folder (`profiles.change`, which the settings page now shares; a park
-without one gets a new profile matched by its saved name and map size; a copy left equal to the shipped profile,
-or a new one left with only its match, is removed), so they apply in every playlist that plays the park. The
-header says "profile <stem>", "the playlist's values" or, in amber, "changed · next build"; the Playlist's
-button sets every key the profile sets back to the playlist's (null in the change, the key removed at the bake).
-A key the playlist's own `[[park]]` entry sets is gray with "Set in the playlist's own entry for this park", as
-the entry wins over any profile.
+The editor's settings are split by when they matter (the owner's third look, 2026-11-14: the generation
+options matter only when a playlist is made; a first layout had them in two places, a second on gears):
+
+- **Settings** (top right, in the Playlist properties' old place, a foldout open by default) shows the
+  playlist's or the park's settings, a Playlist | Park switch in its header. Playlist: MOTION (Inertia, Angle
+  and zoom change, the Change, Arrival and Return holds) and PRESENTATION (Title music, Show titles, Park
+  scripts and Event views, the last two `park_scripts` and `park_plugins`, for the next build). Park (under the
+  park's name): Park scripts and Scripts in pans (a park with scripts), Event views (a park with event views),
+  Return pan, Pan speed (`pan_tolerance`), with the park's profile, "changed · next build" and a Playlist's
+  button that resets these keys only.
+- **New playlist and Duplicate** are two icon buttons at the playlist row's end (no longer in the playlist
+  list). New playlist opens a pane top centre, between the views pane and the top-right box: GENERATION with
+  the settings page's playlist-wide generator options (see "Generation" below), starting from the playing
+  playlist's, then Choose folder… (the folder dialog) and Cancel. The playlist made gets the choices in its
+  draft's live file (`props.generation`), which its first build bakes in (`apply_generation`); its parks list
+  opens to tick and order as before.
+- The parks' generation settings (towers, ride pans, view count, zooms, pan share, longest park) are left to
+  the settings page.
+
+The park settings are the settings page's park switches and Edit parameters. As on the settings page they
+belong to the park, not the playlist: the next build's bake writes them into the park's profile in the user
+folder (`profiles.change`, which the settings page now shares; a park without one gets a new profile matched by
+its saved name and map size; a copy left equal to the shipped profile, or a new one left with only its match, is
+removed), so they apply in every playlist that plays the park. The headers say "profile <stem>", "the
+playlist's values" or, in amber, "changed · next build"; a Playlist's button sets every key of its group the
+profile sets back to the playlist's (null in the change, the key removed at the bake). A key the playlist's own
+`[[park]]` entry sets is gray with "Set in the playlist's own entry for this park", as the entry wins over any
+profile.
 
 Every build lists each park's settings (`settings` on the park: the values in force, `profile`, `savedName`,
 `mapSize`, `adjusted` keys the profile sets, `locked` keys the entry sets) and the playlist's values
@@ -499,12 +535,11 @@ own. `mksequence.py --user-dir` now also points the user's profiles and playlist
 
 ### Generation (2026-11-14)
 
-Playlist properties end with a GENERATION section, folded under its header, holding the playlist-wide
-generator options the settings page sets, with its labels: Motion (Pans, Static), View order (Circuit,
-Random), Variants (1-10) and Include reverse (circuit only), Ride pans (Include, Exclude, Only; pans only),
-Shortest and Longest park (0-300 s and 10-300 s in 5 s steps, kept 5 s apart), Time scale (× 0.5-3 in 0.25
-steps), Park scripts and Event views (`park_plugins`; shown while park scripts run). Unlike the rest of the
-properties, nothing plays differently until a build: the header says "changed · next build" in amber while a
+The New playlist pane holds the playlist-wide generator options the settings page sets, with its labels:
+Motion (Pans, Static), View order (Circuit, Random), Variants (1-10) and Include reverse (circuit only), Ride
+pans (Include, Exclude, Only; pans only), Shortest and Longest park (0-300 s and 10-300 s in 5 s steps, kept
+5 s apart), Time scale (× 0.5-3 in 0.25 steps). Park scripts and Event views are stored with them but shown in
+Settings, as they apply to any views. Nothing plays differently until a build: the header says "changed · next build" in amber while a
 value differs from the build, and the save marks the build pane "edits not built". Every build names the
 values it was made with (`generation` in the playlist, `generation_values`); the editor saves only what
 differs from them (`playlistProps.<sequence>.generation`, plugin keys), drops what a new build has made its

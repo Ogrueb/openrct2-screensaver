@@ -3,7 +3,8 @@
 dumps(data, header="") returns the text of a document whose tomllib.loads() equals `data`:
 strings, booleans, integers, floats, arrays, tables, arrays of tables and inline tables. Plain
 keys come before tables at every level, as TOML needs. A list of tables is written inline (one
-`{...}` per line) when each table holds only plain values and fits on a line, else as `[[...]]`.
+`{...}` per line) when each table holds only plain values and fits on a line, else as `[[...]]`;
+a playlist's parks (ALWAYS_TABLES) are always `[[park]]`, as the tools append entries to them.
 Comments are not kept: `header` (lines without the leading "# ") goes at the top.
 
 patch(text, data) edits a document in place instead, so its comments and layout stay: values that
@@ -17,6 +18,7 @@ import math, re, sys, tomllib
 
 BARE_KEY = re.compile(r"^[A-Za-z0-9_-]+$")
 INLINE_WIDTH = 100  # longest inline table written on one line in an array
+ALWAYS_TABLES = {"park"}  # lists of tables always written as [[...]] (a playlist's parks: Add park appends one)
 
 
 def key(k):
@@ -75,13 +77,13 @@ def table_list(v):
     return isinstance(v, list) and v and all(isinstance(x, dict) for x in v)
 
 
-def inline_list(v):
-    return all(flat(x) and len(value(x)) <= INLINE_WIDTH for x in v)
+def inline_list(v, k=None):
+    return k not in ALWAYS_TABLES and all(flat(x) and len(value(x)) <= INLINE_WIDTH for x in v)
 
 
 def table(lines, path, data):
     plain = [(k, v) for k, v in data.items()
-             if not isinstance(v, dict) and not (table_list(v) and not inline_list(v))]
+             if not isinstance(v, dict) and not (table_list(v) and not inline_list(v, k))]
     plain_keys = {k for k, _ in plain}
     tables = [(k, v) for k, v in data.items() if k not in plain_keys]
     for k, v in plain:
@@ -353,7 +355,7 @@ def patch(text, data):
             elif isinstance(v, dict) and p not in doc.keys and not any(under(p, q) for q in doc.keys):
                 if v:
                     new_table(p, v)
-            elif table_list(v) and not inline_list(v):
+            elif table_list(v) and not inline_list(v, k):
                 raise LookupError
             else:
                 insert(path, k, v)

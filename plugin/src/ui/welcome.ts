@@ -2,12 +2,16 @@
 // a panel in the middle of the window that says so and offers the ways to get one in the game, New
 // playlist from a folder of parks, Import playlist (a bundle), and the playlists the generator knows
 // (live/playlists.json), each built and played on a click. Where no generator can run (builder.ts) the
-// buttons are gray and the panel says why. The game's own title sequence plays behind it.
+// buttons are gray and the panel says why. The game's own title sequence plays behind it. New first shows
+// the generation options (generation.ts, as the editor's New playlist pane), then the folder dialog.
 
 import { builder, readPlaylists, PlaylistInfo, clock } from "../builder";
 import type { MouseEvent, ScreensaverApi } from "../mode";
 import { Layer, Rect, Scene, backing, button, contains, label, measure, tooltip } from "./kit";
 import { THEME } from "./theme";
+import { generationClick, generationRows } from "./generation";
+import { GENERATION_DEFAULTS, saveOtherPlaylistProps } from "../storage";
+import type { Generation } from "../storage";
 
 const WIDTH = 520;
 const PAD = 16;
@@ -16,7 +20,7 @@ const GAP = 6;
 const LIST_MAX = 6; // playlists listed (the rest: "and N more")
 const LIST_MS = 3000; // how often the playlists file is read again
 
-type HitId = "new" | "import" | `pl.${number}`;
+type HitId = "new" | "import" | "go" | "back" | `pl.${number}` | `w${string}`;
 
 /** Text cut to a width with an ellipsis. */
 function fitText(api: ScreensaverApi, text: string, size: number, width: number): string {
@@ -59,6 +63,8 @@ export class Welcome {
     private listRead = 0;
     private shown = "";
     private newSince = 0; // when this panel's New started: the playlist it makes is built and played at once
+    private gen: Generation | undefined; // New's first step open: the generation options picked
+    private madeGen: Generation | undefined; // the options of the playlist New is making
 
     /** `problem`: why the installed playlist cannot play (empty: none is installed). */
     constructor(private readonly api: ScreensaverApi, private readonly problem = "") {
@@ -84,6 +90,10 @@ export class Welcome {
         const made = builder.made;
         if (this.newSince && made && made.task === "new" && made.at >= this.newSince && !builder.running) {
             this.newSince = 0;
+            if (this.madeGen) {
+                saveOtherPlaylistProps(made.sequence, made.playlist, { generation: this.madeGen });
+                this.madeGen = undefined;
+            }
             builder.openPlaylist(made.sequence);
         } else if (this.newSince && !builder.running && builder.runningTask === undefined && builder.line.phase === "failed") {
             this.newSince = 0; // (New failed: its line shows)
@@ -115,10 +125,19 @@ export class Welcome {
 
     private click(id: HitId): void {
         if (id === "new") {
+            this.gen = { ...GENERATION_DEFAULTS };
+        } else if (id === "back") {
+            this.gen = undefined;
+        } else if (id.startsWith("w") && this.gen) {
+            this.gen = generationClick(this.gen, id, "w") ?? this.gen;
+        } else if (id === "go") {
+            this.madeGen = this.gen;
+            this.gen = undefined;
             this.newSince = Date.now();
             builder.newPlaylist();
             if (!builder.running) {
                 this.newSince = 0; // (the dialog was closed, or New did not start)
+                this.madeGen = undefined;
             }
         } else if (id === "import") {
             builder.importPlaylist();
@@ -130,7 +149,56 @@ export class Welcome {
         }
     }
 
+    /** New's first step: the generation options, then Choose folder… or Back. */
+    private drawGen(g: Generation): Scene {
+        const scene: Scene = new Map();
+        const overlay = this.api.overlay;
+        const inner = WIDTH - 2 * PAD;
+        const introLines = wrap(this.api, "How the new playlist's views are made. These matter only now: its first build makes its views with them.", 14, inner);
+        const rows = 5 + (g.route === "circuit" ? 2 : 0) + (g.motion === "pans" ? 1 : 0);
+        const height = PAD + 28 + 6 + introLines.length * 19 + 10 + rows * 26 + 14 + ROW + 10 + 18 + PAD;
+        const frame = { x: Math.round((ui.width - WIDTH) / 2), y: Math.max(8, Math.round((ui.height - height) / 2)), width: WIDTH, height };
+        backing(scene, "frame", frame, THEME.editorBacking);
+        const x0 = frame.x + PAD;
+        let y = frame.y + PAD;
+        label(scene, "title", "New playlist", { x: x0, y, width: inner, height: 28 }, 22, overlay, true);
+        y += 28 + 6;
+        introLines.forEach((t, i) => {
+            label(scene, `intro.${i}`, t, { x: x0, y: y + i * 19, width: inner, height: 19 }, 14, overlay);
+            scene.set(`intro.${i}`, { ...scene.get(`intro.${i}`)!, colour: THEME.textDim });
+        });
+        y += introLines.length * 19 + 10;
+        this.hits = [];
+        const state = (id: string, on: boolean) => ({ hover: this.hover === id, down: this.down === id && this.hover === id, on, disabled: false });
+        y = generationRows(scene, overlay, g, "w", x0, y, inner, (id, r, tip, off) => {
+            this.hits.push({ id: id as HitId, rect: r, tip, off: !!off });
+            return r;
+        }, (id, on) => ({ ...state(id, on), disabled: !!this.hits.find(h => h.id === id)?.off }));
+        y += 14;
+        const busy = builder.running;
+        const goOff = !builder.parksAvailable || busy;
+        const half = Math.floor((inner - GAP) / 2);
+        const go = { x: x0, y, width: half, height: ROW };
+        const back = { x: x0 + half + GAP, y, width: inner - half - GAP, height: ROW };
+        this.hits.push({ id: "go", rect: go, tip: goOff ? (builder.parksAvailable ? `Wait for the ${builder.noun} to finish` : builder.unavailableReason)
+            : "Pick a folder of parks: a playlist of them is made with these options, built and played", off: goOff });
+        this.hits.push({ id: "back", rect: back, tip: "Back to the start", off: false });
+        button(scene, "go", go, { ...state("go", false), disabled: goOff }, { icon: "add", iconSize: 18, text: "Choose folder…", textSize: 15, left: true }, overlay);
+        button(scene, "back", back, state("back", false), { text: "Back", textSize: 15 }, overlay);
+        y += ROW + 10;
+        label(scene, "esc", "Esc leaves the screensaver", { x: x0, y, width: inner, height: 18 }, 13, overlay);
+        scene.set("esc", { ...scene.get("esc")!, colour: THEME.textDim });
+        const tipped = this.hits.find(h => h.id === this.hover);
+        if (tipped && contains(tipped.rect, this.mouse.x, this.mouse.y)) {
+            tooltip(scene, "tip", tipped.tip, this.mouse.x, tipped.rect.y - 4, overlay, ui.width);
+        }
+        return scene;
+    }
+
     private draw(): Scene {
+        if (this.gen) {
+            return this.drawGen(this.gen);
+        }
         const scene: Scene = new Map();
         const overlay = this.api.overlay;
         const inner = WIDTH - 2 * PAD;
@@ -174,7 +242,7 @@ export class Welcome {
         };
         const parksOff = !builder.parksAvailable || busy;
         action("new", "add", "New playlist from a folder of parks…",
-            "Pick a folder of parks (.park files or park downloads): a playlist of them is made, built and played", { x: x0, y, width: inner, height: ROW }, parksOff);
+            "Pick how its views are made, then a folder of parks (.park files, RCT saves or park downloads): a playlist of them is made, built and played", { x: x0, y, width: inner, height: ROW }, parksOff);
         y += ROW + GAP;
         action("import", "import", "Import playlist…",
             "Pick a playlist bundle (.zip) someone exported: it is imported, built and played", { x: x0, y, width: inner, height: ROW }, !builder.bundlesAvailable || busy);
