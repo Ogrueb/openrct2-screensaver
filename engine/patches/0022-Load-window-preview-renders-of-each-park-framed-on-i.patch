@@ -1,0 +1,679 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: RCT Screensaver <noreply@example.invalid>
+Date: Sun, 15 Nov 2026 19:00:00 +0000
+Subject: [PATCH] Load window: preview renders of each park, framed on its
+ built area
+
+"openrct2 screenshot <file> <image> preview <width> <height>" renders a
+park at its saved rotation, framed on the area it is built on: the tiles
+with two or more elements besides the surface, weighted by that count
+squared and trimmed by 1% of the weight on each side, with every element's
+height counted. It uses the closest zoom level that fits, and past the
+widest level renders larger and reduces by a whole factor, keeping each
+block's most common colour. The void is transparent.
+
+The Load window renders every file it shows without such a picture, one
+at a time in the background, by running its own executable with that
+command (hidden, at low priority, output discarded). Renders are kept in
+the cache folder's "previews" folder, named from the file's path, size and
+modification time; a file that fails leaves an empty ".none" file so it is
+not tried again. Tiles and the preview pane use the render instead of the
+file's embedded screenshot, which saves older than the embedded previews
+and RCT2 saves lack; the pane leaves out the park summary when the file
+has none.
+---
+ src/openrct2-ui/windows/LoadSave.cpp  | 300 +++++++++++++++++++++++---
+ src/openrct2/interface/Screenshot.cpp | 195 ++++++++++++++++-
+ 2 files changed, 466 insertions(+), 29 deletions(-)
+
+diff --git a/src/openrct2-ui/windows/LoadSave.cpp b/src/openrct2-ui/windows/LoadSave.cpp
+index 7a11a92..8d1cc5f 100644
+--- a/src/openrct2-ui/windows/LoadSave.cpp
++++ b/src/openrct2-ui/windows/LoadSave.cpp
+@@ -8,6 +8,15 @@
+  *****************************************************************************/
+ 
+ #include <SDL_keycode.h>
++#ifdef _WIN32
++    #include <windows.h>
++#else
++    #include <fcntl.h>
++    #include <sys/wait.h>
++    #include <unistd.h>
++#endif
++#include <cerrno>
++#include <cstring>
+ #include <ctime>
+ #include <iterator>
+ #include <memory>
+@@ -21,6 +30,7 @@
+ #include <openrct2/Game.h>
+ #include <openrct2/OpenRCT2.h>
+ #include <openrct2/ParkImporter.h>
++#include <openrct2/PlatformEnvironment.h>
+ #include <openrct2/SpriteIds.h>
+ #include <openrct2/audio/Audio.h>
+ #include <openrct2/config/Config.h>
+@@ -29,6 +39,7 @@
+ #include <openrct2/core/FileScanner.h>
+ #include <openrct2/core/FileStream.h>
+ #include <openrct2/core/Guard.hpp>
++#include <openrct2/core/Imaging.h>
+ #include <openrct2/core/Path.hpp>
+ #include <openrct2/core/String.hpp>
+ #include <openrct2/drawing/ColourMap.h>
+@@ -88,8 +99,169 @@ namespace OpenRCT2::Ui::Windows
+         std::vector<PaletteIndex> pixels;
+         ImageIndex imageId{ kImageIndexUndefined };
+         uint32_t lastUsed{};
++        bool rendered{};    // From a preview render rather than the file's embedded preview
++        bool renderTried{}; // A render was asked for this session
+     };
+ 
++    // Preview renders: each park is rendered once, framed on the area it is built on, by running this
++    // executable's "screenshot <file> <image> preview" command in the background. The pictures are kept
++    // in the cache folder under a name made from the file's path, size and modification time, so a park
++    // that changes is rendered again; a file that cannot be rendered leaves an empty ".none" file.
++    static constexpr int32_t kRenderWidth = kPreviewWidthScreenshot;
++    static constexpr int32_t kRenderHeight = kRenderWidth / 5 * 4;
++
++    static u8string PreviewRenderFolder()
++    {
++        auto& env = GetContext()->GetPlatformEnvironment();
++        return Path::Combine(env.GetDirectoryPath(DirBase::cache), u8"previews");
++    }
++
++    static u8string PreviewRenderPath(const u8string& path, uint64_t size, time_t modified)
++    {
++        // FNV-1a over the path, size and time
++        uint64_t hash = 0xcbf29ce484222325ull;
++        auto mix = [&hash](std::string_view text) {
++            for (auto c : text)
++            {
++                hash ^= static_cast<uint8_t>(c);
++                hash *= 0x100000001b3ull;
++            }
++        };
++        mix(path);
++        mix("|" + std::to_string(size) + "|" + std::to_string(static_cast<int64_t>(modified)));
++        char name[32];
++        std::snprintf(name, sizeof(name), "%016llx.png", static_cast<unsigned long long>(hash));
++        return Path::Combine(PreviewRenderFolder(), name);
++    }
++
++    // Runs a command and waits for it, its output discarded; true when it exits normally.
++    static bool RunHidden(const std::vector<u8string>& args)
++    {
++#ifdef _WIN32
++        // Quoted as the C runtime parses command lines
++        std::wstring commandLine;
++        for (const auto& arg : args)
++        {
++            if (!commandLine.empty())
++                commandLine += L' ';
++            auto wide = String::toWideChar(arg);
++            commandLine += L'"';
++            size_t backslashes = 0;
++            for (auto c : wide)
++            {
++                if (c == L'\\')
++                {
++                    backslashes++;
++                    continue;
++                }
++                commandLine.append(c == L'"' ? backslashes * 2 + 1 : backslashes, L'\\');
++                backslashes = 0;
++                commandLine += c;
++            }
++            commandLine.append(backslashes * 2, L'\\');
++            commandLine += L'"';
++        }
++
++        STARTUPINFOW startupInfo{};
++        startupInfo.cb = sizeof(startupInfo);
++        PROCESS_INFORMATION processInfo{};
++        if (!CreateProcessW(
++                nullptr, commandLine.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS, nullptr,
++                nullptr, &startupInfo, &processInfo))
++        {
++            return false;
++        }
++        WaitForSingleObject(processInfo.hProcess, INFINITE);
++        CloseHandle(processInfo.hThread);
++        CloseHandle(processInfo.hProcess);
++        return true;
++#else
++        std::vector<char*> argv;
++        for (const auto& arg : args)
++            argv.push_back(const_cast<char*>(arg.c_str()));
++        argv.push_back(nullptr);
++
++        pid_t pid = fork();
++        if (pid == 0)
++        {
++            int devNull = open("/dev/null", O_RDWR);
++            if (devNull >= 0)
++            {
++                dup2(devNull, STDIN_FILENO);
++                dup2(devNull, STDOUT_FILENO);
++                dup2(devNull, STDERR_FILENO);
++            }
++            if (nice(10) == -1)
++            {
++                // Normal priority then
++            }
++            execv(argv[0], argv.data());
++            _exit(127);
++        }
++        if (pid < 0)
++            return false;
++        int status = 0;
++        while (waitpid(pid, &status, 0) < 0)
++        {
++            if (errno != EINTR)
++                return false;
++        }
++        return WIFEXITED(status);
++#endif
++    }
++
++    // Renders a park's preview into the cache; true when the picture is there afterwards.
++    static bool RenderPreview(const u8string& parkPath, const u8string& renderPath)
++    {
++        auto& env = GetContext()->GetPlatformEnvironment();
++        Path::CreateDirectory(PreviewRenderFolder());
++        const auto partPath = renderPath + u8".part.png";
++        RunHidden({ Platform::GetCurrentExecutablePath(), "screenshot", parkPath, partPath, "preview",
++                    std::to_string(kRenderWidth), std::to_string(kRenderHeight),
++                    "--user-data-path=" + env.GetDirectoryPath(DirBase::user),
++                    "--openrct2-data-path=" + env.GetDirectoryPath(DirBase::openrct2) });
++        if (File::Exists(partPath) && File::Move(partPath, renderPath))
++            return true;
++
++        File::Delete(partPath);
++        File::WriteAllBytes(Path::WithExtension(renderPath, u8".none"), nullptr, 0);
++        return false;
++    }
++
++    static bool PreviewRenderFailed(const u8string& renderPath)
++    {
++        return File::Exists(Path::WithExtension(renderPath, u8".none"));
++    }
++
++    // A preview render as palette pixels, if there is one that fits a preview image.
++    static std::optional<PreviewImage> ReadPreviewRender(const u8string& renderPath)
++    {
++        if (!File::Exists(renderPath))
++            return std::nullopt;
++        try
++        {
++            auto image = Imaging::ReadFromFile(renderPath, ImageFormat::png);
++            if (image.Depth != 8 || image.Width == 0 || image.Height == 0 || image.Width > kMaxPreviewImageSize
++                || image.Height > kMaxPreviewImageSize)
++                return std::nullopt;
++
++            PreviewImage preview{ .type = PreviewImageType::screenshot,
++                                  .width = static_cast<uint8_t>(image.Width),
++                                  .height = static_cast<uint8_t>(image.Height) };
++            for (uint32_t y = 0; y < image.Height; y++)
++            {
++                std::memcpy(
++                    &preview.pixels[y * image.Width], &image.Pixels[y * image.Stride], image.Width);
++            }
++            return preview;
++        }
++        catch (const std::exception& e)
++        {
++            LOG_ERROR("Could not read preview render %s: %s", renderPath.c_str(), e.what());
++            return std::nullopt;
++        }
++    }
++
+     // Thumbnails stay for the session, keyed by path and modification time; their image slots
+     // are allocated while a window shows them and freed when it closes.
+     static std::unordered_map<u8string, Thumbnail> _thumbnails;
+@@ -124,7 +296,7 @@ namespace OpenRCT2::Ui::Windows
+ 
+     // The preview image of the kind the preview setting asks for (else the other kind), reduced by
+     // whole steps to fit a tile: palette images can only be sampled, not blended.
+-    static Thumbnail MakeThumbnail(const ParkPreview& preview)
++    static Thumbnail MakeThumbnail(const ParkPreview& preview, const std::optional<PreviewImage>& render = std::nullopt)
+     {
+         const auto wanted = Config::Get().general.fileBrowserPreviewType == ParkPreviewPref::miniMap
+             ? PreviewImageType::miniMap
+@@ -137,6 +309,11 @@ namespace OpenRCT2::Ui::Windows
+         }
+ 
+         Thumbnail thumbnail;
++        if (render.has_value() && wanted == PreviewImageType::screenshot)
++        {
++            image = &*render;
++            thumbnail.rendered = true;
++        }
+         if (image == nullptr || image->width == 0 || image->height == 0)
+             return thumbnail;
+ 
+@@ -253,7 +430,16 @@ namespace OpenRCT2::Ui::Windows
+         ParkPreview _preview;
+         BackgroundWorker::Job _previewLoadJob;
+         BackgroundWorker::Job _thumbnailLoadJob;
+-        std::vector<std::pair<u8string, u8string>> _thumbnailsWanted; // key, path
++        BackgroundWorker::Job _previewRenderJob;
++
++        struct WantedThumbnail
++        {
++            u8string key;
++            u8string path;
++            u8string renderPath;
++        };
++        std::vector<WantedThumbnail> _thumbnailsWanted;
++        std::vector<WantedThumbnail> _rendersWanted;
+ 
+         bool ShowPreviews()
+         {
+@@ -470,7 +656,9 @@ namespace OpenRCT2::Ui::Windows
+             if (_listItems[selectedListItem].type == FileType::directory)
+                 return;
+ 
+-            auto path = _listItems[selectedListItem].path;
++            const auto& item = _listItems[selectedListItem];
++            auto path = item.path;
++            auto renderPath = PreviewRenderPath(item.path, item.fileSizeBytes, item.dateModified);
+ 
+             auto& bgWorker = GetContext()->GetBackgroundWorker();
+ 
+@@ -480,7 +668,17 @@ namespace OpenRCT2::Ui::Windows
+             }
+ 
+             _previewLoadJob = bgWorker.addJob(
+-                [path]() { return ReadParkPreview(path); },
++                [path, renderPath]() {
++                    auto preview = ReadParkPreview(path);
++                    if (auto render = ReadPreviewRender(renderPath); render.has_value())
++                    {
++                        std::erase_if(preview.images, [](const PreviewImage& image) {
++                            return image.type == PreviewImageType::screenshot;
++                        });
++                        preview.images.push_back(*render);
++                    }
++                    return preview;
++                },
+                 [](const ParkPreview preview) {
+                     auto* windowMgr = GetContext()->GetUiContext().GetWindowManager();
+                     auto* wnd = windowMgr->FindByClass(WindowClass::loadsave);
+@@ -580,6 +778,10 @@ namespace OpenRCT2::Ui::Windows
+                 return;
+             }
+ 
++            // Files that hold no park summary (older saves) show only the picture
++            if (_preview.parkName.empty())
++                return;
++
+             auto summaryCoords = windowPos
+                 + ScreenCoordsXY(width - previewPaneSize.width - kPadding, widget.top + previewHeight + kListRowHeight);
+ 
+@@ -668,12 +870,15 @@ namespace OpenRCT2::Ui::Windows
+             if (it == _thumbnails.end())
+             {
+                 if (_thumbnailsWanted.size() < 64)
+-                    _thumbnailsWanted.emplace_back(key, item.path);
++                    _thumbnailsWanted.push_back(
++                        { key, item.path, PreviewRenderPath(item.path, item.fileSizeBytes, item.dateModified) });
+                 return nullptr;
+             }
+ 
+             auto& thumbnail = it->second;
+             thumbnail.lastUsed = _thumbnailClock;
++            if (!thumbnail.rendered && !thumbnail.renderTried && _rendersWanted.size() < 64)
++                _rendersWanted.push_back({ key, item.path, PreviewRenderPath(item.path, item.fileSizeBytes, item.dateModified) });
+             if (thumbnail.hasImage && thumbnail.imageId == kImageIndexUndefined)
+             {
+                 G1Element g1{};
+@@ -685,38 +890,79 @@ namespace OpenRCT2::Ui::Windows
+             return &thumbnail;
+         }
+ 
+-        // Reads one wanted thumbnail at a time in the background, the first tile drawn first.
+-        void LoadNextThumbnail()
++        static void StoreThumbnail(const u8string& key, Thumbnail thumbnail)
+         {
+-            if (_thumbnailLoadJob.isValid() || _thumbnailsWanted.empty())
+-                return;
+-
+-            auto [key, path] = _thumbnailsWanted.front();
+-            _thumbnailsWanted.clear();
+-            if (_thumbnails.contains(key))
++            TrimThumbnails();
++            if (auto it = _thumbnails.find(key); it != _thumbnails.end())
+             {
+-                invalidate();
+-                return;
++                thumbnail.renderTried = thumbnail.renderTried || it->second.renderTried;
++                if (it->second.imageId != kImageIndexUndefined)
++                    GfxObjectFreeImages(it->second.imageId, 1);
+             }
++            thumbnail.lastUsed = _thumbnailClock;
++            _thumbnails[key] = std::move(thumbnail);
+ 
+-            auto& bgWorker = GetContext()->GetBackgroundWorker();
+-            _thumbnailLoadJob = bgWorker.addJob(
+-                [path]() { return MakeThumbnail(ReadParkPreview(path)); },
+-                [key](Thumbnail thumbnail) {
+-                    TrimThumbnails();
+-                    thumbnail.lastUsed = _thumbnailClock;
+-                    _thumbnails[key] = std::move(thumbnail);
++            auto* windowMgr = GetContext()->GetUiContext().GetWindowManager();
++            if (auto* wnd = windowMgr->FindByClass(WindowClass::loadsave); wnd != nullptr)
++                wnd->invalidate();
++        }
+ 
+-                    auto* windowMgr = GetContext()->GetUiContext().GetWindowManager();
+-                    if (auto* wnd = windowMgr->FindByClass(WindowClass::loadsave); wnd != nullptr)
+-                        wnd->invalidate();
+-                });
++        // Reads one wanted thumbnail at a time in the background, the first tile drawn first: the
++        // preview render when there is one, else the file's embedded preview. Parks with no render yet
++        // are then rendered, one at a time, while the window stays open.
++        void LoadNextThumbnail()
++        {
++            if (!_thumbnailLoadJob.isValid() && !_thumbnailsWanted.empty())
++            {
++                auto wanted = _thumbnailsWanted.front();
++                _thumbnailsWanted.clear();
++                if (_thumbnails.contains(wanted.key))
++                {
++                    invalidate();
++                }
++                else
++                {
++                    auto& bgWorker = GetContext()->GetBackgroundWorker();
++                    _thumbnailLoadJob = bgWorker.addJob(
++                        [wanted]() {
++                            auto thumbnail = MakeThumbnail(ReadParkPreview(wanted.path), ReadPreviewRender(wanted.renderPath));
++                            thumbnail.renderTried = thumbnail.rendered || PreviewRenderFailed(wanted.renderPath);
++                            return thumbnail;
++                        },
++                        [key = wanted.key](Thumbnail thumbnail) { StoreThumbnail(key, std::move(thumbnail)); });
++                }
++            }
++
++            if (!_previewRenderJob.isValid() && !_rendersWanted.empty())
++            {
++                auto wanted = _rendersWanted.front();
++                _rendersWanted.clear();
++                auto it = _thumbnails.find(wanted.key);
++                if (it == _thumbnails.end() || it->second.rendered || it->second.renderTried)
++                    return;
++                it->second.renderTried = true;
++
++                auto& bgWorker = GetContext()->GetBackgroundWorker();
++                _previewRenderJob = bgWorker.addJob(
++                    [wanted]() -> std::optional<Thumbnail> {
++                        if (!RenderPreview(wanted.path, wanted.renderPath))
++                            return std::nullopt;
++                        auto thumbnail = MakeThumbnail(ReadParkPreview(wanted.path), ReadPreviewRender(wanted.renderPath));
++                        thumbnail.renderTried = true;
++                        return thumbnail;
++                    },
++                    [key = wanted.key](std::optional<Thumbnail> thumbnail) {
++                        if (thumbnail.has_value() && thumbnail->hasImage)
++                            StoreThumbnail(key, std::move(*thumbnail));
++                    });
++            }
+         }
+ 
+         void DrawGrid(RenderTarget& rt)
+         {
+             _thumbnailClock++;
+             _thumbnailsWanted.clear();
++            _rendersWanted.clear();
+ 
+             const int32_t columns = GetGridColumns();
+             for (int32_t i = 0; i < numListItems; i++)
+@@ -839,6 +1085,8 @@ namespace OpenRCT2::Ui::Windows
+ 
+             if (_thumbnailLoadJob.isValid())
+                 _thumbnailLoadJob.cancel();
++            if (_previewRenderJob.isValid())
++                _previewRenderJob.cancel();
+             FreeThumbnailImages();
+ 
+             auto* windowMgr = GetWindowManager();
+diff --git a/src/openrct2/interface/Screenshot.cpp b/src/openrct2/interface/Screenshot.cpp
+index 19ecb0c..8798ed0 100644
+--- a/src/openrct2/interface/Screenshot.cpp
++++ b/src/openrct2/interface/Screenshot.cpp
+@@ -38,7 +38,11 @@
+ #include "../world/tile_element/TileElement.h"
+ #include "Viewport.h"
+ 
++#include <algorithm>
++#include <array>
+ #include <cstdlib>
++#include <limits>
++#include <vector>
+ #include <memory>
+ #include <optional>
+ #include <string>
+@@ -327,6 +331,168 @@ static void RenderViewport(IDrawingEngine* drawingEngine, const Viewport& viewpo
+     tempDrawingEngine->EndDraw();
+ }
+ 
++// The tiles the park is built on: tiles with at least two elements besides the surface (one when no
++// tile has two), weighted by that count squared, with 1% of the weight trimmed from each side so that
++// a few far-off pieces do not widen the frame.
++struct PreviewContent
++{
++    TileCoordsXY min;
++    TileCoordsXY max;
++    bool found{};
++};
++
++static PreviewContent GetPreviewContent()
++{
++    const auto& mapSize = getGameState().mapSize;
++    std::vector<uint32_t> counts(static_cast<size_t>(mapSize.x) * mapSize.y);
++    uint32_t maxCount = 0;
++    for (int32_t y = 0; y < mapSize.y; y++)
++    {
++        for (int32_t x = 0; x < mapSize.x; x++)
++        {
++            uint32_t n = 0;
++            for (const auto* element : TileElementsView(TileCoordsXY(x, y).toCoordsXY()))
++            {
++                if (element->getType() != TileElementType::surface && !element->isInvisible())
++                    n++;
++            }
++            counts[y * mapSize.x + x] = n;
++            maxCount = std::max(maxCount, n);
++        }
++    }
++
++    PreviewContent content;
++    if (maxCount == 0)
++        return content;
++
++    const uint32_t threshold = maxCount >= 2 ? 2 : 1;
++    std::vector<double> weightX(mapSize.x), weightY(mapSize.y);
++    double total = 0;
++    for (int32_t y = 0; y < mapSize.y; y++)
++    {
++        for (int32_t x = 0; x < mapSize.x; x++)
++        {
++            auto n = counts[y * mapSize.x + x];
++            if (n < threshold)
++                continue;
++            double w = static_cast<double>(n) * n;
++            weightX[x] += w;
++            weightY[y] += w;
++            total += w;
++        }
++    }
++
++    auto trimmed = [total](const std::vector<double>& weights, int32_t& low, int32_t& high) {
++        const double cut = total * 0.01;
++        double sum = 0;
++        low = 0;
++        while (low < static_cast<int32_t>(weights.size()) - 1 && sum + weights[low] <= cut)
++            sum += weights[low++];
++        sum = 0;
++        high = static_cast<int32_t>(weights.size()) - 1;
++        while (high > low && sum + weights[high] <= cut)
++            sum += weights[high--];
++    };
++    trimmed(weightX, content.min.x, content.max.x);
++    trimmed(weightY, content.min.y, content.max.y);
++    content.found = true;
++    return content;
++}
++
++// A viewport at the park's saved rotation showing the built area whole, at the closest zoom level
++// (up to the widest the game draws) that fits it in the given size; scale says how much smaller the
++// picture still has to be made afterwards to fit.
++static Viewport GetPreviewViewport(int32_t width, int32_t height, int32_t& scale)
++{
++    const auto& gameState = getGameState();
++    const auto rotation = gameState.savedViewRotation;
++    auto content = GetPreviewContent();
++    if (!content.found)
++    {
++        content.min = { 1, 1 };
++        content.max = { gameState.mapSize.x - 2, gameState.mapSize.y - 2 };
++    }
++
++    int32_t left = std::numeric_limits<int32_t>::max();
++    int32_t right = std::numeric_limits<int32_t>::min();
++    int32_t top = std::numeric_limits<int32_t>::max();
++    int32_t bottom = std::numeric_limits<int32_t>::min();
++    for (int32_t y = content.min.y; y <= content.max.y; y++)
++    {
++        for (int32_t x = content.min.x; x <= content.max.x; x++)
++        {
++            const auto location = TileCoordsXY(x, y).toCoordsXY();
++            const int32_t ground = TileElementHeight(location.toTileCentre());
++            const int32_t highest = std::max(ground, GetHighestBaseClearanceZ(location, false));
++            for (const auto& corner : { CoordsXY{ 0, 0 }, CoordsXY{ 31, 0 }, CoordsXY{ 0, 31 }, CoordsXY{ 31, 31 } })
++            {
++                auto low = Translate3DTo2DWithZ(rotation, CoordsXYZ(location + corner, ground));
++                auto high = Translate3DTo2DWithZ(rotation, CoordsXYZ(location + corner, highest));
++                left = std::min({ left, low.x, high.x });
++                right = std::max({ right, low.x, high.x });
++                top = std::min({ top, low.y, high.y });
++                bottom = std::max({ bottom, low.y, high.y });
++            }
++        }
++    }
++    // Room for sprites drawn above their clearance, and a margin
++    top -= 64;
++    const int32_t margin = std::max(right - left, bottom - top) / 40 + 8;
++    left -= margin;
++    right += margin;
++    top -= margin;
++    bottom += margin;
++
++    auto zoom = ZoomLevel{ 0 };
++    while (zoom < ZoomLevel::max()
++           && (zoom.ApplyInversedTo(right - left) > width || zoom.ApplyInversedTo(bottom - top) > height))
++    {
++        zoom = ZoomLevel{ static_cast<int8_t>(static_cast<int8_t>(zoom) + 1) };
++    }
++
++    // Past the widest zoom level the picture is rendered larger and reduced afterwards
++    scale = 1;
++    while (zoom.ApplyInversedTo(right - left) > width * scale || zoom.ApplyInversedTo(bottom - top) > height * scale)
++        scale++;
++
++    Viewport viewport{};
++    viewport.width = width * scale;
++    viewport.height = height * scale;
++    viewport.zoom = zoom;
++    viewport.rotation = rotation;
++    viewport.flags.set(ViewportFlag::transparentBackground);
++    const ScreenCoordsXY centre{ (left + right) / 2, (top + bottom) / 2 };
++    viewport.viewPos = { centre.x - viewport.ViewWidth() / 2, centre.y - viewport.ViewHeight() / 2 };
++    return viewport;
++}
++
++// Reduces a picture by a whole factor, keeping for each block of pixels the colour most of them have
++// (palette images cannot be blended); transparent pixels count only when nothing else is there.
++static void ReducePicture(const RenderTarget& source, RenderTarget& target, int32_t scale)
++{
++    std::array<uint16_t, 256> votes{};
++    for (int32_t y = 0; y < target.height; y++)
++    {
++        for (int32_t x = 0; x < target.width; x++)
++        {
++            votes.fill(0);
++            for (int32_t dy = 0; dy < scale; dy++)
++            {
++                const auto* row = reinterpret_cast<const uint8_t*>(source.bits) + (y * scale + dy) * source.LineStride();
++                for (int32_t dx = 0; dx < scale; dx++)
++                    votes[row[x * scale + dx]]++;
++            }
++            int32_t best = 0;
++            for (int32_t i = 1; i < 256; i++)
++            {
++                if (votes[i] > votes[best] || (best == 0 && votes[i] > 0))
++                    best = i;
++            }
++            reinterpret_cast<uint8_t*>(target.bits)[y * target.LineStride() + x] = static_cast<uint8_t>(best);
++        }
++    }
++}
++
+ void ScreenshotGiant()
+ {
+     RenderTarget rt{};
+@@ -450,10 +616,12 @@ int32_t CommandLineForScreenshot(const char** argv, int32_t argc, ScreenshotOpti
+     }
+ 
+     bool giantScreenshot = (argc == 5) && String::iequals(argv[2], "giant");
+-    if (argc != 4 && argc != 8 && argc != 9 && !giantScreenshot)
++    bool previewScreenshot = (argc == 5) && String::iequals(argv[2], "preview");
++    if (argc != 4 && argc != 8 && argc != 9 && !giantScreenshot && !previewScreenshot)
+     {
+         std::printf("Usage: openrct2 screenshot <file> <output_image> <width> <height> [<x> <y> [<z>] <zoom> <rotation>]\n");
+         std::printf("Usage: openrct2 screenshot <file> <output_image> giant <zoom> <rotation>\n");
++        std::printf("Usage: openrct2 screenshot <file> <output_image> preview <width> <height>\n");
+         return -1;
+     }
+ 
+@@ -485,7 +653,14 @@ int32_t CommandLineForScreenshot(const char** argv, int32_t argc, ScreenshotOpti
+         gLegacyScene = LegacyScene::playing;
+ 
+         Viewport viewport{};
+-        if (giantScreenshot)
++        int32_t previewScale = 1;
++        if (previewScreenshot)
++        {
++            const int32_t width = std::clamp(std::atoi(argv[3]), 16, 4096);
++            const int32_t height = std::clamp(std::atoi(argv[4]), 16, 4096);
++            viewport = GetPreviewViewport(width, height, previewScale);
++        }
++        else if (giantScreenshot)
+         {
+             auto customZoom = static_cast<int8_t>(std::atoi(argv[3]));
+             auto zoom = ZoomLevel{ customZoom };
+@@ -565,7 +740,21 @@ int32_t CommandLineForScreenshot(const char** argv, int32_t argc, ScreenshotOpti
+ 
+         UpdatePaletteEffects();
+         RenderViewport(nullptr, viewport, rt);
+-        WriteRTToFile(outputPath, rt, gPalette);
++        if (previewScale > 1)
++        {
++            RenderTarget reduced;
++            reduced.width = viewport.width / previewScale;
++            reduced.height = viewport.height / previewScale;
++            std::vector<PaletteIndex> pixels(static_cast<size_t>(reduced.width) * reduced.height);
++            reduced.bits = pixels.data();
++            ReducePicture(rt, reduced, previewScale);
++            if (!WriteRTToFile(outputPath, reduced, gPalette))
++                exitCode = -1;
++        }
++        else if (!WriteRTToFile(outputPath, rt, gPalette))
++        {
++            exitCode = -1;
++        }
+     }
+     catch (const std::exception& e)
+     {
