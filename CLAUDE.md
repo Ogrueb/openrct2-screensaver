@@ -7,7 +7,7 @@ See README.md for usage.
 ## Decisions
 - **Build on top of OpenRCT2, never fork it.** This repo holds tools, a plugin, and (later)
   a small patch set against OpenRCT2 plus a build script. Target the latest OpenRCT2
-  release (currently v0.5.6), not `develop`.
+  release (currently v0.5.7, since 2026-11-15; the patches moved over from v0.5.6 unchanged), not `develop`.
 - **Title screen, not a separate renderer.** Extend the title scene. Wrapper scope (owner,
   2026-10-31, `docs/wallpaper-wrapper.md`): one borderless window, our minimal UI drawn by an engine
   patch in place of the stock windows, a screensaver mode from a main menu toggle or a launch flag;
@@ -303,7 +303,7 @@ See README.md for usage.
   `TitleSequence.commands = …` saves the script to disk. `play()` loads the sequence
   and executes its first `LOAD` synchronously; `seek()` to a `LOAD` only sets the position,
   and the park loads on the player's next update (the freeze happens there).
-- Plugin API version for v0.5.6 is 124; plugins run on QuickJS-NG (ES2020+ is fine).
+- Plugin API version for v0.5.6 and v0.5.7 is 124; plugins run on QuickJS-NG (ES2020+ is fine).
   `gamesetspeed` accepts 1–4 (up to 8 only with debugging tools); `context.gameSpeed`
   returns that 1-based value despite its doc comment.
 - Shared storage keys are dotted paths into nested JSON objects

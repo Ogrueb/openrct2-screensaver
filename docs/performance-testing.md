@@ -25,7 +25,7 @@ it takes. Before any run longer than an hour, ask the owner.
 
 1. **Install the build.** Download the "Engine build" artifact for the commit you are testing
    (Actions, "Engine build"). Put `openrct2.exe` and `openrct2.com` into a copy of the portable
-   v0.5.6 install, for example `RCT\openrct2-perf\`, so the everyday install stays as it is.
+   v0.5.7 install, for example `RCT\openrct2-perf\`, so the everyday install stays as it is.
    Below, `<exe>` is that `openrct2.exe`.
 2. **Close OpenRCT2.** Leave the PC alone during a run: mouse movement is marked, and those
    seconds are left out of the numbers.
