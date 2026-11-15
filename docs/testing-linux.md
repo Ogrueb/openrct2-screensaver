@@ -74,14 +74,14 @@ python3 --version          # 3.11 or later
 
 **The patched engine (AppImage)**: the portable tarball does not run on Fedora (2026-11-04:
 `libicuuc.so.74` missing, as predicted), so the VM uses the AppImage, which carries its own libraries.
-Download the artifact `openrct2-v0.5.6-openrct2-screensaver-linux-x64-appimage` from the latest green
+Download the artifact `openrct2-v0.5.7-openrct2-screensaver-linux-x64-appimage` from the latest green
 "Engine build" run (Actions tab), then unpack it rather than mounting it (no FUSE needed, and the
 tools get a plain executable):
 ```sh
 mkdir -p ~/openrct2-ss && cd ~/openrct2-ss
-unzip ~/Downloads/openrct2-v0.5.6-openrct2-screensaver-linux-x64-appimage.zip
-chmod +x openrct2-v0.5.6-openrct2-screensaver-linux-x64.AppImage
-./openrct2-v0.5.6-openrct2-screensaver-linux-x64.AppImage --appimage-extract
+unzip ~/Downloads/openrct2-v0.5.7-openrct2-screensaver-linux-x64-appimage.zip
+chmod +x openrct2-v0.5.7-openrct2-screensaver-linux-x64.AppImage
+./openrct2-v0.5.7-openrct2-screensaver-linux-x64.AppImage --appimage-extract
 ls squashfs-root           # AppRun, usr/ (usr/bin/openrct2, usr/lib/, usr/share/openrct2/)
 ```
 The engine is now `~/openrct2-ss/squashfs-root/AppRun` (it starts `usr/bin/openrct2` with the bundled
@@ -103,7 +103,7 @@ E=~/openrct2-ss/squashfs-root/AppRun
 $E --version
 ldd ~/openrct2-ss/squashfs-root/usr/bin/openrct2 | grep "not found"
 ```
-- [ ] `--version` prints `v0.5.6 (… on openrct2-screensaver)`.
+- [ ] `--version` prints `v0.5.7 (… on openrct2-screensaver)`.
 - [ ] `ldd` prints nothing. (The bundled libraries are under `usr/lib`; `ldd` on the bare binary may
       not find them without `AppRun`'s path, so if it lists some, check they exist in
       `squashfs-root/usr/lib/` before counting it a failure.)

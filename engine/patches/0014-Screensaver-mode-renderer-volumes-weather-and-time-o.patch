@@ -301,7 +301,7 @@ index 08e1a52..202fc24 100644
              float offset = (static_cast<float>(gameState.weatherCurrent.temperature - 20)) * 0.04f;
              offset *= 1.0f - night;
 diff --git a/src/openrct2/scenario/Scenario.cpp b/src/openrct2/scenario/Scenario.cpp
-index d79e607..4e912ff 100644
+index f92229b..64bc5dd 100644
 --- a/src/openrct2/scenario/Scenario.cpp
 +++ b/src/openrct2/scenario/Scenario.cpp
 @@ -14,6 +14,7 @@

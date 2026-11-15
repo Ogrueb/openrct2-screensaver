@@ -450,7 +450,7 @@ Requirements, in order:
 
 1. **A Linux machine** (the obstacle: the owner has none set up). A VM or a second drive with a
    desktop distribution is enough; the tests need a display (X11 and Wayland both), not
-   performance. Install OpenRCT2 v0.5.6 from the official release (the AppImage or the distro
+   performance. Install OpenRCT2 v0.5.7 from the official release (the AppImage or the distro
    package) and the RCT2 data files.
 2. **An engine build for Linux** in `.github/workflows/engine.yml`: a second job copied from
    OpenRCT2's own Ubuntu CI job (CMake, the same patch application as the Windows job). The

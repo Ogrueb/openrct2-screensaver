@@ -7,7 +7,7 @@ captions and a few display settings.
 
 Three parts, all in this repository, none of them a fork of OpenRCT2:
 
-- **Engine patches** (`engine/`): a small series against the OpenRCT2 v0.5.6 release that adds a
+- **Engine patches** (`engine/`): a small series against the OpenRCT2 v0.5.7 release that adds a
   screensaver mode to the title screen (borderless window, the stock menus hidden, an overlay for
   the interface, a `--screensaver` launch flag), loads the next park in the background so switches
   cost about a frame, plays the parks' ride music, and keeps the interface readable in parks with
@@ -19,7 +19,7 @@ Three parts, all in this repository, none of them a fork of OpenRCT2:
   of its busiest spots, towers and rides, joined by pans), builds the title sequence and installs
   it, with a settings page in the browser and a tool for drawing views by hand.
 
-Running it requires OpenRCT2 v0.5.6 and the original RollerCoaster Tycoon 2 (or RCT Classic)
+Running it requires OpenRCT2 v0.5.7 and the original RollerCoaster Tycoon 2 (or RCT Classic)
 game files, which are not included; neither are any parks (see `ExampleParks/README.md`).
 
 ## Support
@@ -27,7 +27,7 @@ game files, which are not included; neither are any parks (see `ExampleParks/REA
 | | |
 |---|---|
 | Operating system | Windows 10/11 (x64), and Linux x64 (tested on Fedora under Wayland, 2026-11-05; X11 untested). The mode's captions use the Segoe UI and Georgia system fonts on Windows and fall back to DejaVu, Liberation or Noto Sans on Linux. `Settings.cmd` and `.sv6` conversion use `openrct2.com` on Windows; `settings.sh` starts the settings page on Linux and macOS. On macOS only the Python tools run (no engine build). |
-| OpenRCT2 | v0.5.6 (`engine/VERSION`), the portable or installed release, with the two patched executables in place of the stock ones. On an unpatched v0.5.6 the plugin falls back to playing on the stock title screen, without the screensaver mode (below). |
+| OpenRCT2 | v0.5.7 (`engine/VERSION`), the portable or installed release, with the two patched executables in place of the stock ones. On an unpatched v0.5.7 the plugin falls back to playing on the stock title screen, without the screensaver mode (below). |
 | Python | 3.11 or later, on PATH (`pythonw` for `Settings.cmd`). No third-party packages. |
 | Node | Only to rebuild the plugin (22 or later); the built plugin is committed. |
 
@@ -36,7 +36,7 @@ game files, which are not included; neither are any parks (see `ExampleParks/REA
 1. **Patched engine.** Download the engine build from the project's releases, or build it yourself
    with the "Engine build" workflow (`engine/README.md`). On Windows it holds `openrct2.exe`,
    `openrct2.com` and a `data` folder: keep a copy of the stock pair, then extract the zip into your
-   OpenRCT2 v0.5.6 install, replacing both executables and merging `data` into the install's own
+   OpenRCT2 v0.5.7 install, replacing both executables and merging `data` into the install's own
    (it only adds `data\plugin\` and `data\screensaver\`). That is all the screensaver needs: the
    build carries the plugin, the generator and a Python to run it.
 2. **Parks.** Put park downloads (zips as published on New Element Designs, or loose `.park` files)
@@ -77,14 +77,14 @@ Without it, delete `Documents\OpenRCT2\plugin\rct-screensaver.js` once to play t
 ### Linux
 
 The patched engine for Linux (beta) is a whole build, not two replaced files: download
-`openrct2-v0.5.6-openrct2-screensaver-linux-x64-beta.AppImage` from the project's releases (or the
+`openrct2-v0.5.7-openrct2-screensaver-linux-x64-beta.AppImage` from the project's releases (or the
 `linux-x64-appimage` zip from the "Engine build" workflow, unzipped first). The AppImage carries its
 own libraries, so it runs on any current distribution; unpack it rather than mounting it (no FUSE
 needed, and the tools get a plain executable):
 
 ```sh
 mkdir -p ~/openrct2-ss && cd ~/openrct2-ss
-cp ~/Downloads/openrct2-v0.5.6-openrct2-screensaver-linux-x64-beta.AppImage .
+cp ~/Downloads/openrct2-v0.5.7-openrct2-screensaver-linux-x64-beta.AppImage .
 chmod +x openrct2-*.AppImage && ./openrct2-*.AppImage --appimage-extract
 ~/openrct2-ss/squashfs-root/AppRun        # the game; asks for the RCT2 folder on its first start
 ```

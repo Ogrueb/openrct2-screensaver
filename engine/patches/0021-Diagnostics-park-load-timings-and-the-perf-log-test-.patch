@@ -987,7 +987,7 @@ index 065edf1..5bf9aa3 100644
 +    return stats;
 +}
 diff --git a/src/openrct2/libopenrct2.vcxproj b/src/openrct2/libopenrct2.vcxproj
-index 60b10e0..7fdf014 100644
+index d3140f3..fb25761 100644
 --- a/src/openrct2/libopenrct2.vcxproj
 +++ b/src/openrct2/libopenrct2.vcxproj
 @@ -399,6 +399,7 @@
@@ -998,7 +998,7 @@ index 60b10e0..7fdf014 100644
      <ClInclude Include="openrct2_pch.h"/>
      <ClInclude Include="paint\Boundbox.h" />
      <ClInclude Include="paint\Paint.Entity.h" />
-@@ -1022,6 +1023,7 @@
+@@ -1023,6 +1024,7 @@
      <ClCompile Include="object\WaterEntry.cpp" />
      <ClCompile Include="object\WaterObject.cpp" />
      <ClCompile Include="OpenRCT2.cpp" />
