@@ -121,7 +121,7 @@ class Scroll {
 /** A row press that becomes a drag once the mouse moves (views or parks). */
 /** A row of the open park list. */
 type ParkItem = { kind: "park"; p: number } | { kind: "unused"; i: number } | { kind: "playlist"; i: number }
-    | { kind: "head"; text: string } | { kind: "add" };
+    | { kind: "head"; text: string };
 
 interface RowDrag {
     list: "views" | "parks";
@@ -162,6 +162,7 @@ export class EditorPanel implements EditorView {
     private dropdown: { persistent: boolean; downAt: number } | undefined; // the park list
     private playlists: PlaylistInfo[] | undefined; // the open list is the playlist field's (read as it opens)
     private useNote: { text: string; at: number } | undefined; // why a tick did nothing, for a moment
+    private seenAdded = 0; // the last park Add park added that the editor went to (builder.added.at)
     private seenMade = 0; // the last playlist New or Duplicate made that the list was opened on (builder.made.at)
     // A playlist New just made, not built yet: the park list shows its parks to tick and order, and builds
     // it on Build and play (owner, 2026-11-13); gone when the list closes
@@ -333,7 +334,7 @@ export class EditorPanel implements EditorView {
     private pressed(inside: boolean): boolean {
         const ed = this.editor!;
         const hit = this.hit();
-        if (this.dropdown && (!hit || (!hit.startsWith("park.") && !hit.startsWith("parks.") && !(hit === "build" && this.draft)))) {
+        if (this.dropdown && (!hit || (!hit.startsWith("park.") && !hit.startsWith("parks.") && !(hit === "build" && this.draft) && hit !== "parkAdd"))) {
             // Another click closes the open list (a click on either field too); it does nothing else (but
             // Build and play builds a new playlist's parks as the list shows them).
             this.dropdown = undefined;
@@ -658,6 +659,7 @@ export class EditorPanel implements EditorView {
             case "setGroup.1": this.setGroup = "park"; this.setOpen = true; break;
             case "plNew": this.newGen = this.newGen ? undefined : { ...e.playback.generation }; break;
             case "plCopy": this.messages.first = 0; builder.copyPlaylist(e.playback.sequenceName); break;
+            case "parkAdd": this.dropdown = undefined; this.messages.first = 0; builder.addPark(e.playback.sequenceName); break;
             case "newCancel": this.newGen = undefined; break;
             case "newGo": this.startNew(); break;
             case "parkReset": e.playback.resetParkSettings(PARK_PLAYBACK); break;
@@ -815,7 +817,10 @@ export class EditorPanel implements EditorView {
         const many = order.length > 1;
         this.place("prevPark", { x: x0, y, width: t, height: t }, "Previous park", !many || e.playback.isLoading);
         // (no Close button: E and the bar's edit button close the editor; owner, 2026-11-12)
-        const nextX = x0 + inner - t;
+        // Add park, an icon button at the row's end like New playlist above (owner, 2026-11-14)
+        this.place("parkAdd", { x: x0 + inner - t, y, width: t, height: t }, why ? `Add park: ${why}`
+            : "Add park (.park, RCT save or download): added, built, then shown", !!why);
+        const nextX = x0 + inner - 2 * t - s.gap;
         this.place("nextPark", { x: nextX, y, width: t, height: t }, "Next park", !many || e.playback.isLoading);
         const field = this.place("field", { x: x0 + t + s.gap, y, width: nextX - s.gap - (x0 + t + s.gap), height: t },
             many ? "Hold: jump to a park. Click: reorder" : undefined);
@@ -860,6 +865,22 @@ export class EditorPanel implements EditorView {
         // A playlist New or Duplicate just made: its list opens (or reads again) with it, to pick
         if (!this.dropdown) {
             this.draft = undefined;
+        }
+        // A park Add park added, built and playing: the editor goes to it, and the playlist order opens
+        // scrolled to its row (owner, 2026-11-14)
+        const added = builder.added;
+        if (added && added.at !== this.seenAdded) {
+            const index = e.playback.parkIndexOf(added.key);
+            if (index >= 0) {
+                this.seenAdded = added.at;
+                if (index !== e.parkIndex) {
+                    e.goToPark(index);
+                }
+                this.playlists = undefined;
+                this.dropdown = { persistent: true, downAt: this.now() };
+                const row = e.playback.playOrder.indexOf(index);
+                this.parks.first = Math.max(0, row - Math.max(1, this.parkRows()) + 1);
+            }
         }
         const made = builder.made;
         if (made && made.at !== this.seenMade) {
@@ -906,6 +927,7 @@ export class EditorPanel implements EditorView {
         button(scene, "nextPark", this.boxes.get("nextPark")!, this.state("nextPark"), { icon: "next-view", iconSize: s.toolIcon }, overlay);
         button(scene, "plNew", this.boxes.get("plNew")!, this.state("plNew", !!this.newGen), { icon: "add", iconSize: s.toolIcon - 6 }, overlay);
         button(scene, "plCopy", this.boxes.get("plCopy")!, this.state("plCopy"), { icon: "copy", iconSize: s.toolIcon - 6 }, overlay);
+        button(scene, "parkAdd", this.boxes.get("parkAdd")!, this.state("parkAdd"), { icon: "add", iconSize: s.toolIcon - 6 }, overlay);
         const fieldOpen = this.dropdown !== undefined && this.playlists === undefined;
         scene.set("field", { type: "rect", ...field, fill: fieldOpen ? THEME.faceDown : this.hit() === "field" ? THEME.faceHover : THEME.editorList, z: Z.face });
         bevel(scene, "field", field, THEME.bevelDark, THEME.bevelLight, THEME.bevel, Z.bevel);
@@ -1253,7 +1275,7 @@ export class EditorPanel implements EditorView {
         const unused = e.playback.unusedParks.map((park, i) => ({ park, i })).filter(u => !u.park.on);
         return [...rows.map((_, p) => ({ kind: "park", p }) as ParkItem),
             ...(unused.length ? [{ kind: "head", text: "NOT IN THE BUILD" } as ParkItem] : []),
-            ...unused.map(u => ({ kind: "unused", i: u.i }) as ParkItem), { kind: "add" }];
+            ...unused.map(u => ({ kind: "unused", i: u.i }) as ParkItem)]; // (Add park: the park row's button since 2026-11-14)
     }
 
     /** A click on a row or button of the open park list (its id after "parks."). */
@@ -1286,10 +1308,6 @@ export class EditorPanel implements EditorView {
             if (park) {
                 p.setParkUse(park.key, !park.on);
             }
-        } else if (what === "add") {
-            this.dropdown = undefined;
-            this.messages.first = 0;
-            builder.addPark(p.sequenceName);
         } else if (what.startsWith("pl.")) {
             const other = this.playlists?.[Number(what.slice(3))];
             if (other && other.name !== p.sequenceName && !other.missing) {
@@ -1440,14 +1458,6 @@ export class EditorPanel implements EditorView {
                 text(`pcount.${i}`, right, area.x + width - 8 - rw, y, pl.missing ? THEME.warning : fresh ? THEME.pending : THEME.textDim);
                 continue;
             }
-            // The action row: Add park
-            const [label0, tip, icon] = ["Add park…", "Pick a park, an RCT save or a park download (.park, .sv6, .zip); it is added and the playlist built", "add"];
-            const off = !parksOn || busy;
-            const why = !parksOn ? (builder.available ? "needs the patched engine with these dialogs" : builder.unavailableReason) : busy ? `wait for the ${builder.noun} to finish` : "";
-            const id = `parks.${item.kind}`;
-            const row = this.place(id, { x: area.x + 4, y: y + 2, width: width - 8, height: s.parkRow - 4 }, why ? `${label0.replace("…", "")}: ${why}` : tip, off);
-            button(scene, id, row, this.state(id), { icon, iconSize: 16, text: label0, textSize: s.textSize, left: true }, overlay);
-            lift(scene, id, z);
         }
         if (this.parks.track) {
             scene.set("parks.track", { type: "rect", ...this.parks.track, fill: THEME.editorList, z: z + 1 });

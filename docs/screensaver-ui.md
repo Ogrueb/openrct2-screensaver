@@ -418,7 +418,8 @@ click on the park field (Playlist order):
   playlist (`unused`: key and name), shown under NOT IN THE BUILD with their ticks. Ticked on, a park moves up into the order (after the rest by default),
   marked "needs a build", and can be dragged to where it should play before the build (owner, 2026-11-12); its
   place is saved with the order (`order` names its key) and the build bakes it there.
-- **Add park…** (the list's last row) calls `screensaver.addPark(<sequence>)`: the engine shows the system's Open
+- **Add park…** (an icon button at the park row's end since 2026-11-14, owner; it was the list's last row; once
+  the build plays, the editor goes to the added park, `task-add.json` `park`, and the playlist order opens on its row) calls `screensaver.addPark(<sequence>)`: the engine shows the system's Open
   dialog (`*.park;*.zip;*.sv6;*.sc6;*.sv4;*.sc4`, starting where the last park or bundle was picked) and runs `mksequence.py --live-add
   <sequence> --park <file>`. The generator bakes the game's edits, appends a `[[park]]` with the file relative to
   the playlist (absolute on another drive) and its builders from the NE catalogue or the file name, or ticks the

@@ -4007,7 +4007,8 @@ def live_add(name, park_path, user_dir, openrct2=None):
             # A download that ships loose objects: they go into the object folder, the park is read in place
             import importparks
             line, _ = add_park_entry(source, park_path)
-            objects_notes(note, *importparks.install_loose(park_path, user_dir), park=park_key({"file": park_path}))
+            added = park_key({"file": park_path})
+            objects_notes(note, *importparks.install_loose(park_path, user_dir), park=added)
         elif needs_import(reason):
             # An RCT save: converted into a library of its own
             library = os.path.join(user_dir, "screensaver", "library", "added", slug(os.path.splitext(os.path.basename(park_path))[0]))
@@ -4015,12 +4016,15 @@ def live_add(name, park_path, user_dir, openrct2=None):
             if not entries:
                 raise ValueError("%s could not be imported%s" % (os.path.basename(park_path), "" if openrct2 else " (no OpenRCT2 to convert it with)"))
             line, _ = add_park_entry(source, entries[0]["file"], entries[0].get("author"))
-            objects_notes(note, new, had, park=park_key(entries[0]))
+            added = park_key(entries[0])
+            objects_notes(note, new, had, park=added)
         else:
             line, reason = add_park_entry(source, park_path)
+            added = park_key({"file": park_path})
         note("ok", line)
         register_generator(user_dir, name, source)  # (the playlists list counts the new park)
-        write(ok=True, finished=int(time.time() * 1000), playlist=source)
+        # (`park`: its key, for the game to go to it once built)
+        write(ok=True, finished=int(time.time() * 1000), playlist=source, park=added)
     except Exception as e:  # anything: the game shows it
         return task_failed(note, write, "Adding the park", e)
     return live_build(name, user_dir)

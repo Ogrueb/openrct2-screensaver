@@ -196,6 +196,7 @@ class LiveParks(unittest.TestCase):
         code, _ = self.run_task(mksequence.live_add, "My List", dl, self.user)
         self.assertEqual(code, 0, self.task("add"))
         self.assertEqual(self.read()["park"][-1]["file"], "../pack.zip")
+        self.assertEqual(self.task("add")["park"], "pack.zip", "its key, for the game to go to it")
         self.assertIn("WALL1.DAT", os.listdir(os.path.join(self.user, "object", "rct-screensaver")))
         self.assertTrue(any("restart the game" in m["text"].lower() and m.get("park") == "pack.zip" for m in self.task("add")["messages"]),
                         "about the park, so the game flags its square")

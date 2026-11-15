@@ -617,6 +617,9 @@
         phase: "done",
         text: `${done} at ${at}, now playing${warnings ? `; ${warnings} warning${warnings > 1 ? "s" : ""}` : ""}`
       };
+      if (task === "add" && imported?.park) {
+        this.added = { key: imported.park, at: Date.now() };
+      }
       this.notes = [{ level: "ok", text: task === "build" || task === "add" ? `Built ${at} in ${clock(took)}, now playing` : `${done} "${sequence}" ${at} in ${clock(took)}, now playing` }, ...lifted];
       if (lifted.some((m) => /restart the game/i.test(m.text))) {
         this.outcome = { phase: "done", text: `${done} at ${at}; restart the game to load its new objects`, warning: true };
@@ -3242,7 +3245,6 @@
     get playOrder() {
       return [...this.parkOrder];
     }
-    /** How many views each park has (by playlist index): its edits', else the playlist's. */
     /** A park's orders (circuit_variants, circuit_reverse) for the park list: how many, how many of them
      *  reversed, and which (1-based) plays now (the playing park) or on its next visit; undefined with one
      *  order, or with its views set by hand. */
@@ -3257,6 +3259,7 @@
       const order = visit === void 0 ? 0 : now ? visit % count : (visit + 1) % count;
       return { count, reversed: park.variants.filter((v) => v.reverse).length, order: order + 1, now };
     }
+    /** How many views each park has (by playlist index): its edits', else the playlist's. */
     viewCountOf(index) {
       if (index === this.parkIndex && !this.loadingPark) {
         return this.views.length;
@@ -6331,6 +6334,8 @@
       this.points = new Scroll();
       this.followed = -1;
       // why a tick did nothing, for a moment
+      this.seenAdded = 0;
+      // the last park Add park added that the editor went to (builder.added.at)
       this.seenMade = 0;
       // the restore point highlighted
       this.setOpen = true;
@@ -6485,7 +6490,7 @@
     pressed(inside) {
       const ed = this.editor;
       const hit = this.hit();
-      if (this.dropdown && (!hit || !hit.startsWith("park.") && !hit.startsWith("parks.") && !(hit === "build" && this.draft))) {
+      if (this.dropdown && (!hit || !hit.startsWith("park.") && !hit.startsWith("parks.") && !(hit === "build" && this.draft) && hit !== "parkAdd")) {
         this.dropdown = void 0;
         return true;
       }
@@ -6853,6 +6858,11 @@
           this.messages.first = 0;
           builder.copyPlaylist(e.playback.sequenceName);
           break;
+        case "parkAdd":
+          this.dropdown = void 0;
+          this.messages.first = 0;
+          builder.addPark(e.playback.sequenceName);
+          break;
         case "newCancel":
           this.newGen = void 0;
           break;
@@ -7017,7 +7027,8 @@
       const pos = order.indexOf(e.parkIndex);
       const many = order.length > 1;
       this.place("prevPark", { x: x0, y, width: t, height: t }, "Previous park", !many || e.playback.isLoading);
-      const nextX = x0 + inner - t;
+      this.place("parkAdd", { x: x0 + inner - t, y, width: t, height: t }, why ? `Add park: ${why}` : "Add park (.park, RCT save or download): added, built, then shown", !!why);
+      const nextX = x0 + inner - 2 * t - s.gap;
       this.place("nextPark", { x: nextX, y, width: t, height: t }, "Next park", !many || e.playback.isLoading);
       const field = this.place(
         "field",
@@ -7061,6 +7072,20 @@
       backing(scene, "frame", this.paneViews, THEME.editorBacking);
       if (!this.dropdown) {
         this.draft = void 0;
+      }
+      const added = builder.added;
+      if (added && added.at !== this.seenAdded) {
+        const index = e.playback.parkIndexOf(added.key);
+        if (index >= 0) {
+          this.seenAdded = added.at;
+          if (index !== e.parkIndex) {
+            e.goToPark(index);
+          }
+          this.playlists = void 0;
+          this.dropdown = { persistent: true, downAt: this.now() };
+          const row = e.playback.playOrder.indexOf(index);
+          this.parks.first = Math.max(0, row - Math.max(1, this.parkRows()) + 1);
+        }
       }
       const made = builder.made;
       if (made && made.at !== this.seenMade) {
@@ -7110,6 +7135,7 @@
       button(scene, "nextPark", this.boxes.get("nextPark"), this.state("nextPark"), { icon: "next-view", iconSize: s.toolIcon }, overlay);
       button(scene, "plNew", this.boxes.get("plNew"), this.state("plNew", !!this.newGen), { icon: "add", iconSize: s.toolIcon - 6 }, overlay);
       button(scene, "plCopy", this.boxes.get("plCopy"), this.state("plCopy"), { icon: "copy", iconSize: s.toolIcon - 6 }, overlay);
+      button(scene, "parkAdd", this.boxes.get("parkAdd"), this.state("parkAdd"), { icon: "add", iconSize: s.toolIcon - 6 }, overlay);
       const fieldOpen = this.dropdown !== void 0 && this.playlists === void 0;
       scene.set("field", { type: "rect", ...field, fill: fieldOpen ? THEME.faceDown : this.hit() === "field" ? THEME.faceHover : THEME.editorList, z: Z.face });
       bevel(scene, "field", field, THEME.bevelDark, THEME.bevelLight, THEME.bevel, Z.bevel);
@@ -7502,8 +7528,7 @@
       return [
         ...rows.map((_, p) => ({ kind: "park", p })),
         ...unused.length ? [{ kind: "head", text: "NOT IN THE BUILD" }] : [],
-        ...unused.map((u) => ({ kind: "unused", i: u.i })),
-        { kind: "add" }
+        ...unused.map((u) => ({ kind: "unused", i: u.i }))
       ];
     }
     /** A click on a row or button of the open park list (its id after "parks."). */
@@ -7536,10 +7561,6 @@
         if (park) {
           p.setParkUse(park.key, !park.on);
         }
-      } else if (what === "add") {
-        this.dropdown = void 0;
-        this.messages.first = 0;
-        builder.addPark(p.sequenceName);
       } else if (what.startsWith("pl.")) {
         const other = this.playlists?.[Number(what.slice(3))];
         if (other && other.name !== p.sequenceName && !other.missing) {
@@ -7614,10 +7635,10 @@
         }
         if (item.kind === "park") {
           const p = item.p;
-          const row2 = rows[p];
-          const index = row2.index;
+          const row = rows[p];
+          const index = row.index;
           const waiting = index < 0;
-          const used = waiting ? row2.on !== false : e.playback.parkInUse(index);
+          const used = waiting ? row.on !== false : e.playback.parkInUse(index);
           if (tickW) {
             const tick = this.place(
               `parks.tick.${p}`,
@@ -7644,7 +7665,7 @@
             label(scene, `pord.${i}`, t, { x: box.x + width - 8 - countW - ordersW, y, width: 0, height: s.parkRow }, s.textSize - 1, overlay);
             scene.set(`pord.${i}`, { ...scene.get(`pord.${i}`), z: z + 2, colour: THEME.textDim });
           }
-          const name = row2.name + (used ? "" : " (left out)");
+          const name = row.name + (used ? "" : " (left out)");
           text(
             `pname.${i}`,
             fit(overlay, name, s.textSize, width - s.grip - 40 - tickW - countW - ordersW - 16),
@@ -7684,10 +7705,10 @@
         if (item.kind === "playlist") {
           const pl = this.playlists[item.i];
           const playing = pl.name === e.playback.sequenceName;
-          const off2 = playing || pl.missing === true || busy;
-          const tip2 = playing ? "Playing now" : pl.missing ? `${pl.file} is missing` : busy ? `Wait for the ${builder.noun} to finish` : `Switch to "${pl.name}": it is built (only changed parks) and played`;
-          const row2 = this.place(`parks.pl.${item.i}`, rowRect, tip2, off2);
-          scene.set(`ppl.${i}`, { type: "rect", ...row2, fill: playing ? THEME.faceOn : hover === `parks.pl.${item.i}` && !off2 ? THEME.faceHover : i % 2 ? THEME.face : "#00000000", z: z + 1 });
+          const off = playing || pl.missing === true || busy;
+          const tip = playing ? "Playing now" : pl.missing ? `${pl.file} is missing` : busy ? `Wait for the ${builder.noun} to finish` : `Switch to "${pl.name}": it is built (only changed parks) and played`;
+          const row = this.place(`parks.pl.${item.i}`, rowRect, tip, off);
+          scene.set(`ppl.${i}`, { type: "rect", ...row, fill: playing ? THEME.faceOn : hover === `parks.pl.${item.i}` && !off ? THEME.faceHover : i % 2 ? THEME.face : "#00000000", z: z + 1 });
           const fresh = builder.made?.sequence === pl.name && !playing;
           const right = playing ? "playing" : pl.missing ? "file missing" : `${fresh ? "new \xB7 " : ""}${pl.parks ?? 0} park${pl.parks === 1 ? "" : "s"}`;
           const rw = measure(overlay, right, s.textSize).width;
@@ -7695,13 +7716,6 @@
           text(`pcount.${i}`, right, area.x + width - 8 - rw, y, pl.missing ? THEME.warning : fresh ? THEME.pending : THEME.textDim);
           continue;
         }
-        const [label0, tip, icon] = ["Add park\u2026", "Pick a park, an RCT save or a park download (.park, .sv6, .zip); it is added and the playlist built", "add"];
-        const off = !parksOn || busy;
-        const why = !parksOn ? builder.available ? "needs the patched engine with these dialogs" : builder.unavailableReason : busy ? `wait for the ${builder.noun} to finish` : "";
-        const id = `parks.${item.kind}`;
-        const row = this.place(id, { x: area.x + 4, y: y + 2, width: width - 8, height: s.parkRow - 4 }, why ? `${label0.replace("\u2026", "")}: ${why}` : tip, off);
-        button(scene, id, row, this.state(id), { icon, iconSize: 16, text: label0, textSize: s.textSize, left: true }, overlay);
-        lift(scene, id, z);
       }
       if (this.parks.track) {
         scene.set("parks.track", { type: "rect", ...this.parks.track, fill: THEME.editorList, z: z + 1 });
@@ -8231,13 +8245,6 @@
     const px = iconPixels(20, overlay.scale);
     const side = px / overlay.scale;
     scene.set(id, { type: "image", src: iconPath(open ? "fold-open" : "fold-closed", px), x: Math.round(x), y: Math.round(cy - side / 2), z: Z.icon });
-  }
-  function lift(scene, id, dz) {
-    for (const [key, el] of scene) {
-      if (key === id || key.startsWith(id + ".")) {
-        scene.set(key, { ...el, z: (el.z ?? 0) + dz });
-      }
-    }
   }
   function grip(scene, id, x, cy, z = Z.icon) {
     for (let r = 0; r < 3; r++) {

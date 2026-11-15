@@ -162,6 +162,7 @@ export interface TaskResult {
     missing?: string[]; // import: parks neither in the bundle nor the park folder
     parks?: { key: string; name: string }[]; // new: the new playlist's parks, before its first build
     built?: boolean; // copy: the playing build was copied along (applyBuild plays the copy without a rebuild)
+    park?: string; // add: the added park's key
     messages?: BuildMessage[];
 }
 
@@ -245,6 +246,7 @@ export class Builder {
     onReady: ((result: BuildResult, imported: boolean) => string | undefined) | undefined;
 
     /** The playlist New or Duplicate made last (not built yet): the editor opens the PLAYLIST list on it. */
+    added: { key: string; at: number } | undefined; // the park Add park added, once its build plays: the editor goes to it
     made: { sequence: string; at: number; task: "new" | "copy"; playlist?: string; parks?: { key: string; name: string }[] } | undefined;
 
     /** Plays a copy of the playing playlist from the copied build (no rebuild); an error message, or
@@ -567,6 +569,9 @@ export class Builder {
         this.outcome = {
             phase: "done", text: `${done} at ${at}, now playing${warnings ? `; ${warnings} warning${warnings > 1 ? "s" : ""}` : ""}`,
         };
+        if (task === "add" && imported?.park) {
+            this.added = { key: imported.park, at: Date.now() };
+        }
         this.notes = [{ level: "ok", text: task === "build" || task === "add" ? `Built ${at} in ${clock(took)}, now playing`
             : `${done} "${sequence}" ${at} in ${clock(took)}, now playing` }, ...lifted];
         if (lifted.some(m => /restart the game/i.test(m.text))) {

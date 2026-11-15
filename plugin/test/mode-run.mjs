@@ -1236,7 +1236,8 @@ console.log("ok: Import and Export playlist through the file dialogs");
     edClick("field"); tick();
     assert.equal(scene.get("rcts.ed.parks.head").text, "Playlist order");
     assert.ok(ed("ptick.0") && ed("ptick.0.check"), "every park has a tick, on");
-    assert.equal(ed("parks.add").fill, gray, "Add park is inactive on an engine without the dialogs");
+    assert.equal(ed("parkAdd").fill, gray, "Add park is inactive on an engine without the dialogs");
+    assert.equal(ed("parks.add"), undefined, "Add park is the park row's button, not a row of the list");
     // Tick the second park in the order off: saved at once, shown left out, skipped in play.
     edClick("ptick.1"); tick();
     const use = saved["RCTScreensaver.playlistProps"][playlist.sequence].use;
@@ -1298,8 +1299,9 @@ console.log("ok: Import and Export playlist through the file dialogs");
     shortcuts["rctscreensaver.edit"]();
     tick(2);
     edClick("field"); tick();
-    assert.notEqual(ed("parks.add").fill, gray, "with them, Add park is active");
-    edClick("parks.add"); tick(2);
+    assert.notEqual(ed("parkAdd").fill, gray, "with them, Add park is active");
+    assert.ok(ed("parkAdd").x > ed("nextPark").x && Math.abs(ed("parkAdd").y - ed("nextPark").y) < 2, "at the park row's end");
+    edClick("parkAdd"); tick(2);
     assert.deepEqual(mode.added, [playlist.sequence], "Add park asks the engine for the playing playlist");
     assert.ok(!ed("parks"), "the list closes");
     assert.equal(ed("build.state").text, "adding the park");
@@ -1318,12 +1320,11 @@ console.log("ok: Import and Export playlist through the file dialogs");
         // Added and built: the new park's square stays empty until the build reaches it, and the add's
         // warnings go on top (a restart for objects installed since the game started; one about objects
         // installed before it is left out)
-        edClick("field"); tick();
-        edClick("parks.add"); tick(2);
+        edClick("parkAdd"); tick(2);
         const keys = playlist.parks.map(p => p.key ?? p.fileName);
         const addFile = "build-" + playlist.sequence.replace(/[^A-Za-z0-9._-]/g, "_") + ".json";
         mode.files.set("task-add.json", JSON.stringify({ taskVersion: 1, task: "add", started: now, ok: true, finished: now,
-            sequence: playlist.sequence, playlist: "C:/x/mini.toml", messages: [
+            sequence: playlist.sequence, playlist: "C:/x/mini.toml", park: keys[1], messages: [
                 { level: "info", text: "Star: converted from SV6" },
                 { level: "warn", text: "Restart the game to load its objects (installed in your object folder at 2026-11-14 10:00), then build again", installed: -1, park: "star.park" }, // (before the mock clock started)
                 { level: "warn", text: "Restart the game to load the objects just installed in your object folder, then build again", park: "star.park" },
@@ -1348,6 +1349,11 @@ console.log("ok: Import and Export playlist through the file dialogs");
         tick(6);
         assert.match(ed("msgt.0").text, /^Built .* now playing/, ed("msgt.0").text);
         assert.match(ed("msgt.1").text, /^Restart the game to load the objects just/, "the restart note right under it");
+        tick(2);
+        assert.equal(ed("text.park").text, playlist.parks.find(p => (p.key ?? p.fileName) === keys[1]).name, "the editor goes to the added park");
+        assert.ok(ed("parks.open"), "and the playlist order opens on it");
+        dump("park-added");
+        edClick("field"); tick();
 
         assert.ok(![0, 1, 2, 3, 4, 5].some(i => ed(`msgt.${i}`)?.text.startsWith("Restart the game to load its objects")), "not the one from before the game started");
     }
