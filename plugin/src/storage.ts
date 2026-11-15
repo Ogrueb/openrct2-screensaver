@@ -129,7 +129,51 @@ export interface ParkValues {
     parkCap: number; // longest park time, s
     returnPan: boolean;
     companionPans: "run" | "pause";
+    showPan: number; // a show view's pan share
+    // The event settings (the Events list; the settings page's Events panel), with eventFacts:
+    animationHold?: number | null; // hold of an animation spot's view without its own, s (null: the playlist's hold)
+    show?: string; // the scripted show played as the park's last view ("": none)
+    spots?: Record<string, SpotSetting>; // each animation spot, by name
+    showDefs?: Record<string, ShowDef>; // the shows defined in the park's own profile, by name
 }
+
+/** One animation spot's settings: off (no view on it) and its own hold (absent: the default). */
+export interface SpotSetting {
+    off: boolean;
+    hold?: number;
+}
+
+/** A show's camera and length as its profile defines it: where the show view looks (tiles), the path the
+ *  camera glides (points in tiles with game ticks; a point without x and y waits), the longest it plays, s. */
+export interface ShowDef {
+    hold?: number;
+    view?: { x: number; y: number; zoom: number; rotation: number };
+    path?: { x?: number; y?: number; ticks: number }[];
+}
+
+/** A park's animation spots and the shows its companions offer, as built (the drawing page's Events panel). */
+export interface EventFacts {
+    spots: {
+        name: string;
+        companion: string;
+        on: boolean;
+        offByDefault: boolean; // off unless its profile turns it on (AdvancedTrack lifts)
+        status: string; // what became of it at the build: "view: <name>", "off", "off by default", "over the limit ..."
+        view?: string; // the animation name of the view it is on
+        cue?: Cue; // its trigger (absent: it runs on its own)
+        hold?: number; // its own hold, s
+    }[];
+    shows: { name: string; hold: number; own: boolean; view?: ShowDef["view"]; path?: ShowDef["path"] }[];
+    show: string;
+    animationHold: number | null;
+    holdDefault: number; // the hold of a spot without its own and no animationHold, s
+    cueHold: number; // and of a cued one (the least it plays)
+    locked: string[];
+}
+
+/** A spot's settings change: null puts a value back to the default (its profile key goes). */
+export type SpotChange = { off?: boolean | null; hold?: number | null };
+export type ShowDefChange = { [K in keyof ShowDef]?: ShowDef[K] | null };
 
 export interface ParkSettings extends ParkValues {
     profile: string | null; // the profile's stem (null: none yet; the bake makes one)
@@ -137,6 +181,7 @@ export interface ParkSettings extends ParkValues {
     mapSize: [number, number];
     adjusted: (keyof ParkValues)[]; // set by the profile
     locked: (keyof ParkValues)[]; // set by the playlist's own entry for the park: a profile change would not show
+    eventFacts?: EventFacts; // its animation spots and shows (absent: none)
 }
 
 /** The view editor's changes to a park's settings, by park key: `set` holds the changed values (null: back to
@@ -146,7 +191,10 @@ export interface ParkSettingsChange {
     profile: string | null;
     savedName: string;
     mapSize: [number, number];
-    set: Partial<Record<keyof ParkValues, ParkValues[keyof ParkValues] | null>>;
+    set: Partial<Record<Exclude<keyof ParkValues, "spots" | "showDefs">, ParkValues[keyof ParkValues] | null>> & {
+        spots?: Record<string, SpotChange>;
+        showDefs?: Record<string, ShowDefChange>;
+    };
 }
 
 export interface ParkEntry {

@@ -84,3 +84,73 @@ class ParkSettings(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EventSettings(unittest.TestCase):
+    """The Events list's settings (the drawing page's Events panel): spots on or off and their holds, the
+    default hold, the show, its camera and hold, and its pan share, written into the profile."""
+
+    def setUp(self):
+        self.home = tempfile.mkdtemp()
+        self.old = os.environ.get("RCT_SCREENSAVER_HOME")
+        os.environ["RCT_SCREENSAVER_HOME"] = self.home
+        self.playlist = os.path.join(self.home, "mine.toml")
+        with open(self.playlist, "w", encoding="utf-8") as f:
+            f.write('name = "Mine"\n\n[[park]]\nfile = "a.park"\n')
+        self.defaults = dict(mksequence.VIEW_DEFAULTS)
+
+    def tearDown(self):
+        if self.old is None:
+            os.environ.pop("RCT_SCREENSAVER_HOME", None)
+        else:
+            os.environ["RCT_SCREENSAVER_HOME"] = self.old
+
+    def test_changes(self):
+        c = mksequence.settings_changes({"animationHold": 12, "show": "", "showPan": 0.25,
+                                         "spots": {"Lift": {"off": False, "hold": None}, "Stars": None},
+                                         "showDefs": {"eclipse": {"hold": 90, "view": {"x": 10, "y": 12, "zoom": 0, "rotation": 1}}}},
+                                        self.defaults)
+        self.assertEqual(c["extras"], {"animation_hold": 12, "show": ""})
+        self.assertEqual(c["views"], {"show_pan": 0.25})
+        self.assertEqual(c["animation"], {"Lift": {"off": False, "hold": None}, "Stars": {"off": None, "hold": None}})
+        self.assertEqual(c["show"], {"eclipse": {"hold": 90, "view": {"x": 10, "y": 12, "zoom": 0, "rotation": 1}}})
+        self.assertEqual(mksequence.settings_changes({"showPan": self.defaults["show_pan"]}, self.defaults)["views"], {"show_pan": None})
+        for bad in ({"animationHold": 0}, {"show": 3}, {"showPan": 2}, {"spots": {"a": {"off": 1}}}, {"spots": {"a": {"z": 3}}},
+                    {"showDefs": {"eclipse": {"view": {"x": 1, "y": 2, "zoom": 9, "rotation": 0}}}},
+                    {"showDefs": {"eclipse": {"path": [{"x": 1}]}}}):
+            with self.assertRaises(ValueError, msg=bad):
+                mksequence.settings_changes(bad, self.defaults)
+
+    def test_bake_into_a_shipped_profile(self):
+        stem = "constellations"
+        prof = profiles.load(user=False)[stem]
+        park = {"profile": stem, "savedName": prof["match"]["name"], "mapSize": prof["match"].get("map", [0, 0]),
+                "set": {"animationHold": 25, "spots": {"Tesla launch": {"off": True}},
+                        "showDefs": {"eclipse": {"hold": 200}}, "showPan": 0.3}}
+        mksequence.write_park_settings(self.playlist, {"parks": {"k": park}})
+        user = os.path.join(self.home, "parks", stem + ".toml")
+        with open(user, "rb") as f:
+            data = tomllib.load(f)
+        self.assertEqual(data["extras"]["animation_hold"], 25)
+        self.assertEqual(data["extras"]["show"], "eclipse", "the rest of [extras] kept")
+        self.assertIs(data["animation"]["Tesla launch"]["off"], True)
+        self.assertEqual(data["show"]["eclipse"]["hold"], 200)
+        self.assertEqual(data["show"]["eclipse"]["view"], prof["show"]["eclipse"]["view"], "the rest of the show kept")
+        self.assertEqual(data["views"]["show_pan"], 0.3)
+        back = {"animationHold": prof["extras"]["animation_hold"], "spots": {"Tesla launch": None},
+                "showDefs": {"eclipse": {"hold": prof["show"]["eclipse"]["hold"]}}, "showPan": None}
+        mksequence.write_park_settings(self.playlist, {"parks": {"k": dict(park, set=back)}})
+        self.assertFalse(os.path.exists(user), "all back as shipped: the copy goes")
+
+    def test_settings_list_event_facts(self):
+        facts = {"spots": [{"name": "Lift", "companion": "AdvancedTrack", "on": False, "offByDefault": True, "status": "off by default"},
+                           {"name": "Stars", "companion": "Animator", "on": True, "offByDefault": False, "status": "view: Stars", "view": "Stars", "hold": 8.0}],
+                 "shows": [{"name": "eclipse", "hold": 120.0, "own": True, "view": {"x": 1, "y": 2, "zoom": 0, "rotation": 0}}],
+                 "show": "eclipse", "animationHold": None, "holdDefault": 8.0, "cueHold": 5.0, "locked": []}
+        s = mksequence.park_settings(dict(self.defaults), {"id": "x", "extras": {"show": "eclipse"}}, set(), "X", (10, 10),
+                                     events=True, event_facts=facts)
+        self.assertEqual(s["spots"], {"Lift": {"off": True}, "Stars": {"off": False, "hold": 8.0}})
+        self.assertEqual(s["show"], "eclipse")
+        self.assertEqual(s["showDefs"], {"eclipse": {"hold": 120.0, "view": {"x": 1, "y": 2, "zoom": 0, "rotation": 0}}})
+        self.assertIn("show", s["adjusted"])
+        self.assertEqual(s["showPan"], self.defaults["show_pan"])
