@@ -591,6 +591,14 @@ renders, and the mode's shortcuts are off.
   parks…" (`screensaver.newPlaylist({paths})`, the Save dialog naming it), then built and played at once: the
   picks are already chosen and ordered, so there is no draft step (owner's test, 2026-11-16).
 
+Copies (owner, 2026-11-16): files with the same name and size in several gallery folders make one tile while
+every folder shows (`mergeCopies`; the user's own gallery folder's copy first, then the folders in their listed
+order; the hover details name every folder). The merge is made when the pane draws and nothing of it is kept, so
+taking a folder out of the gallery leaves the other copy as an ordinary tile; one folder picked on the left
+shows its own copies. A playlist names a park's file where it is, so a build whose park file is gone looks for
+a file of the same name in the gallery's folders (`gallery_folders`, `gallery_copy` in `tools/mksequence.py`),
+plays that and says so in the park's warnings; the playlist keeps its entry.
+
 Builders, the built area, scripts and event views are not in the engine's index. The pane starts `gallery.scanDetails()`, the
 generator's `--gallery-details` pass (`gallery_details`: one idle process, incremental by file size and date),
 and reads its `live/gallery-details.json` every 2 s; until a park is read, the tile shows no byline and the

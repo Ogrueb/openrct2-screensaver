@@ -1584,9 +1584,13 @@ console.log("ok: parks ticked on and off, Add park, and switching, new and dupli
     entries[23] = park(23, { picture: "", pictureState: "pending" });
     entries[22] = park(22, { file: inUse, path: `C:/parks/lib/${inUse}` });
     entries[3] = park(3, { kind: "sv6", file: "zz old.sv6", path: "C:/parks/lib/zz old.sv6", name: "", mapSize: { x: 0, y: 0 }, pictureState: "none", picture: "" });
+    // A copy of park 7 in a second folder (the same file name and size): one tile while every folder shows
+    entries.push(park(7, { path: "C:/parks/other/park7.park", folder: "C:/parks/other" }));
     const details = { detailsVersion: 2, done: true, parks: {
         [entries[0].path]: { name: "Zeta World", builders: ["ann", "bob", "cy"], scripts: ["Animator"], events: 2, released: "2015-06-01", built: [40, 30] },
-        [entries[5].path]: { builders: [], scripts: [], events: 0, released: "2020-01-01", built: [20, 24] } } };
+        [entries[5].path]: { builders: [], scripts: [], events: 0, released: "2020-01-01", built: [20, 24] },
+        [entries[7].path]: { builders: [], scripts: [], events: 0, built: [10, 10] },
+        "C:/parks/other/park7.park": { builders: [], scripts: [], events: 0, built: [10, 10] } } };
     Object.assign(mode, {
         added: [], made: [], scans: 0, pictureAsks: [], isPaused: false, dialogClosed: false,
         addPark(name, paths) { this.added.push([name, paths]); this.buildStatus = { ...this.buildStatus, state: "running", task: "add", sequence: name, started: now }; return true; },
@@ -1663,6 +1667,8 @@ console.log("ok: parks ticked on and off, Add park, and switching, new and dupli
     assert.ok(tileOf(() => true) && !tileOf(t => t === "Park Z"), "L leaves out the small maps");
     gaClick("size.1"); tick();
     assert.ok(tileOf(t => t === "Park U"), "S goes by the built area, not the map (a 160-tile map with 20×24 built; owner, 2026-11-16)");
+    assert.equal([...scene].filter(([id, e]) => /^rcts\.gallery\.tile\.\d+\.name$/.test(id) && e.text === "Park S").length, 1,
+        "copies of one park in two folders make one tile (owner, 2026-11-16)");
     gaClick("size.0"); tick();
     gaClick("has.scripts"); tick();
     assert.equal(ga("tile.0.name").text, "Zeta World", "Scripts: the parks whose download ships scripts, by the generator's name");

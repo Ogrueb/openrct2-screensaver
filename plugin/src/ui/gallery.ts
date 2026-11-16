@@ -125,6 +125,34 @@ export interface GalleryFilter {
     sort: SortKey;
 }
 
+/** What makes two gallery files the same park: the file's name and its size (copies of one download in two
+ *  folders; owner, 2026-11-16). */
+export function copyKey(entry: GalleryEntry): string {
+    return `${entry.file.toLowerCase()}|${entry.size}`;
+}
+
+/** The entries with one of each park's copies: the user's own gallery folder's first, then the folders in
+ *  their listed order. Nothing is kept of it, so a folder taken out of the gallery leaves the other copy. */
+export function mergeCopies(entries: GalleryEntry[], folders: GalleryFolder[]): GalleryEntry[] {
+    const norm = (path: string) => path.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+    const order = folders.map((f, i) => ({ path: norm(f.path), rank: f.own ? -1 : i }));
+    const rank = (e: GalleryEntry) => {
+        const folder = norm(e.folder);
+        const at = order.filter(f => folder === f.path || folder.startsWith(f.path + "/")).map(f => f.rank);
+        return at.length ? Math.min(...at) : folders.length;
+    };
+    const best = new Map<string, { entry: GalleryEntry; rank: number }>();
+    for (const e of entries) {
+        const key = copyKey(e);
+        const r = rank(e);
+        const has = best.get(key);
+        if (!has || r < has.rank) {
+            best.set(key, { entry: e, rank: r });
+        }
+    }
+    return entries.filter(e => best.get(copyKey(e))!.entry === e);
+}
+
 /** The entries a filter shows, in its order. */
 export function filterEntries(entries: GalleryEntry[], f: GalleryFilter, details: Record<string, ParkDetails>,
     used: (e: GalleryEntry) => boolean, nameOf: (e: GalleryEntry) => string): GalleryEntry[] {
@@ -307,6 +335,18 @@ export class Gallery {
         return this.job?.kind === "add" && this.job.has.has(e.file.toLowerCase());
     }
 
+    /** Where a park is in the picks, whichever of its copies was picked (-1: not picked). */
+    private pickOf(e: GalleryEntry): number {
+        const at = this.picks.indexOf(e.path);
+        if (at >= 0 || !this.picks.length) {
+            return at;
+        }
+        const key = copyKey(e);
+        const all = galleryApi()?.entries ?? [];
+        const same = new Set(all.filter(o => copyKey(o) === key).map(o => o.path));
+        return this.picks.findIndex(p => same.has(p));
+    }
+
     private nameOf(e: GalleryEntry): string {
         return this.details[e.path]?.name || e.name || e.file.replace(/\.[^.]+$/, "");
     }
@@ -315,7 +355,9 @@ export class Gallery {
         const key = `${api.version}|${JSON.stringify(this.filter)}`;
         if (key !== this.listKey) {
             this.listKey = key;
-            const shown = filterEntries(api.entries.slice(), this.filter, this.details, e => this.used(e), e => this.nameOf(e));
+            // Every folder together shows one tile per park; a single folder shows its own copies
+            const listed = this.filter.folder ? api.entries.slice() : mergeCopies(api.entries, api.folders);
+            const shown = filterEntries(listed, this.filter, this.details, e => this.used(e), e => this.nameOf(e));
             // Names arrive as the engine and the generator read the parks: the tiles keep their places while
             // they do and are sorted once when everything is read (owner's test, 2026-11-16: the order jumped)
             const settled = this.detailsDone && api.entries.every(e => e.read !== false);
@@ -472,7 +514,7 @@ export class Gallery {
         } else if (kind === "tile") {
             const entry = this.shownEntries[n];
             if (entry && !this.used(entry)) {
-                const at = this.picks.indexOf(entry.path);
+                const at = this.pickOf(entry);
                 if (at >= 0) {
                     this.picks.splice(at, 1);
                 } else {
@@ -792,7 +834,7 @@ export class Gallery {
             const tx = grid.x + inset + (i % columns) * (m.tile + m.gap);
             const full = { x: tx, y: ty, width: m.tile, height: m.picture + 2 + m.caption };
             const shown = { ...full, height: Math.min(full.height, lower - ty) };
-            const pick = this.picks.indexOf(e.path);
+            const pick = this.pickOf(e);
             const used = this.used(e);
             const over = hover === id;
             const d = this.details[e.path];
@@ -907,7 +949,10 @@ export class Gallery {
         const overlay = this.mode.overlay;
         const d = this.details[e.path];
         heading("d.name", this.fit(this.nameOf(e), 11, width - 10), x + 1, y);
-        const folder = e.folder.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? "";
+        const last = (path: string) => path.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? "";
+        const key = copyKey(e);
+        const copies = [...new Set((galleryApi()?.entries ?? []).filter(o => copyKey(o) === key).map(o => last(o.folder)))];
+        const folder = copies.length > 1 ? [last(e.folder), ...copies.filter(c => c !== last(e.folder))].join(", ") : last(e.folder);
         const rows: [string, string][] = [
             ["Builders", d?.builders?.length ? d.builders.join(", ") : d ? "unknown" : "…"],
             ["Released", d?.released ? d.released.slice(0, 4) : d ? "unknown" : "…"],
@@ -915,7 +960,7 @@ export class Gallery {
             ["Map", e.mapSize && e.mapSize.x > 0 ? `${e.mapSize.x}×${e.mapSize.y}` : e.kind === "park" ? "…" : `${e.kind.toUpperCase()} (read once added)`],
             ["Scripts", d ? (d.scripts?.length ? d.scripts.join(", ") : "none") : "…"],
             ["Event views", d ? (d.events ? `${d.events}` : "none") : "…"],
-            ["Folder", folder],
+            [copies.length > 1 ? "Folders" : "Folder", folder],
         ];
         rows.forEach(([k, v], i) => {
             const ry = y + 19 + i * 21;
