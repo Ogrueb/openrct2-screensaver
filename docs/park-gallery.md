@@ -34,12 +34,17 @@ implementation options").
 2. **Preview renders** (engine patch 0022, 2026-11-15). `openrct2 screenshot <file> <image> preview <w> <h>`
    renders a park at its saved rotation framed on its built area: tiles with two or more elements besides
    the surface (one when none has two), weighted by the count squared, 1% of the weight trimmed per side
-   (the generator's content box), every element's height counted, plus a margin; the closest zoom level
-   that fits, and past the widest (3) a larger render reduced by a whole factor keeping each block's most
-   common colour; the void transparent. The Load window renders each shown file that has no render, one
-   at a time in the background (its own executable, hidden, low priority), into `<cache>/previews/`
-   named from an FNV-1a hash of path, size and modification time (a failure leaves `<hash>.none`), and
-   tiles and the preview pane prefer the render (minimap mode keeps the minimap). 250x200, the pane's size.
+   (the generator's content box), every element's height counted, plus a margin; the zoom level (-1 to 3) and whole reduction factor
+   (up to 4, any past zoom 3) that fit it most closely, so small parks fill the frame (owner's test: with
+   whole zoom levels alone they used half of it), the reduction keeping each block's most common colour;
+   the void transparent. The Load window renders each shown file that has no render, one at a time in the
+   background (its own executable, hidden, idle priority; on Windows the render also enters background
+   mode, lowering its disk and memory priority, after the owner saw the title park slow down), into
+   `<cache>/previews/` named from an FNV-1a hash of a render version, path, size and modification time (a
+   failure leaves `<hash>.none`; a new version redoes both), and tiles and the preview pane prefer the
+   render (minimap mode keeps the minimap). 250x200, the pane's size. The subcommand takes no data path
+   options (`Unknown option`), so a render uses the default user folder's settings. Owner's test
+   2026-11-15: every park rendered (41 of 41, `.sv6` included), cached across restarts, a few seconds each.
 3. **Gallery folders.** A `gallery` folder in the user directory and a list of added folders, a cached
    index (on `FileIndex`, as scenarios and objects have) of name, map size, date and preview, a Gallery
    button in the Load window (opening the gallery in grid view across its folders), Add folder and Add to

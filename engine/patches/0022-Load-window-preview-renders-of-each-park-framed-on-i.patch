@@ -23,11 +23,11 @@ and RCT2 saves lack; the pane leaves out the park summary when the file
 has none.
 ---
  src/openrct2-ui/windows/LoadSave.cpp  | 312 +++++++++++++++++++++++---
- src/openrct2/interface/Screenshot.cpp | 195 +++++++++++++++-
- 2 files changed, 478 insertions(+), 29 deletions(-)
+ src/openrct2/interface/Screenshot.cpp | 227 ++++++++++++++++++-
+ 2 files changed, 509 insertions(+), 30 deletions(-)
 
 diff --git a/src/openrct2-ui/windows/LoadSave.cpp b/src/openrct2-ui/windows/LoadSave.cpp
-index 7a11a92..d99c169 100644
+index 7a11a92..6d49930 100644
 --- a/src/openrct2-ui/windows/LoadSave.cpp
 +++ b/src/openrct2-ui/windows/LoadSave.cpp
 @@ -8,6 +8,27 @@
@@ -98,7 +98,7 @@ index 7a11a92..d99c169 100644
 +    static u8string PreviewRenderPath(const u8string& path, uint64_t size, time_t modified)
 +    {
 +        // FNV-1a over the render version, path, size and time; a new version redoes renders and failures
-+        constexpr std::string_view kRenderVersion = "2|";
++        constexpr std::string_view kRenderVersion = "3|";
 +        uint64_t hash = 0xcbf29ce484222325ull;
 +        auto mix = [&hash](std::string_view text) {
 +            for (auto c : text)
@@ -147,7 +147,7 @@ index 7a11a92..d99c169 100644
 +        startupInfo.cb = sizeof(startupInfo);
 +        PROCESS_INFORMATION processInfo{};
 +        if (!CreateProcessW(
-+                nullptr, commandLine.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS, nullptr,
++                nullptr, commandLine.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW | IDLE_PRIORITY_CLASS, nullptr,
 +                nullptr, &startupInfo, &processInfo))
 +        {
 +            return false;
@@ -172,7 +172,7 @@ index 7a11a92..d99c169 100644
 +                dup2(devNull, STDOUT_FILENO);
 +                dup2(devNull, STDERR_FILENO);
 +            }
-+            if (nice(10) == -1)
++            if (nice(19) == -1)
 +            {
 +                // Normal priority then
 +            }
@@ -452,13 +452,30 @@ index 7a11a92..d99c169 100644
  
              auto* windowMgr = GetWindowManager();
 diff --git a/src/openrct2/interface/Screenshot.cpp b/src/openrct2/interface/Screenshot.cpp
-index 19ecb0c..8798ed0 100644
+index 19ecb0c..f0d0f2c 100644
 --- a/src/openrct2/interface/Screenshot.cpp
 +++ b/src/openrct2/interface/Screenshot.cpp
-@@ -38,7 +38,11 @@
+@@ -37,8 +37,27 @@
+ #include "../world/tile_element/SurfaceElement.h"
  #include "../world/tile_element/TileElement.h"
  #include "Viewport.h"
- 
+-
++#ifdef _WIN32
++    #ifndef NOMINMAX
++        #define NOMINMAX
++    #endif
++    #ifndef WIN32_LEAN_AND_MEAN
++        #define WIN32_LEAN_AND_MEAN
++    #endif
++    #include <windows.h>
++    // windows.h's macros would rename the game's own functions
++    #undef CreateDirectory
++    #undef CreateWindow
++    #undef DrawText
++    #undef GetMessage
++    #undef LoadImage
++#endif
++
 +#include <algorithm>
 +#include <array>
  #include <cstdlib>
@@ -467,7 +484,7 @@ index 19ecb0c..8798ed0 100644
  #include <memory>
  #include <optional>
  #include <string>
-@@ -327,6 +331,168 @@ static void RenderViewport(IDrawingEngine* drawingEngine, const Viewport& viewpo
+@@ -327,6 +346,179 @@ static void RenderViewport(IDrawingEngine* drawingEngine, const Viewport& viewpo
      tempDrawingEngine->EndDraw();
  }
  
@@ -583,17 +600,28 @@ index 19ecb0c..8798ed0 100644
 +    top -= margin;
 +    bottom += margin;
 +
-+    auto zoom = ZoomLevel{ 0 };
-+    while (zoom < ZoomLevel::max()
-+           && (zoom.ApplyInversedTo(right - left) > width || zoom.ApplyInversedTo(bottom - top) > height))
++    // The zoom level and whole reduction factor that fit the content most closely: a finer level reduced
++    // by up to 4 fills the frame better than the next level out, which only halves the size
++    auto zoom = ZoomLevel::max();
++    scale = 0;
++    int32_t bestSize = std::numeric_limits<int32_t>::max();
++    for (int8_t level = static_cast<int8_t>(ZoomLevel::max()); level >= -1; level--)
 +    {
-+        zoom = ZoomLevel{ static_cast<int8_t>(static_cast<int8_t>(zoom) + 1) };
++        const ZoomLevel candidate{ level };
++        const int32_t viewWidth = candidate.ApplyInversedTo(right - left);
++        const int32_t viewHeight = candidate.ApplyInversedTo(bottom - top);
++        const int32_t factor = std::max({ 1, (viewWidth + width - 1) / width, (viewHeight + height - 1) / height });
++        if (factor > 4 && candidate != ZoomLevel::max())
++            continue;
++        // Content units per output pixel, times 2 to keep zoom -1 whole
++        const int32_t size = (level >= 0 ? (2 << level) : 1) * factor;
++        if (size < bestSize)
++        {
++            bestSize = size;
++            zoom = candidate;
++            scale = factor;
++        }
 +    }
-+
-+    // Past the widest zoom level the picture is rendered larger and reduced afterwards
-+    scale = 1;
-+    while (zoom.ApplyInversedTo(right - left) > width * scale || zoom.ApplyInversedTo(bottom - top) > height * scale)
-+        scale++;
 +
 +    Viewport viewport{};
 +    viewport.width = width * scale;
@@ -636,7 +664,7 @@ index 19ecb0c..8798ed0 100644
  void ScreenshotGiant()
  {
      RenderTarget rt{};
-@@ -450,10 +616,12 @@ int32_t CommandLineForScreenshot(const char** argv, int32_t argc, ScreenshotOpti
+@@ -450,10 +642,12 @@ int32_t CommandLineForScreenshot(const char** argv, int32_t argc, ScreenshotOpti
      }
  
      bool giantScreenshot = (argc == 5) && String::iequals(argv[2], "giant");
@@ -650,7 +678,7 @@ index 19ecb0c..8798ed0 100644
          return -1;
      }
  
-@@ -485,7 +653,14 @@ int32_t CommandLineForScreenshot(const char** argv, int32_t argc, ScreenshotOpti
+@@ -485,7 +679,18 @@ int32_t CommandLineForScreenshot(const char** argv, int32_t argc, ScreenshotOpti
          gLegacyScene = LegacyScene::playing;
  
          Viewport viewport{};
@@ -658,6 +686,10 @@ index 19ecb0c..8798ed0 100644
 +        int32_t previewScale = 1;
 +        if (previewScreenshot)
 +        {
++#ifdef _WIN32
++            // Previews are made in the background: low CPU, disk and memory priority for this process
++            SetPriorityClass(GetCurrentProcess(), PROCESS_MODE_BACKGROUND_BEGIN);
++#endif
 +            const int32_t width = std::clamp(std::atoi(argv[3]), 16, 4096);
 +            const int32_t height = std::clamp(std::atoi(argv[4]), 16, 4096);
 +            viewport = GetPreviewViewport(width, height, previewScale);
@@ -666,7 +698,7 @@ index 19ecb0c..8798ed0 100644
          {
              auto customZoom = static_cast<int8_t>(std::atoi(argv[3]));
              auto zoom = ZoomLevel{ customZoom };
-@@ -565,7 +740,21 @@ int32_t CommandLineForScreenshot(const char** argv, int32_t argc, ScreenshotOpti
+@@ -565,7 +770,21 @@ int32_t CommandLineForScreenshot(const char** argv, int32_t argc, ScreenshotOpti
  
          UpdatePaletteEffects();
          RenderViewport(nullptr, viewport, rt);
