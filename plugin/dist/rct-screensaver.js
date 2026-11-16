@@ -6230,6 +6230,7 @@
   var REDRAW_MS = 1e3;
   var LIFT = 300;
   var PICK_ROW = 34;
+  var DETAIL_ROWS = 7;
   var NEW_PICK_ROWS = 6;
   var ORANGE = THEME.dragLine;
   function builtSize(entry, details) {
@@ -6801,9 +6802,9 @@
       const hovered = hover?.startsWith("tile.") ? entries[Number(hover.slice(5))] : void 0;
       y = top;
       if (hovered) {
-        this.detailRows(scene, hovered, rx, y, rightW, text, heading);
+        this.detailRows(scene, hovered, rx, y, rightW, narrow ? 17 : 21, text, heading);
       }
-      y += narrow ? 132 : 150;
+      y += 19 + DETAIL_ROWS * (narrow ? 17 : 21) + 8;
       const n = this.picks.length;
       heading("h.picks", `${job.kind === "new" ? "New playlist" : `Adding to ${this.fit(job.playlist, 11, rightW * 0.4)}`} \xB7 ${n} park${n === 1 ? "" : "s"}`, rx + 1, y);
       if (n) {
@@ -7060,7 +7061,7 @@
         rect("sb.thumb", { x: track.x + 2, y: tyy + 2, width: sb - 4, height: th - 4 }, hover === "sb" || this.down === "sb" ? "#6fae82" : "#4a8a5c", Z.bevel);
       }
     }
-    detailRows(scene, e, x, y, width, text, heading) {
+    detailRows(scene, e, x, y, width, step, text, heading) {
       const overlay = this.mode.overlay;
       const d = this.details[e.path];
       heading("d.name", this.fit(this.nameOf(e), 11, width - 10), x + 1, y);
@@ -7077,8 +7078,11 @@
         ["Event views", d ? d.events ? `${d.events}` : "none" : "\u2026"],
         [copies.length > 1 ? "Folders" : "Folder", folder]
       ];
+      if (rows.length !== DETAIL_ROWS) {
+        throw new Error("gallery: DETAIL_ROWS is out of step with the details");
+      }
       rows.forEach(([k, v], i) => {
-        const ry = y + 19 + i * 21;
+        const ry = y + 19 + i * step;
         text(`d.k${i}`, k, x, ry, 13, { colour: THEME.textDim, shadow: void 0 });
         const kw = measure(overlay, k, 13).width;
         const value = this.fit(v, 13, width - kw - 14);
