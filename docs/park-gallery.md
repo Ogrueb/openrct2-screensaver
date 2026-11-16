@@ -33,9 +33,10 @@ implementation options").
    an upstream version would add language strings.
 2. **Preview renders** (engine patch 0022, 2026-11-15). `openrct2 screenshot <file> <image> preview <w> <h>`
    renders a park at its saved rotation framed on its built area: tiles with two or more elements besides
-   the surface (one when none has two), leaving out a backdrop (elements alike, scenery by object and the rest
-   by type and heights, on over 30% of the map's tiles: the owner's test framed the whole map on parks laid
-   on a dark sheet, Anchor Bay, Derail and The Blizzard), weighted by the count squared, 1% of the weight trimmed per side
+   the surface (one when none has two), leaving out a backdrop (elements alike, the same type at the same heights as the generator's
+   `cover_share`, or the same scenery object at any height, on over 30% of the map's tiles: the owner's test framed the whole map on parks laid
+   on a dark sheet, Anchor Bay, Derail and The Blizzard; the generator's data showed a large scenery sheet at
+   height 2 over 65-97% of The Blizzard, Orbis Sky Castle and Studio Ghibli, and the map's edge walled), weighted by the count squared, 1% of the weight trimmed per side
    (the generator's content box), every element's height counted, plus a margin; the zoom level (-1 to 3) and whole reduction factor
    (up to 4, any past zoom 3) that fit it most closely, so small parks fill the frame (owner's test: with
    whole zoom levels alone they used half of it), the reduction keeping each block's most common colour;

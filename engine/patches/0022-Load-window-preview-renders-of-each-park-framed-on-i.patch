@@ -23,8 +23,8 @@ and RCT2 saves lack; the pane leaves out the park summary when the file
 has none.
 ---
  src/openrct2-ui/windows/LoadSave.cpp  | 312 +++++++++++++++++++++++---
- src/openrct2/interface/Screenshot.cpp | 274 +++++++++++++++++++++-
- 2 files changed, 556 insertions(+), 30 deletions(-)
+ src/openrct2/interface/Screenshot.cpp | 290 +++++++++++++++++++++++-
+ 2 files changed, 572 insertions(+), 30 deletions(-)
 
 diff --git a/src/openrct2-ui/windows/LoadSave.cpp b/src/openrct2-ui/windows/LoadSave.cpp
 index 7a11a92..bf8591e 100644
@@ -452,7 +452,7 @@ index 7a11a92..bf8591e 100644
  
              auto* windowMgr = GetWindowManager();
 diff --git a/src/openrct2/interface/Screenshot.cpp b/src/openrct2/interface/Screenshot.cpp
-index 19ecb0c..a9b55d6 100644
+index 19ecb0c..0bc9ca7 100644
 --- a/src/openrct2/interface/Screenshot.cpp
 +++ b/src/openrct2/interface/Screenshot.cpp
 @@ -34,13 +34,36 @@
@@ -493,7 +493,7 @@ index 19ecb0c..a9b55d6 100644
  #include <string>
  
  using namespace std::literals::string_literals;
-@@ -327,6 +350,222 @@ static void RenderViewport(IDrawingEngine* drawingEngine, const Viewport& viewpo
+@@ -327,6 +350,238 @@ static void RenderViewport(IDrawingEngine* drawingEngine, const Viewport& viewpo
      tempDrawingEngine->EndDraw();
  }
  
@@ -507,48 +507,66 @@ index 19ecb0c..a9b55d6 100644
 +    bool found{};
 +};
 +
-+// What makes elements alike for telling a backdrop apart: scenery by its object, the rest by type and
-+// heights (a sheet of one element laid flat over the unused map)
-+static uint64_t BackdropKey(const TileElement& element)
++// What makes elements alike for telling a backdrop apart: the same type at the same heights (a sheet laid
++// flat over the unused map), or the same scenery object at any height (a sheet on uneven ground, a forest)
++static std::array<uint64_t, 2> BackdropKeys(const TileElement& element)
 +{
-+    const auto type = static_cast<uint64_t>(element.getType());
++    const auto type = static_cast<uint64_t>(element.getType()) << 40;
++    const uint64_t heights = (1ull << 32) | (static_cast<uint32_t>(element.baseHeight) << 8) | element.clearanceHeight;
++    uint64_t object = heights;
 +    switch (element.getType())
 +    {
 +        case TileElementType::smallScenery:
-+            return (type << 32) | element.asSmallScenery()->getEntryIndex();
++            object = element.asSmallScenery()->getEntryIndex();
++            break;
 +        case TileElementType::largeScenery:
-+            return (type << 32) | element.asLargeScenery()->getEntryIndex();
++            object = element.asLargeScenery()->getEntryIndex();
++            break;
 +        case TileElementType::wall:
-+            return (type << 32) | element.asWall()->getEntryIndex();
++            object = element.asWall()->getEntryIndex();
++            break;
 +        default:
-+            return (type << 32) | (1u << 31) | (static_cast<uint32_t>(element.baseHeight) << 8) | element.clearanceHeight;
++            break;
 +    }
++    return { type | heights, type | object };
 +}
 +
 +static PreviewContent GetPreviewContent()
 +{
 +    const auto& mapSize = getGameState().mapSize;
 +
-+    // Elements alike on more than 30% of the tiles are a backdrop (a sheet under or around the park, a
-+    // forest), not what was built
++    // Elements alike on more than 30% of the tiles are a backdrop, not what was built
 +    std::unordered_map<uint64_t, uint32_t> backdropTiles;
++    std::vector<uint64_t> tileKeys;
 +    for (int32_t y = 0; y < mapSize.y; y++)
 +    {
 +        for (int32_t x = 0; x < mapSize.x; x++)
 +        {
-+            std::optional<uint64_t> last;
++            tileKeys.clear();
 +            for (const auto* element : TileElementsView(TileCoordsXY(x, y).toCoordsXY()))
 +            {
 +                if (element->getType() == TileElementType::surface)
 +                    continue;
-+                const auto key = BackdropKey(*element);
-+                if (key != last)
-+                    backdropTiles[key]++;
-+                last = key;
++                for (auto key : BackdropKeys(*element))
++                {
++                    if (std::find(tileKeys.begin(), tileKeys.end(), key) == tileKeys.end())
++                    {
++                        tileKeys.push_back(key);
++                        backdropTiles[key]++;
++                    }
++                }
 +            }
 +        }
 +    }
 +    const auto sheetTiles = static_cast<uint32_t>(static_cast<int64_t>(mapSize.x) * mapSize.y * 3 / 10);
++    auto isBackdrop = [&](const TileElement& element) {
++        for (auto key : BackdropKeys(element))
++        {
++            if (backdropTiles[key] > sheetTiles)
++                return true;
++        }
++        return false;
++    };
 +
 +    std::vector<uint32_t> counts(static_cast<size_t>(mapSize.x) * mapSize.y);
 +    uint32_t maxCount = 0;
@@ -559,9 +577,7 @@ index 19ecb0c..a9b55d6 100644
 +            uint32_t n = 0;
 +            for (const auto* element : TileElementsView(TileCoordsXY(x, y).toCoordsXY()))
 +            {
-+                if (element->getType() == TileElementType::surface || element->isInvisible())
-+                    continue;
-+                if (backdropTiles[BackdropKey(*element)] > sheetTiles)
++                if (element->getType() == TileElementType::surface || element->isInvisible() || isBackdrop(*element))
 +                    continue;
 +                n++;
 +            }
@@ -716,7 +732,7 @@ index 19ecb0c..a9b55d6 100644
  void ScreenshotGiant()
  {
      RenderTarget rt{};
-@@ -450,10 +689,12 @@ int32_t CommandLineForScreenshot(const char** argv, int32_t argc, ScreenshotOpti
+@@ -450,10 +705,12 @@ int32_t CommandLineForScreenshot(const char** argv, int32_t argc, ScreenshotOpti
      }
  
      bool giantScreenshot = (argc == 5) && String::iequals(argv[2], "giant");
@@ -730,7 +746,7 @@ index 19ecb0c..a9b55d6 100644
          return -1;
      }
  
-@@ -485,7 +726,18 @@ int32_t CommandLineForScreenshot(const char** argv, int32_t argc, ScreenshotOpti
+@@ -485,7 +742,18 @@ int32_t CommandLineForScreenshot(const char** argv, int32_t argc, ScreenshotOpti
          gLegacyScene = LegacyScene::playing;
  
          Viewport viewport{};
@@ -750,7 +766,7 @@ index 19ecb0c..a9b55d6 100644
          {
              auto customZoom = static_cast<int8_t>(std::atoi(argv[3]));
              auto zoom = ZoomLevel{ customZoom };
-@@ -565,7 +817,21 @@ int32_t CommandLineForScreenshot(const char** argv, int32_t argc, ScreenshotOpti
+@@ -565,7 +833,21 @@ int32_t CommandLineForScreenshot(const char** argv, int32_t argc, ScreenshotOpti
  
          UpdatePaletteEffects();
          RenderViewport(nullptr, viewport, rt);
