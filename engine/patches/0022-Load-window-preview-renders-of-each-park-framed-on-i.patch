@@ -23,11 +23,11 @@ and RCT2 saves lack; the pane leaves out the park summary when the file
 has none.
 ---
  src/openrct2-ui/windows/LoadSave.cpp  | 312 +++++++++++++++++++++++---
- src/openrct2/interface/Screenshot.cpp | 227 ++++++++++++++++++-
- 2 files changed, 509 insertions(+), 30 deletions(-)
+ src/openrct2/interface/Screenshot.cpp | 274 +++++++++++++++++++++-
+ 2 files changed, 556 insertions(+), 30 deletions(-)
 
 diff --git a/src/openrct2-ui/windows/LoadSave.cpp b/src/openrct2-ui/windows/LoadSave.cpp
-index 7a11a92..6d49930 100644
+index 7a11a92..bf8591e 100644
 --- a/src/openrct2-ui/windows/LoadSave.cpp
 +++ b/src/openrct2-ui/windows/LoadSave.cpp
 @@ -8,6 +8,27 @@
@@ -98,7 +98,7 @@ index 7a11a92..6d49930 100644
 +    static u8string PreviewRenderPath(const u8string& path, uint64_t size, time_t modified)
 +    {
 +        // FNV-1a over the render version, path, size and time; a new version redoes renders and failures
-+        constexpr std::string_view kRenderVersion = "3|";
++        constexpr std::string_view kRenderVersion = "4|";
 +        uint64_t hash = 0xcbf29ce484222325ull;
 +        auto mix = [&hash](std::string_view text) {
 +            for (auto c : text)
@@ -452,12 +452,18 @@ index 7a11a92..6d49930 100644
  
              auto* windowMgr = GetWindowManager();
 diff --git a/src/openrct2/interface/Screenshot.cpp b/src/openrct2/interface/Screenshot.cpp
-index 19ecb0c..f0d0f2c 100644
+index 19ecb0c..a9b55d6 100644
 --- a/src/openrct2/interface/Screenshot.cpp
 +++ b/src/openrct2/interface/Screenshot.cpp
-@@ -37,8 +37,27 @@
+@@ -34,13 +34,36 @@
+ #include "../world/Map.h"
+ #include "../world/TileElementsView.h"
+ #include "../world/Weather.h"
++#include "../world/tile_element/LargeSceneryElement.h"
++#include "../world/tile_element/SmallSceneryElement.h"
  #include "../world/tile_element/SurfaceElement.h"
  #include "../world/tile_element/TileElement.h"
++#include "../world/tile_element/WallElement.h"
  #include "Viewport.h"
 -
 +#ifdef _WIN32
@@ -483,8 +489,11 @@ index 19ecb0c..f0d0f2c 100644
 +#include <vector>
  #include <memory>
  #include <optional>
++#include <unordered_map>
  #include <string>
-@@ -327,6 +346,179 @@ static void RenderViewport(IDrawingEngine* drawingEngine, const Viewport& viewpo
+ 
+ using namespace std::literals::string_literals;
+@@ -327,6 +350,222 @@ static void RenderViewport(IDrawingEngine* drawingEngine, const Viewport& viewpo
      tempDrawingEngine->EndDraw();
  }
  
@@ -498,9 +507,49 @@ index 19ecb0c..f0d0f2c 100644
 +    bool found{};
 +};
 +
++// What makes elements alike for telling a backdrop apart: scenery by its object, the rest by type and
++// heights (a sheet of one element laid flat over the unused map)
++static uint64_t BackdropKey(const TileElement& element)
++{
++    const auto type = static_cast<uint64_t>(element.getType());
++    switch (element.getType())
++    {
++        case TileElementType::smallScenery:
++            return (type << 32) | element.asSmallScenery()->getEntryIndex();
++        case TileElementType::largeScenery:
++            return (type << 32) | element.asLargeScenery()->getEntryIndex();
++        case TileElementType::wall:
++            return (type << 32) | element.asWall()->getEntryIndex();
++        default:
++            return (type << 32) | (1u << 31) | (static_cast<uint32_t>(element.baseHeight) << 8) | element.clearanceHeight;
++    }
++}
++
 +static PreviewContent GetPreviewContent()
 +{
 +    const auto& mapSize = getGameState().mapSize;
++
++    // Elements alike on more than 30% of the tiles are a backdrop (a sheet under or around the park, a
++    // forest), not what was built
++    std::unordered_map<uint64_t, uint32_t> backdropTiles;
++    for (int32_t y = 0; y < mapSize.y; y++)
++    {
++        for (int32_t x = 0; x < mapSize.x; x++)
++        {
++            std::optional<uint64_t> last;
++            for (const auto* element : TileElementsView(TileCoordsXY(x, y).toCoordsXY()))
++            {
++                if (element->getType() == TileElementType::surface)
++                    continue;
++                const auto key = BackdropKey(*element);
++                if (key != last)
++                    backdropTiles[key]++;
++                last = key;
++            }
++        }
++    }
++    const auto sheetTiles = static_cast<uint32_t>(static_cast<int64_t>(mapSize.x) * mapSize.y * 3 / 10);
++
 +    std::vector<uint32_t> counts(static_cast<size_t>(mapSize.x) * mapSize.y);
 +    uint32_t maxCount = 0;
 +    for (int32_t y = 0; y < mapSize.y; y++)
@@ -510,8 +559,11 @@ index 19ecb0c..f0d0f2c 100644
 +            uint32_t n = 0;
 +            for (const auto* element : TileElementsView(TileCoordsXY(x, y).toCoordsXY()))
 +            {
-+                if (element->getType() != TileElementType::surface && !element->isInvisible())
-+                    n++;
++                if (element->getType() == TileElementType::surface || element->isInvisible())
++                    continue;
++                if (backdropTiles[BackdropKey(*element)] > sheetTiles)
++                    continue;
++                n++;
 +            }
 +            counts[y * mapSize.x + x] = n;
 +            maxCount = std::max(maxCount, n);
@@ -664,7 +716,7 @@ index 19ecb0c..f0d0f2c 100644
  void ScreenshotGiant()
  {
      RenderTarget rt{};
-@@ -450,10 +642,12 @@ int32_t CommandLineForScreenshot(const char** argv, int32_t argc, ScreenshotOpti
+@@ -450,10 +689,12 @@ int32_t CommandLineForScreenshot(const char** argv, int32_t argc, ScreenshotOpti
      }
  
      bool giantScreenshot = (argc == 5) && String::iequals(argv[2], "giant");
@@ -678,7 +730,7 @@ index 19ecb0c..f0d0f2c 100644
          return -1;
      }
  
-@@ -485,7 +679,18 @@ int32_t CommandLineForScreenshot(const char** argv, int32_t argc, ScreenshotOpti
+@@ -485,7 +726,18 @@ int32_t CommandLineForScreenshot(const char** argv, int32_t argc, ScreenshotOpti
          gLegacyScene = LegacyScene::playing;
  
          Viewport viewport{};
@@ -698,7 +750,7 @@ index 19ecb0c..f0d0f2c 100644
          {
              auto customZoom = static_cast<int8_t>(std::atoi(argv[3]));
              auto zoom = ZoomLevel{ customZoom };
-@@ -565,7 +770,21 @@ int32_t CommandLineForScreenshot(const char** argv, int32_t argc, ScreenshotOpti
+@@ -565,7 +817,21 @@ int32_t CommandLineForScreenshot(const char** argv, int32_t argc, ScreenshotOpti
  
          UpdatePaletteEffects();
          RenderViewport(nullptr, viewport, rt);
