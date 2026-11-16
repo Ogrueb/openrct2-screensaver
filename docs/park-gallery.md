@@ -68,3 +68,10 @@ implementation options").
 4. **The editor's Parks panel** (after the standalone live-editor work): a read-only `gallery` scripting
    API (entries with path, name, map size, date, picture) and path arguments for Add park and New playlist,
    so the editor draws the gallery as tiles and adds ticked parks without the system dialog.
+
+## The screensaver editor's pane (2026-11-16)
+
+The pane that uses stage 4's API is the plugin's `ui/gallery.ts`, described in `docs/screensaver-ui.md` "The
+park gallery pane": tiles with the preview renders, filters, picks in order, then Add or New playlist with the
+picked paths. The generator's part is `--park-list`, `--live-new-parks` and `--gallery-details` in
+`tools/mksequence.py` (tests in `tools/tests/test_gallery.py`).

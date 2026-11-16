@@ -4309,6 +4309,9 @@ def gallery_park_details(path):
     """What the game's gallery shows of a park beyond its picture: {name, builders, scripts (the companions it
     ships), events (animation spots and shows those offer)}. An RCT save has only its builders."""
     out = {"builders": parkinfo.download_authors(path), "scripts": [], "events": 0}
+    ne = nedesigns.match(path)
+    if ne and ne.get("released"):
+        out["released"] = ne["released"]
     low = path.lower()
     if not (low.endswith(".park") or low.endswith(".zip")):
         return out
@@ -4317,6 +4320,9 @@ def gallery_park_details(path):
     saved = parkinfo.parse_park(parkinfo.chunk_reader(chunks, body, 6), hdr["target"])["name"]
     out["name"] = parkinfo.display_name(saved, path, member)[0]
     out["builders"] = parkinfo.download_authors(path, member, saved)
+    ne = nedesigns.match(path, saved)
+    if ne and ne.get("released"):
+        out["released"] = ne["released"]
     entry = {"file": path}
     found = companions.find(entry, "", member)
     if found:

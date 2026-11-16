@@ -13,6 +13,8 @@
 //   matter only when a playlist is made), then the folder dialog.
 // Live editing (docs/screensaver-ui.md): a drag on the park moves the selected view, the wheel zooms it.
 
+import { Gallery, galleryApi } from "./gallery";
+import type { GalleryHost } from "./gallery";
 import { builder, clock, ParkState, PlaylistInfo, readPlaylists } from "../builder";
 import type { Editor, EditorView, RestorePoint } from "../editor";
 import { EDITOR_COLUMNS, EVENT_COLUMNS } from "../editor";
@@ -172,6 +174,7 @@ export class EditorPanel implements EditorView {
     private picked: string | undefined; // the restore point highlighted
     private setOpen = true; // the Settings foldout (top right) unfolded
     private setGroup: "playlist" | "park" = "playlist"; // and which group it shows
+    gallery: Gallery | undefined; // the park gallery pane (main.ts sets it)
     private newGen: Generation | undefined; // the New playlist pane (top centre) open, with its generation choices
     private madeGen: Generation | undefined; // the choices of the New playlist the dialog is making
     private clipShown = false; // a Copy/Paste note is on its button (it goes after a moment)
@@ -667,9 +670,21 @@ export class EditorPanel implements EditorView {
             case "setHead": this.setOpen = !this.setOpen; break;
             case "setGroup.0": this.setGroup = "playlist"; this.setOpen = true; break;
             case "setGroup.1": this.setGroup = "park"; this.setOpen = true; break;
-            case "plNew": this.newGen = this.newGen ? undefined : { ...e.playback.generation }; break;
+            case "plNew":
+                if (this.newGen) {
+                    this.newGen = undefined;
+                } else if (!this.openGallery(e, "new")) {
+                    this.newGen = { ...e.playback.generation };
+                }
+                break;
             case "plCopy": this.messages.first = 0; builder.copyPlaylist(e.playback.sequenceName); break;
-            case "parkAdd": this.dropdown = undefined; this.messages.first = 0; builder.addPark(e.playback.sequenceName); break;
+            case "parkAdd":
+                this.dropdown = undefined;
+                this.messages.first = 0;
+                if (!this.openGallery(e, "add")) {
+                    builder.addPark(e.playback.sequenceName);
+                }
+                break;
             case "newCancel": this.newGen = undefined; break;
             case "newGo": this.startNew(); break;
             case "parkReset": e.playback.resetParkSettings(PARK_PLAYBACK); break;
@@ -818,7 +833,7 @@ export class EditorPanel implements EditorView {
         const busy = builder.running;
         const why = !parksOn ? (builder.available ? "needs the patched engine with these dialogs" : builder.unavailableReason) : busy ? `wait for the ${builder.noun} to finish` : "";
         this.place("plNew", { x: x0 + inner - 2 * plBtn - s.gap, y, width: plBtn, height: s.playlistHeight },
-            why ? `New playlist: ${why}` : this.newGen ? "Close the New playlist pane" : "New playlist: pick how its views are made, then a folder of parks", !!why);
+            why ? `New playlist: ${why}` : this.newGen ? "Close the New playlist pane" : galleryApi() ? "New playlist: pick its parks in the gallery and how its views are made" : "New playlist: pick how its views are made, then a folder of parks", !!why);
         this.place("plCopy", { x: x0 + inner - plBtn, y, width: plBtn, height: s.playlistHeight },
             why ? `Duplicate: ${why}` : "Duplicate this playlist: name a copy (with your edits); the copy plays at once", !!why);
         y += s.playlistHeight + s.gap;
@@ -1145,6 +1160,42 @@ export class EditorPanel implements EditorView {
         const frame = { x, y: s.y, width, height: y + s.pad - s.y };
         this.frames.push(frame);
         backing(scene, "new.frame", frame, THEME.editorBacking);
+    }
+
+    /** The park gallery (gallery.ts), where the engine has one: Add park opens it to add its ticked parks to
+     *  the playlist, New playlist to pick the parks of a new one with the generation options beside them.
+     *  Its fallbacks are the system's dialogs as before. False: no gallery (an older engine). */
+    private openGallery(e: Editor, kind: "add" | "new"): boolean {
+        const gallery = this.gallery;
+        if (!gallery || !galleryApi()) {
+            return false;
+        }
+        const sequence = e.playback.sequenceName;
+        const busy = () => (!builder.parksAvailable ? builder.unavailableReason : builder.running ? `Wait for the ${builder.noun} to finish` : "");
+        const host: GalleryHost = {
+            add: paths => builder.addParks(sequence, paths),
+            create: (paths, generation) => {
+                const started = builder.newPlaylistOf(paths);
+                if (started) {
+                    this.madeGen = generation;
+                }
+                return started;
+            },
+            browse: generation => {
+                if (kind === "add") {
+                    builder.addPark(sequence);
+                    return builder.running;
+                }
+                this.newGen = generation ?? { ...e.playback.generation };
+                return true; // (the New playlist pane, with its Choose folder)
+            },
+            busy,
+        };
+        const rows = e.playback.orderRows;
+        gallery.open(kind === "add"
+            ? { kind, sequence, playlist: sequence, count: rows.length, has: new Set(rows.map(r => r.key.split("|")[0].toLowerCase())) }
+            : { kind, generation: { ...e.playback.generation } }, host);
+        return gallery.isOpen;
     }
 
     /** New playlist's Choose folder: the folder dialog, then the playlist made with the pane's choices

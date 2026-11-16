@@ -10,6 +10,7 @@ import type { MouseEvent, ScreensaverApi } from "../mode";
 import { Layer, Rect, Scene, backing, button, contains, label, measure, tooltip } from "./kit";
 import { THEME } from "./theme";
 import { generationClick, generationRows } from "./generation";
+import { Gallery, galleryApi } from "./gallery";
 import { GENERATION_DEFAULTS, saveOtherPlaylistProps } from "../storage";
 import type { Generation } from "../storage";
 
@@ -67,7 +68,7 @@ export class Welcome {
     private madeGen: Generation | undefined; // the options of the playlist New is making
 
     /** `problem`: why the installed playlist cannot play (empty: none is installed). */
-    constructor(private readonly api: ScreensaverApi, private readonly problem = "") {
+    constructor(private readonly api: ScreensaverApi, private readonly problem = "", private readonly gallery?: Gallery) {
         this.layer = new Layer(api.overlay, "rcts.welcome.");
     }
 
@@ -124,7 +125,31 @@ export class Welcome {
     }
 
     private click(id: HitId): void {
-        if (id === "new") {
+        if (id === "new" && this.gallery && galleryApi()) {
+            // The park gallery: the parks are picked there, with the generation options beside them
+            this.gallery.open({ kind: "new", generation: { ...GENERATION_DEFAULTS } }, {
+                add: () => false,
+                create: (paths, generation) => {
+                    this.newSince = Date.now();
+                    this.madeGen = generation;
+                    const started = builder.newPlaylistOf(paths);
+                    if (!started) {
+                        this.newSince = 0;
+                        this.madeGen = undefined;
+                    }
+                    return started;
+                },
+                browse: generation => {
+                    this.gen = generation ?? { ...GENERATION_DEFAULTS }; // (the options, then Choose folder…)
+                    return true;
+                },
+                importBundle: () => {
+                    builder.importPlaylist();
+                    return builder.running;
+                },
+                busy: () => (!builder.parksAvailable ? builder.unavailableReason : builder.running ? `Wait for the ${builder.noun} to finish` : ""),
+            });
+        } else if (id === "new") {
             this.gen = { ...GENERATION_DEFAULTS };
         } else if (id === "back") {
             this.gen = undefined;
@@ -241,8 +266,10 @@ export class Welcome {
                 { icon, iconSize: 18, text, textSize: 15, left: true }, overlay);
         };
         const parksOff = !builder.parksAvailable || busy;
-        action("new", "add", "New playlist from a folder of parks…",
-            "Pick how its views are made, then a folder of parks (.park files, RCT saves or park downloads): a playlist of them is made, built and played", { x: x0, y, width: inner, height: ROW }, parksOff);
+        const hasGallery = this.gallery !== undefined && galleryApi() !== undefined;
+        action("new", "add", hasGallery ? "New playlist…" : "New playlist from a folder of parks…",
+            hasGallery ? "Pick parks in the park gallery and how their views are made: a playlist of them is made, built and played"
+                : "Pick how its views are made, then a folder of parks (.park files, RCT saves or park downloads): a playlist of them is made, built and played", { x: x0, y, width: inner, height: ROW }, parksOff);
         y += ROW + GAP;
         action("import", "import", "Import playlist…",
             "Pick a playlist bundle (.zip) someone exported: it is imported, built and played", { x: x0, y, width: inner, height: ROW }, !builder.bundlesAvailable || busy);
