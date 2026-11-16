@@ -1667,6 +1667,8 @@ console.log("ok: parks ticked on and off, Add park, and switching, new and dupli
     assert.ok(tileOf(() => true) && !tileOf(t => t === "Park Z"), "L leaves out the small maps");
     gaClick("size.1"); tick();
     assert.ok(tileOf(t => t === "Park U"), "S goes by the built area, not the map (a 160-tile map with 20×24 built; owner, 2026-11-16)");
+    mouse("move", ...at(ga("tile.0.bg"))); tick(2);
+    assert.ok(ga("d.k6") && ga("h.picks").y >= ga("d.k6").y + 16, "the picks start under the hovered park's last line (owner, 2026-11-16: they overlapped)");
     assert.equal([...scene].filter(([id, e]) => /^rcts\.gallery\.tile\.\d+\.name$/.test(id) && e.text === "Park S").length, 1,
         "copies of one park in two folders make one tile (owner, 2026-11-16)");
     gaClick("size.0"); tick();

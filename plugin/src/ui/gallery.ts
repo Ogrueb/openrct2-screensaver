@@ -89,6 +89,7 @@ const DETAILS_MS = 2000;
 const REDRAW_MS = 1000; // with nothing changed (the header's counts, a task ending)
 const LIFT = 300; // over the editor's panes and tooltips
 const PICK_ROW = 34;
+const DETAIL_ROWS = 7; // the hovered park's facts (detailRows)
 const NEW_PICK_ROWS = 6; // a new playlist's picks shown; a scroll bar past that (owner, 2026-11-16)
 const ORANGE = THEME.dragLine;
 
@@ -710,9 +711,9 @@ export class Gallery {
         const hovered = hover?.startsWith("tile.") ? entries[Number(hover.slice(5))] : undefined;
         y = top;
         if (hovered) {
-            this.detailRows(scene, hovered, rx, y, rightW, text, heading);
+            this.detailRows(scene, hovered, rx, y, rightW, narrow ? 17 : 21, text, heading);
         }
-        y += narrow ? 132 : 150;
+        y += 19 + DETAIL_ROWS * (narrow ? 17 : 21) + 8; // (the heading, its rows, a gap: the picks start under them)
         const n = this.picks.length;
         heading("h.picks", `${job.kind === "new" ? "New playlist" : `Adding to ${this.fit(job.playlist, 11, rightW * 0.4)}`} · ${n} park${n === 1 ? "" : "s"}`, rx + 1, y);
         if (n) {
@@ -943,7 +944,7 @@ export class Gallery {
         }
     }
 
-    private detailRows(scene: Scene, e: GalleryEntry, x: number, y: number, width: number,
+    private detailRows(scene: Scene, e: GalleryEntry, x: number, y: number, width: number, step: number,
         text: (id: string, t: string, x: number, y: number, size: number, more?: Partial<OverlayElement>) => unknown,
         heading: (id: string, t: string, x: number, y: number) => unknown): void {
         const overlay = this.mode.overlay;
@@ -962,8 +963,11 @@ export class Gallery {
             ["Event views", d ? (d.events ? `${d.events}` : "none") : "…"],
             [copies.length > 1 ? "Folders" : "Folder", folder],
         ];
+        if (rows.length !== DETAIL_ROWS) {
+            throw new Error("gallery: DETAIL_ROWS is out of step with the details");
+        }
         rows.forEach(([k, v], i) => {
-            const ry = y + 19 + i * 21;
+            const ry = y + 19 + i * step;
             text(`d.k${i}`, k, x, ry, 13, { colour: THEME.textDim, shadow: undefined });
             const kw = measure(overlay, k, 13).width;
             const value = this.fit(v, 13, width - kw - 14);
