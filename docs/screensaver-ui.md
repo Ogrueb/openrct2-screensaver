@@ -591,6 +591,11 @@ renders, and the mode's shortcuts are off.
   parks…" (`screensaver.newPlaylist({paths})`, the Save dialog naming it), then built and played at once: the
   picks are already chosen and ordered, so there is no draft step (owner's test, 2026-11-16).
 
+Owner's test (2026-11-16, 186 parks in two added folders): every item passes after three rounds of fixes (a new
+playlist built at once, drawn drag handles, a steady tile order, sizes by built area, merged copies, the picks
+heading clear of the details). The size classes stand: of 145 distinct parks, 64 tiles is the 28th percentile and
+128 the 83rd (S 40, M 80, L 25; median 73; graph in the project files' `editor-ui/gallery/size-distribution.png`).
+
 Copies (owner, 2026-11-16): files with the same name and size in several gallery folders make one tile while
 every folder shows (`mergeCopies`; the user's own gallery folder's copy first, then the folders in their listed
 order; the hover details name every folder). The merge is made when the pane draws and nothing of it is kept, so
