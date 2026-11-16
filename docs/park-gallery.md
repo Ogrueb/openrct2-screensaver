@@ -18,6 +18,8 @@ implementation options").
   `.sv6` do not). Owner's test the same day: the grid works, but the embedded screenshots are random crops
   around the saved view that rarely show anything characteristic, so the gallery makes its own renders,
   and the engine makes them (owner's pick over the generator, so the gallery stays standalone).
+- Render cost accepted (owner, 2026-11-16): each render can cost the title park 10-15 frames while it
+  runs; it is a one-off per park, cached afterwards, and a renderer outside the engine stays out of scope.
 
 ## Stages
 
