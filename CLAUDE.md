@@ -582,7 +582,8 @@ See README.md for usage.
   `config.ini`); then the gallery's plugin API (0024, 2026-11-16: `screensaver.gallery`, gallery picks for Add park and
   New playlist, `screensaver.paused`) and the editor's park gallery pane (`plugin/src/ui/gallery.ts`, owner's design 2026-11-16, `docs/screensaver-ui.md`
   "The park gallery pane"): Add park and New playlist pick from tiles with filters, a tiles-per-row slider (1-7) and the
-  background park paused; generator `--park-list`, `--live-new-parks`, `--gallery-details`; diagnostics moved to 0025,
+  background park paused; generator `--park-list`, `--live-new-parks`, `--gallery-details`; park size S/M/L by the built area (under 64, under 128 tiles; owner
+  2026-11-16), copies of a park in several folders one tile, a build falls back to a gallery copy of a gone file; owner's test passed 2026-11-16; diagnostics moved to 0025,
   matched by name in the workflow.
 - `docs/roadmap.md`: planned work, and what was done with the decisions made on the way.
 - `docs/known-issues.md`: problems in parks or third-party content that the project does not fix.
