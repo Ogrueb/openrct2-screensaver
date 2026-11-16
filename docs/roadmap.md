@@ -3,7 +3,7 @@
 What is done, what is being worked on now, and what comes next, in the owner's order
 (2026-10-28, with the configurable generator added before Release on 2026-10-29; its wiring
 to the settings UI started 2026-10-31, ahead of the wrapper). Last rebuilt 2026-10-30, updated
-2026-11-11 (after the v0.3.0 release; nothing is in progress, all open work is under "Potential
+2026-11-16 (v0.4.0 prepared; nothing is in progress, all open work is under "Potential
 enhancements"). Problems in parks or other people's content that the project does not fix are in
 `docs/known-issues.md`; the decisions behind each piece are in `CLAUDE.md`.
 
@@ -20,13 +20,15 @@ enhancements"). Problems in parks or other people's content that the project doe
 | 5 | Configurable generator (final version) | Done (2026-10-31 to 11-02): the settings page, renders and drawing pages in daily use on the PC; Show titles wired 2026-11-03 |
 | 2 | Wallpaper wrapper | Done (2026-10-31 to 11-03; PRs up to #158): screensaver mode, overlay, controls bar, settings panel, view editor, park name captions with frame styles; live-tested by the owner |
 | 3 | Performance testing with logging, and optimizations | Potential enhancement (2026-11-07), grouped with the overnight soaks: framework built 2026-11-02, first runs 2026-11-03, PresentMon next |
-| 6 | Release | Done: v0.1.0 (2026-11-03, github.com/Ogrueb/openrct2-screensaver), v0.2.0 (2026-11-05, fixes and a Linux beta), v0.2.1 (2026-11-06, import fixes), v0.3.0 (2026-11-11, the live view editor as a beta) |
+| 6 | Release | Done: v0.1.0 (2026-11-03, github.com/Ogrueb/openrct2-screensaver), v0.2.0 (2026-11-05, fixes and a Linux beta), v0.2.1 (2026-11-06, import fixes), v0.3.0 (2026-11-11, the live view editor as a beta), v0.4.0 (prepared 2026-11-16: the editor makes and builds playlists, OpenRCT2 v0.5.7, the park gallery) |
+| 8 | OpenRCT2 v0.5.7 | Done (2026-11-15, PR #49): the patches moved over from v0.5.6 unchanged |
+| 9 | Park gallery | Done (2026-11-15 to 11-16, PRs #48, #51-#57; `docs/park-gallery.md`): a grid view, preview renders and gallery folders in the Load window (patches 0021-0023, standalone on stock OpenRCT2), the gallery in the plugin API (0024) and the editor's gallery pane for Add park and New playlist; passed the owner's test 2026-11-16 |
 | 7 | Standalone tool builds (settings page, drawing page) | Dropped (owner, 2026-11-16): the settings page is a legacy tool, kept in the source archive without new features |
 | L | Basic Linux support | Done (2026-11-03 to 11-05), shipped as a beta AppImage in v0.2.0 |
 
 ## Done recently, with the decisions made on the way
 
-### 6. Release (done: v0.1.0 2026-11-03, v0.2.0 11-05, v0.2.1 11-06, v0.3.0 11-11)
+### 6. Release (done: v0.1.0 2026-11-03, v0.2.0 11-05, v0.2.1 11-06, v0.3.0 11-11; v0.4.0 prepared 11-16)
 
 v0.1.0 was published on 2026-11-03 from the public repository `Ogrueb/openrct2-screensaver`, with
 the release engine build (0001-0015) and the source archive. Since then (notes in `docs/releases/`):
@@ -40,11 +42,17 @@ game test passed (2026-11-10: view edits, park order and a Playlist properties S
 builds apply it, `--ignore-live` leaves it out, bake writes the views file and the TOML; bake's insert
 inside a wrapped comment fixed); its notes say Copy/Paste and Import/Export are not implemented (owner).
 The standalone tool builds became a potential enhancement.
+v0.4.0 (notes prepared 2026-11-16, `docs/releases/v0.4.0.md`; a minor version, as it adds features and
+moves to a new OpenRCT2 release without breaking playlists or edits): the editor runs on its own, with builds
+from the game (patch 0017), Copy/Paste views and playlist Import/Export (0018, both promised in v0.3.0's notes),
+park ticks, Add park and new playlists (0019), the generator and plugin shipped in the engine build (0020), the
+Settings foldout and New playlist pane, the parks' event settings, OpenRCT2 v0.5.7, the park gallery (0021-0024),
+and the settings page as a legacy tool. The release build applies 0001-0024.
 
 - License: GPLv3 (owner, 2026-11-03; `LICENSE`, the plugin's `package.json`).
 - The example parks left the repository (owner, 2026-11-03): `ExampleParks/README.md` lists their
   downloads; the public repository starts from a fresh history without them.
-- Package the patched OpenRCT2 builds without the diagnostics patch (0021: load timings, perf log):
+- Package the patched OpenRCT2 builds without the diagnostics patch (0025 since 2026-11-16: load timings, perf log):
   the Engine build workflow's "Release build" input (2026-11-03); v0.1.0 carries the two
   executables, so users need no Actions login.
 - The stock-engine stopgaps are gone (owner, 2026-11-03): the generator's palette index 10 rewrite
@@ -319,7 +327,7 @@ them afterward; no hybrid format is planned) and the palette (the wallpaper wrap
 
 ### Engine patches (2026-10-26 to 10-27; `engine/`, `docs/engine-patches.md`)
 
-- 0003-0008 background loading (load timings in the test-only 0021): the next park is read, imported
+- 0003-0008 background loading (load timings in the test-only 0025): the next park is read, imported
   into a second game state and registered while the current one plays, so a switch costs about
   15-30 ms; `TitleSequence.backgroundLoading` lets the plugin skip the fade.
 - 0001 palette split: the void takes the park's color and the interface keeps its black
@@ -474,6 +482,9 @@ Requirements, in order:
 
 Estimate: a day of work plus a test pass on the machine. Not a release blocker (owner).
 
+Parked (owner, 2026-11-16): further Linux follow-ups are outside the owner's time budget for now, and
+automated cloud tests could not stand in for a test pass on a Linux desktop.
+
 ### Performance testing and overnight memory soaks (step 3 and the soaks grouped here, owner, 2026-11-07)
 
 The release came first; what is left of step 3 joins the overnight soaks the owner had moved here on
@@ -555,6 +566,8 @@ Later stage (owner, 2026-11-10): the live editor on its own, without the generat
 from the game's storage; writing them and the park order into the playlist files, builds, and the rest of the
 settings page's functions are to be drafted for the live editor later (`docs/enhancements.md` section 2, item 6).
 Next before that: the editing UI redesign (item 5, mockups in the project files' `editor-ui/`).
+Done since (released in v0.4.0): the live editor on its own (builds from the game), Copy/Paste views and
+playlist Import/Export in the editor (the editing UI redesign came with v0.3.0).
 
 Park library in the game (owner, 2026-11-12, thread "Explore park selection and playlist creation in the
 live editor"): the full replacement for the settings page's park screen, after the first stage (Use ticks,
@@ -565,6 +578,9 @@ images), and the editor gets a Parks panel with search, the settings page's filt
 views) and "in playlist" ticks, with a New playlist from the ticked parks. The plugin's files API reads only
 `screensaver/live`, so the listing has to come from the generator, as a task the engine starts like a
 build. Estimate two to three days.
+Since 2026-11-16 the park gallery pane (`docs/park-gallery.md`) covers picking parks with pictures and
+filters. Search in it is parked (owner, 2026-11-16): it would need another engine patch, not worth its
+weight for now.
 
 ### Weather and day/night in the generator (owner, 2026-11-02)
 
@@ -625,6 +641,9 @@ loses to a nearby still view, and a view budget from the park's distinct content
 candidate counts (which the half-cell offset grids roughly double). Zoom -2 close-ups on large
 parks still pick poor spots, even after weighting them down. Tested ideas are under
 "Background: view heuristics, first version" above.
+
+Parked (owner, 2026-11-16): new heuristics need views set by users to derive them from, and there are
+none yet. Hand-set views that users share (bundles, live files) would be the basis.
 
 #### Name rule for open prop rides (owner moved it into v2, 2026-11-09)
 
