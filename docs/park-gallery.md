@@ -62,7 +62,9 @@ implementation options").
    folder dialog) and "Remove <folder>" for each added one. Added folders are `file_browser_gallery_folders`
    in `config.ini`, separated by `|`. The default-folder button leaves the gallery. Not yet: a cached index
    of name, map size and date (on `FileIndex`, as scenarios and objects have), left for stage 4, where the
-   scripting API needs it; the list reads files as the Load window always has.
+   scripting API needs it; the list reads files as the Load window always has. Owner's test (2026-11-16):
+   every item passes, the larger icon included; a folder of zip downloads lists nothing (the Load window
+   reads only `.park` and `.sv6`).
 4. **The editor's Parks panel** (after the standalone live-editor work): a read-only `gallery` scripting
    API (entries with path, name, map size, date, picture) and path arguments for Add park and New playlist,
    so the editor draws the gallery as tiles and adds ticked parks without the system dialog.
