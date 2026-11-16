@@ -16,8 +16,10 @@ Three parts, all in this repository, none of them a fork of OpenRCT2:
   draws the controls bar, captions, settings panel and view editor, and runs the parks' own
   companion plugins.
 - **The generator** (`tools/`, Python): picks the views for each park (an overview, then close-ups
-  of its busiest spots, towers and rides, joined by pans), builds the title sequence and installs
-  it, with a settings page in the browser and a tool for drawing views by hand.
+  of its busiest spots, towers and rides, joined by pans) and builds the title sequence. The engine
+  build carries it, and the screensaver mode runs it for you. The browser settings page
+  remains as a legacy tool (see "Settings page (legacy)"), beside the command line and a page for
+  drawing views by hand.
 
 Running it requires OpenRCT2 v0.5.7 and the original RollerCoaster Tycoon 2 (or RCT Classic)
 game files, which are not included; neither are any parks (see `ExampleParks/README.md`).
@@ -26,9 +28,9 @@ game files, which are not included; neither are any parks (see `ExampleParks/REA
 
 | | |
 |---|---|
-| Operating system | Windows 10/11 (x64), and Linux x64 (tested on Fedora under Wayland, 2026-11-05; X11 untested). The mode's captions use the Segoe UI and Georgia system fonts on Windows and fall back to DejaVu, Liberation or Noto Sans on Linux. `Settings.cmd` and `.sv6` conversion use `openrct2.com` on Windows; `settings.sh` starts the settings page on Linux and macOS. On macOS only the Python tools run (no engine build). |
+| Operating system | Windows 10/11 (x64), and Linux x64 (tested on Fedora under Wayland, 2026-11-05; X11 untested). The mode's captions use the Segoe UI and Georgia system fonts on Windows and fall back to DejaVu, Liberation or Noto Sans on Linux. On macOS only the Python tools run (no engine build), so the legacy settings page is the only way to make playlists there, for a stock OpenRCT2. |
 | OpenRCT2 | v0.5.7 (`engine/VERSION`), the portable or installed release, with the two patched executables in place of the stock ones. On an unpatched v0.5.7 the plugin falls back to playing on the stock title screen, without the screensaver mode (below). |
-| Python | 3.11 or later, on PATH (`pythonw` for `Settings.cmd`). No third-party packages. |
+| Python | Not needed for the screensaver mode on Windows: the engine build carries Python. On Linux the mode's builds use the `python3` on your PATH (3.11 or later). The legacy settings page and the command line need Python 3.11 or later on PATH (`pythonw` for `Settings.cmd`). No third-party packages. |
 | Node | Only to rebuild the plugin (22 or later); the built plugin is committed. |
 
 ## Installing
@@ -49,19 +51,21 @@ game files, which are not included; neither are any parks (see `ExampleParks/REA
    folder, builds the playlist and plays it; **Import playlist** takes a bundle someone exported. The view editor (E) does the rest
    (see "Setting views by hand").
 
-The settings page and the command line do more than the game's editor (every generator option,
-renders, RCT2 `.sv6` saves and loose objects through the folder scan). They need the source archive
-and Python 3.11 or newer: run `Settings.cmd` on Windows or `./settings.sh` on Linux and macOS (or
-`python tools/settings.py` anywhere). It opens the generator's page in your browser: point Source
-parks at your folder and Scan, set the options you want, Build, then Install (OpenRCT2 must be
-closed). The page writes everything under `Documents\OpenRCT2\screensaver\`; Install puts the title
-sequence in `Documents\OpenRCT2\sequence\`, the plugin in `Documents\OpenRCT2\plugin\` (with its
-icons under `plugin\rct-screensaver\icons\` and one `rct-screensaver-companion-*.js` per park script),
-and the playlist and settings in `plugin.store.json` (other plugins' data is left alone; a `.bak` copy
-is kept). A plugin installed this way replaces the one the engine carries, and the game's builds then
-run the source archive's generator (`screensaver\generator.json` names it).
+Everything else happens in the mode: New playlist and Add park take park downloads, RCT2 saves
+(`.sv6`, `.sv4`) and loose objects; the editor's Settings and the New playlist pane set the generator's
+options, per playlist and per park; the Events list sets the parks' animation and show views; Build and
+play rebuilds without closing the game; Import and Export carry playlists to another computer.
 
-The command-line equivalent, for a playlist written by hand, is
+The browser settings page is a legacy tool, for macOS, a stock OpenRCT2, and the few things the game
+doesn't do (see "Settings page (legacy)"). It and the command line need the source archive and Python
+3.11 or newer. Their Install puts the title sequence in `Documents\OpenRCT2\sequence\`, the
+plugin in `Documents\OpenRCT2\plugin\` (with its icons under `plugin\rct-screensaver\icons\` and one
+`rct-screensaver-companion-*.js` per park script), and the playlist and settings in `plugin.store.json`
+(other plugins' data is left alone; a `.bak` copy is kept). A plugin installed this way replaces the one
+the engine carries, and the game's builds then run the source archive's generator
+(`screensaver\generator.json` names it).
+
+On the command line, for a playlist written by hand:
 
 ```sh
 python tools/mksequence.py playlists/example.toml --install
@@ -283,7 +287,20 @@ Per park:
   `show = "<name>"`. Flagged views are played as placed, not moved or merged by fitting, and add
   their own time to the park's.
 
-## Settings page
+## Settings page (legacy)
+
+The screensaver mode's editor makes and edits playlists in the game, so this page is a legacy tool:
+it is kept, but gets no new features. Use it where the game can't help:
+
+- on macOS, or with a stock (unpatched) OpenRCT2, where the mode and its builds don't exist;
+- for renders: each park's views as pictures, with the route drawn, and a contact sheet to compare
+  two builds (`tools/renderviews.py`);
+- for a scripted show's camera view and path (the drawing page's Events panel; the game sets the
+  show's other settings);
+- to filter parks by size, scripts or event views, until the game has its park library;
+- to edit a playlist while the game is closed, with backups of every file it overwrites.
+
+Run `Settings.cmd` on Windows or `./settings.sh` on Linux and macOS, or:
 
 ```
 python tools/settings.py [playlist] [--openrct2 "<OpenRCT2 folder>/openrct2.com"]
@@ -377,8 +394,9 @@ new version of the plugin itself or of the parks' scripts comes with the next in
 
 ### Drawing views in the browser
 
-A quicker way to set many views: draw them as boxes on pictures of each park. The settings page
-opens this as its view-drawing page (Edit views in the park list or on the renders page), on its last
+Another way to set many views: draw them as boxes on pictures of each park, outside the game (the
+editor's map, M, does the same on the playing park). The settings page opens this as its view-drawing
+page (Edit views in the park list or on the renders page), on its last
 build; the command below runs it on its own.
 
 ```sh
@@ -463,7 +481,7 @@ What the numbers say:
 | `tools/importparks.py` | Imports park downloads (zips, `.sv6` saves) into a park library with a playlist |
 | `tools/nedesigns.py` | Park names and builders from the New Element Designs catalog (`tools/data/nedesigns.json`), matched to downloads by name |
 | `tools/unzstd.py` | Reads the zstd compression of parks saved by OpenRCT2 v0.5.x, in plain Python |
-| `tools/settings.py` | The generator's settings page in the browser: edits a playlist and the park profiles, builds, installs and renders |
+| `tools/settings.py` | The generator's settings page in the browser (legacy): edits a playlist and the park profiles, builds, installs and renders |
 | `tools/tomlwrite.py` | Writes TOML (playlists, profiles) for the settings page |
 | `tools/drawviews.py` | Draw views by hand in the browser, on renders of each park from all four angles |
 | `tools/renderviews.py` | Renders every view of a built playlist to PNG (OpenRCT2 headless screenshots) with a contact sheet |

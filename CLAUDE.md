@@ -537,7 +537,11 @@ See README.md for usage.
 - `plugin/`: TypeScript plugin (type-check with `tsc`, bundle with esbuild); `npm test`
   runs it against a mock title screen API.
 - `docs/companion-plugins.md`: how parks' bundled plugins load, and how to run them on the title screen.
-- `tools/settings.py` + `tools/settings.html`: the generator's settings page (built 2026-10-31 from the
+- `tools/settings.py` + `tools/settings.html`: the generator's settings page, a legacy tool since 2026-11-16
+  (owner; roadmap "Settings page: a legacy tool": labeled on the page and in the README, no new features, new
+  options go into the game, a smoke test before each release, standalone `.exe` builds dropped, removed once
+  the park library is in the game; it still covers macOS, the stock engine, renders, show camera paths,
+  filters and backups) (built 2026-10-31 from the
   mockup, wiring in `docs/settings-ui-wiring.md`): local server like drawviews.py with a per-run token and
   Host/Origin checks; edits a playlist and park profiles in place (`tools/tomlwrite.py` `patch`: comments
   kept; a change it can't place rewrites the file; never asks before a write (owner, 2026-10-31: the

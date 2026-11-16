@@ -58,6 +58,9 @@ input[type=range] { accent-color: var(--accent); }
 /* The page's footer: the user folder's tools and the project's links */
 .pagefoot { display: flex; align-items: center; gap: 16px; padding: 14px 32px; border-top: 1px solid var(--line); background: var(--bar); flex-wrap: wrap; }
 .pagefoot a { color: var(--link); }
+/* Legacy status (2026-11-16): the game's screensaver mode is the way to make and edit playlists */
+.legacy { font-size: 12px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--text2); border: 1px solid var(--line); padding: 1px 6px; margin-left: 8px; vertical-align: middle; cursor: help; }
+.pagefoot .legacynote { color: var(--text2); font-size: 13px; }
 #offline { position: fixed; inset: 0; background: rgba(0,0,0,0.75); color: #fff; display: flex; align-items: center; justify-content: center; text-align: center; z-index: 9; padding: 24px; font-size: 17px; line-height: 1.5; }
 .bar .actions-bar { flex: 0 0 auto; flex-wrap: nowrap; }
 #main > .bar { flex-wrap: nowrap; }
@@ -183,7 +186,7 @@ body.light .bandhead a.button.primary { background: var(--alt); color: var(--ona
 <!-- Main screen -->
 <div id="main">
   <div class="bar">
-    <div class="titles"><h1>RCT Screensaver · Playlist generator</h1>
+    <div class="titles"><h1>RCT Screensaver · Playlist generator<span class="legacy" title="Legacy tool. Make and edit playlists in the screensaver mode of the patched game (its view editor, E): it builds, imports and sets every option this page does. This page stays for macOS, the stock OpenRCT2, renders, show camera paths and file backups, and gets no new features.">Legacy</span></h1>
       <div class="sub2"><select id="openList" title="The open playlist; pick another to open it. Defaults come with the screensaver; saving one keeps your copy in your user folder."></select>
         <button id="newList" title="Start a new, empty playlist (it is named when first saved).">New</button>
         <button id="importBtn" title="Open a playlist bundle (.zip): its playlist, views and changed profiles go into your user folder; parks it doesn't carry are looked for in the park folder.">Import</button></div></div>
@@ -311,6 +314,7 @@ body.light .bandhead a.button.primary { background: var(--alt); color: var(--ona
   <div class="pagefoot">
     <button id="backupsBtn" title="Open the folder with the backups of every playlist and profile the page has overwritten (the last 100 copies of each).">Backups</button>
     <a href="https://github.com/Ogrueb/openrct2-screensaver" target="_blank" rel="noopener">RCT Screensaver on GitHub</a>
+    <span class="legacynote">Legacy tool: the screensaver mode's editor (E) makes and edits playlists in the game.</span>
     <span style="flex-grow:1"></span>
     <button id="theme" title="Switch between dark and light mode" aria-label="Switch between dark and light mode">◐</button>
   </div>
