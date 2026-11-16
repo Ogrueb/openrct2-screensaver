@@ -1,0 +1,2147 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: dev <a@b>
+Date: Mon, 16 Nov 2026 05:04:09 +0000
+Subject: [PATCH] Screensaver: the park gallery in the plugin API
+
+A shared gallery module (interface/Gallery) takes the Load window's
+gallery folders and preview renders, and keeps an index of the gallery's
+parks: name, map size and date read in the background and cached in the
+cache folder's gallery-index.json, so only new and changed files are read
+again. The screensaver global gets gallery (version, folders, entries,
+addFolder, removeFolder, requestPictures, refresh), addPark(sequence,
+paths) and newPlaylist({ paths }) for parks picked there (only parks in
+the gallery's index; the generator gets them in a list file), and paused,
+which holds the title screen still while the mode's editor renders
+previews. Overlay images that are not there yet are looked for again.
+---
+ src/openrct2-ui/interface/Gallery.cpp       | 684 ++++++++++++++++++++
+ src/openrct2-ui/interface/Gallery.h         | 112 ++++
+ src/openrct2-ui/libopenrct2ui.vcxproj       |   2 +
+ src/openrct2-ui/screensaver/Build.cpp       | 329 +++++++++-
+ src/openrct2-ui/screensaver/Build.h         |  28 +
+ src/openrct2-ui/screensaver/Overlay.cpp     |   4 +
+ src/openrct2-ui/screensaver/Screensaver.cpp |   1 +
+ src/openrct2-ui/scripting/ScScreensaver.hpp | 271 +++++++-
+ src/openrct2-ui/scripting/UiExtensions.cpp  |   3 +
+ src/openrct2-ui/windows/LoadSave.cpp        | 232 +------
+ src/openrct2/ParkImporter.h                 |   7 +
+ src/openrct2/park/ParkFile.cpp              |  15 +
+ src/openrct2/scenes/title/TitleScene.cpp    |   3 +-
+ src/openrct2/scenes/title/TitleScene.h      |   3 +
+ 14 files changed, 1457 insertions(+), 237 deletions(-)
+ create mode 100644 src/openrct2-ui/interface/Gallery.cpp
+ create mode 100644 src/openrct2-ui/interface/Gallery.h
+
+diff --git a/src/openrct2-ui/interface/Gallery.cpp b/src/openrct2-ui/interface/Gallery.cpp
+new file mode 100644
+index 00000000..829f3fcc
+--- /dev/null
++++ b/src/openrct2-ui/interface/Gallery.cpp
+@@ -0,0 +1,684 @@
++/*****************************************************************************
++ * Copyright (c) 2014-2026 OpenRCT2 developers
++ *
++ * For a complete list of all authors, please refer to contributors.md
++ * Interested in contributing? Visit https://github.com/OpenRCT2/OpenRCT2
++ *
++ * OpenRCT2 is licensed under the GNU General Public License version 3.
++ *****************************************************************************/
++
++#ifdef _WIN32
++    #ifndef NOMINMAX
++        #define NOMINMAX
++    #endif
++    #ifndef WIN32_LEAN_AND_MEAN
++        #define WIN32_LEAN_AND_MEAN
++    #endif
++    #include <windows.h>
++    // windows.h's macros would rename the game's own functions
++    #undef CreateDirectory
++    #undef CreateWindow
++    #undef DrawText
++    #undef GetMessage
++    #undef LoadImage
++#else
++    #include <fcntl.h>
++    #include <sys/wait.h>
++    #include <unistd.h>
++#endif
++
++#include "Gallery.h"
++
++#include <openrct2/Context.h>
++#include <openrct2/Diagnostic.h>
++#include <openrct2/FileClassifier.h>
++#include <openrct2/ParkImporter.h>
++#include <openrct2/PlatformEnvironment.h>
++#include <openrct2/config/Config.h>
++#include <openrct2/core/BackgroundWorker.hpp>
++#include <openrct2/core/File.h>
++#include <openrct2/core/FileScanner.h>
++#include <openrct2/core/FileStream.h>
++#include <openrct2/core/FileSystem.hpp>
++#include <openrct2/core/Json.hpp>
++#include <openrct2/core/Path.hpp>
++#include <openrct2/core/String.hpp>
++#include <openrct2/park/ParkPreview.h>
++#include <openrct2/platform/Platform.h>
++
++#include <algorithm>
++#include <cctype>
++#include <cerrno>
++#include <chrono>
++#include <cstdio>
++#include <string_view>
++#include <unordered_map>
++#include <unordered_set>
++
++namespace OpenRCT2::Ui::Gallery
++{
++#pragma region Folders
++
++    u8string OwnFolder()
++    {
++        auto& env = GetContext()->GetPlatformEnvironment();
++        return Path::Combine(env.GetDirectoryPath(DirBase::user), u8"gallery");
++    }
++
++    std::vector<u8string> AddedFolders()
++    {
++        std::vector<u8string> folders;
++        for (auto folder : String::split(Config::Get().general.fileBrowserGalleryFolders, "|"))
++        {
++            if (!folder.empty())
++                folders.emplace_back(folder);
++        }
++        return folders;
++    }
++
++    void SetAddedFolders(const std::vector<u8string>& folders)
++    {
++        u8string joined;
++        for (const auto& folder : folders)
++        {
++            if (!joined.empty())
++                joined += '|';
++            joined += folder;
++        }
++        Config::Get().general.fileBrowserGalleryFolders = joined;
++        Config::Save();
++        Refresh();
++    }
++
++    u8string NormalisedFolder(const u8string& folder)
++    {
++        auto absolute = Path::GetAbsolute(folder);
++        while (absolute.size() > 1 && (absolute.back() == '/' || absolute.back() == '\\'))
++            absolute.pop_back();
++        return absolute;
++    }
++
++    bool IsGalleryFolder(const u8string& folder)
++    {
++        const auto normalised = NormalisedFolder(folder);
++        if (Path::Equals(normalised, NormalisedFolder(OwnFolder())))
++            return true;
++        for (const auto& added : AddedFolders())
++        {
++            if (Path::Equals(normalised, NormalisedFolder(added)))
++                return true;
++        }
++        return false;
++    }
++
++    bool AddFolder(const u8string& folder)
++    {
++        std::error_code ec;
++        if (folder.empty() || !fs::is_directory(fs::u8path(folder), ec) || IsGalleryFolder(folder))
++            return false;
++        auto folders = AddedFolders();
++        folders.push_back(NormalisedFolder(folder));
++        SetAddedFolders(folders);
++        return true;
++    }
++
++    bool RemoveFolder(const u8string& folder)
++    {
++        auto folders = AddedFolders();
++        const auto normalised = NormalisedFolder(folder);
++        auto it = std::find_if(folders.begin(), folders.end(), [&normalised](const u8string& added) {
++            return Path::Equals(NormalisedFolder(added), normalised);
++        });
++        if (it == folders.end())
++            return false;
++        folders.erase(it);
++        SetAddedFolders(folders);
++        return true;
++    }
++
++#pragma endregion
++
++#pragma region Renders
++
++    u8string PreviewRenderFolder()
++    {
++        auto& env = GetContext()->GetPlatformEnvironment();
++        return Path::Combine(env.GetDirectoryPath(DirBase::cache), u8"previews");
++    }
++
++    u8string PreviewRenderPath(const u8string& path, uint64_t size, time_t modified)
++    {
++        // FNV-1a over the render version, path, size and time; a new version redoes renders and failures
++        constexpr std::string_view kRenderVersion = "5|";
++        uint64_t hash = 0xcbf29ce484222325ull;
++        auto mix = [&hash](std::string_view text) {
++            for (auto c : text)
++            {
++                hash ^= static_cast<uint8_t>(c);
++                hash *= 0x100000001b3ull;
++            }
++        };
++        mix(kRenderVersion);
++        mix(path);
++        mix("|" + std::to_string(size) + "|" + std::to_string(static_cast<int64_t>(modified)));
++        char name[32];
++        std::snprintf(name, sizeof(name), "%016llx.png", static_cast<unsigned long long>(hash));
++        return Path::Combine(PreviewRenderFolder(), name);
++    }
++
++    // Runs a command and waits for it, its output discarded; true when it exits normally.
++    static bool RunHidden(const std::vector<u8string>& args)
++    {
++#ifdef _WIN32
++        // Quoted as the C runtime parses command lines
++        std::wstring commandLine;
++        for (const auto& arg : args)
++        {
++            if (!commandLine.empty())
++                commandLine += L' ';
++            auto wide = String::toWideChar(arg);
++            commandLine += L'"';
++            size_t backslashes = 0;
++            for (auto c : wide)
++            {
++                if (c == L'\\')
++                {
++                    backslashes++;
++                    continue;
++                }
++                commandLine.append(c == L'"' ? backslashes * 2 + 1 : backslashes, L'\\');
++                backslashes = 0;
++                commandLine += c;
++            }
++            commandLine.append(backslashes * 2, L'\\');
++            commandLine += L'"';
++        }
++
++        STARTUPINFOW startupInfo{};
++        startupInfo.cb = sizeof(startupInfo);
++        PROCESS_INFORMATION processInfo{};
++        if (!CreateProcessW(
++                nullptr, commandLine.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW | IDLE_PRIORITY_CLASS, nullptr,
++                nullptr, &startupInfo, &processInfo))
++        {
++            return false;
++        }
++        WaitForSingleObject(processInfo.hProcess, INFINITE);
++        CloseHandle(processInfo.hThread);
++        CloseHandle(processInfo.hProcess);
++        return true;
++#else
++        std::vector<char*> argv;
++        for (const auto& arg : args)
++            argv.push_back(const_cast<char*>(arg.c_str()));
++        argv.push_back(nullptr);
++
++        pid_t pid = fork();
++        if (pid == 0)
++        {
++            int devNull = open("/dev/null", O_RDWR);
++            if (devNull >= 0)
++            {
++                dup2(devNull, STDIN_FILENO);
++                dup2(devNull, STDOUT_FILENO);
++                dup2(devNull, STDERR_FILENO);
++            }
++            if (nice(19) == -1)
++            {
++                // Normal priority then
++            }
++            execv(argv[0], argv.data());
++            _exit(127);
++        }
++        if (pid < 0)
++            return false;
++        int status = 0;
++        while (waitpid(pid, &status, 0) < 0)
++        {
++            if (errno != EINTR)
++                return false;
++        }
++        return WIFEXITED(status);
++#endif
++    }
++
++    bool RenderPreview(const u8string& parkPath, const u8string& renderPath)
++    {
++        Path::CreateDirectory(PreviewRenderFolder());
++        const auto partPath = renderPath + u8".part.png";
++        // Subcommands take no data path options, so the render uses the default user folder's settings
++        RunHidden({ Platform::GetCurrentExecutablePath(), "screenshot", parkPath, partPath, "preview",
++                    std::to_string(kRenderWidth), std::to_string(kRenderHeight) });
++        if (File::Exists(partPath) && File::Move(partPath, renderPath))
++            return true;
++
++        File::Delete(partPath);
++        File::WriteAllBytes(Path::WithExtension(renderPath, u8".none"), nullptr, 0);
++        return false;
++    }
++
++    bool PreviewRenderFailed(const u8string& renderPath)
++    {
++        return File::Exists(Path::WithExtension(renderPath, u8".none"));
++    }
++
++#pragma endregion
++
++#pragma region Index
++
++    static constexpr const char* kPattern = "*.park;*.sv6;*.sc6;*.sv4;*.sc4;*.zip";
++    static constexpr auto kRescanInterval = std::chrono::seconds(10);
++    static constexpr size_t kInfoBatch = 8;
++    static constexpr int32_t kIndexVersion = 1;
++
++    // What the index keeps of a file between sessions
++    struct Info
++    {
++        uint64_t size{};
++        int64_t modified{};
++        u8string name;
++        int32_t mapWidth{};
++        int32_t mapHeight{};
++        int32_t year{};
++        int32_t month{};
++        int32_t day{};
++    };
++
++    struct ScanResult
++    {
++        std::vector<FolderInfo> folders;
++        std::vector<Entry> entries;
++    };
++
++    struct ReadResult
++    {
++        u8string path;
++        Info info;
++    };
++
++    static std::vector<FolderInfo> _folders;
++    static std::vector<Entry> _entries;
++    static std::unordered_map<u8string, size_t> _byPath;
++    static std::unordered_map<u8string, Info> _known;
++    static bool _knownLoaded;
++    static bool _knownDirty;
++    static uint32_t _version = 1;
++    static bool _scanned;
++    static bool _rescanWanted;
++    static std::chrono::steady_clock::time_point _lastScan;
++    static BackgroundWorker::Job _scanJob;
++    static BackgroundWorker::Job _readJob;
++    static BackgroundWorker::Job _renderJob;
++    static std::vector<u8string> _renderQueue;
++
++    static u8string IndexPath()
++    {
++        auto& env = GetContext()->GetPlatformEnvironment();
++        return Path::Combine(env.GetDirectoryPath(DirBase::cache), u8"gallery-index.json");
++    }
++
++    static u8string LowerExtension(const u8string& path)
++    {
++        auto extension = Path::GetExtension(path);
++        if (!extension.empty() && extension[0] == '.')
++            extension.erase(0, 1);
++        std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char c) {
++            return static_cast<char>(std::tolower(c));
++        });
++        return extension;
++    }
++
++    static bool CanRender(const Entry& entry)
++    {
++        return entry.kind != "zip";
++    }
++
++    // Only parks in the game's own format carry a name, map size and date that can be read quickly
++    static bool CanRead(const Entry& entry)
++    {
++        return entry.kind == "park";
++    }
++
++    static void LoadKnown()
++    {
++        if (_knownLoaded)
++            return;
++        _knownLoaded = true;
++        const auto path = IndexPath();
++        if (!File::Exists(path))
++            return;
++        try
++        {
++            auto root = Json::ReadFromFile(path);
++            if (Json::GetNumber<int32_t>(root["version"]) != kIndexVersion)
++                return;
++            for (auto item : Json::AsArray(root["files"]))
++            {
++                Info info;
++                info.size = Json::GetNumber<uint64_t>(item["size"]);
++                info.modified = Json::GetNumber<int64_t>(item["modified"]);
++                info.name = Json::GetString(item["name"]);
++                info.mapWidth = Json::GetNumber<int32_t>(item["mapWidth"]);
++                info.mapHeight = Json::GetNumber<int32_t>(item["mapHeight"]);
++                info.year = Json::GetNumber<int32_t>(item["year"]);
++                info.month = Json::GetNumber<int32_t>(item["month"]);
++                info.day = Json::GetNumber<int32_t>(item["day"]);
++                auto file = Json::GetString(item["path"]);
++                if (!file.empty())
++                    _known[file] = std::move(info);
++            }
++        }
++        catch (const std::exception& e)
++        {
++            LOG_WARNING("Park gallery: cannot read %s: %s", path.c_str(), e.what());
++        }
++    }
++
++    // Keeps what is known of the files still in the gallery
++    static void SaveKnown()
++    {
++        _knownDirty = false;
++        json_t files = json_t::array();
++        for (const auto& entry : _entries)
++        {
++            auto it = _known.find(entry.path);
++            if (it == _known.end())
++                continue;
++            const auto& info = it->second;
++            files.push_back({ { "path", entry.path },
++                              { "size", info.size },
++                              { "modified", info.modified },
++                              { "name", info.name },
++                              { "mapWidth", info.mapWidth },
++                              { "mapHeight", info.mapHeight },
++                              { "year", info.year },
++                              { "month", info.month },
++                              { "day", info.day } });
++        }
++        json_t root = { { "version", kIndexVersion }, { "files", std::move(files) } };
++        try
++        {
++            Path::CreateDirectory(Path::GetDirectory(IndexPath()));
++            Json::WriteToFile(IndexPath(), root, 0);
++        }
++        catch (const std::exception& e)
++        {
++            LOG_WARNING("Park gallery: cannot write %s: %s", IndexPath().c_str(), e.what());
++        }
++    }
++
++    static void SetPicture(Entry& entry)
++    {
++        if (!CanRender(entry))
++        {
++            entry.picture.clear();
++            entry.pictureState = PictureState::none;
++            return;
++        }
++        auto renderPath = PreviewRenderPath(entry.path, entry.size, static_cast<time_t>(entry.modified));
++        if (File::Exists(renderPath))
++        {
++            entry.picture = renderPath;
++            entry.pictureState = PictureState::ready;
++        }
++        else
++        {
++            entry.picture.clear();
++            entry.pictureState = PreviewRenderFailed(renderPath) ? PictureState::none : PictureState::pending;
++        }
++    }
++
++    // Lists every gallery folder (in the background): files, sizes, times and pictures
++    static ScanResult Scan(const u8string& own, const std::vector<u8string>& added)
++    {
++        ScanResult result;
++        Path::CreateDirectory(own);
++        std::vector<std::pair<u8string, bool>> folders{ { own, true } };
++        for (const auto& folder : added)
++            folders.emplace_back(folder, false);
++
++        std::unordered_set<u8string> seen;
++        for (const auto& [folder, isOwn] : folders)
++        {
++            FolderInfo info;
++            info.path = folder;
++            info.name = Path::GetFileName(folder);
++            info.own = isOwn;
++            auto scanner = Path::scanDirectory(Path::Combine(folder, kPattern), true);
++            while (scanner->next())
++            {
++                const auto& path = scanner->getPath();
++                if (!seen.insert(path).second)
++                    continue;
++                Entry entry;
++                entry.path = path;
++                entry.folder = folder;
++                entry.file = Path::GetFileName(path);
++                entry.kind = LowerExtension(path);
++                entry.name = Path::GetFileNameWithoutExtension(path);
++                entry.size = Platform::GetFileSize(path);
++                entry.modified = static_cast<int64_t>(Platform::FileGetModifiedTime(path));
++                entry.read = !CanRead(entry);
++                SetPicture(entry);
++                result.entries.push_back(std::move(entry));
++                info.count++;
++            }
++            result.folders.push_back(std::move(info));
++        }
++        return result;
++    }
++
++    // Reads a park's name, map size and date (in the background)
++    static Info ReadInfo(const u8string& path, uint64_t size, int64_t modified)
++    {
++        Info info;
++        info.size = size;
++        info.modified = modified;
++        try
++        {
++            auto stream = FileStream(path, FileMode::open);
++            ClassifiedFileInfo classified;
++            if (!TryClassifyFile(&stream, &classified) || classified.Type != ::FileType::park)
++                return info;
++
++            auto& objectRepository = GetContext()->GetObjectRepository();
++            auto importer = ParkImporter::CreateParkFile(objectRepository);
++            importer->LoadFromStream(&stream, false, true, path.c_str());
++            auto preview = importer->GetParkPreview();
++            auto mapSize = importer->GetMapSize();
++            info.name = preview.parkName;
++            info.year = preview.year;
++            info.month = preview.month;
++            info.day = preview.day;
++            info.mapWidth = mapSize.x;
++            info.mapHeight = mapSize.y;
++        }
++        catch (const std::exception& e)
++        {
++            LOG_WARNING("Park gallery: cannot read %s: %s", path.c_str(), e.what());
++        }
++        return info;
++    }
++
++    static void ApplyInfo(Entry& entry, const Info& info)
++    {
++        if (!info.name.empty())
++            entry.name = info.name;
++        entry.mapWidth = info.mapWidth;
++        entry.mapHeight = info.mapHeight;
++        entry.year = info.year;
++        entry.month = info.month;
++        entry.day = info.day;
++        entry.read = true;
++    }
++
++    static bool SameListing(const std::vector<Entry>& a, const std::vector<Entry>& b)
++    {
++        if (a.size() != b.size())
++            return false;
++        for (size_t i = 0; i < a.size(); i++)
++        {
++            if (a[i].path != b[i].path || a[i].size != b[i].size || a[i].modified != b[i].modified
++                || a[i].pictureState != b[i].pictureState || a[i].folder != b[i].folder)
++                return false;
++        }
++        return true;
++    }
++
++    static void TakeScan(ScanResult result)
++    {
++        _scanned = true;
++        _lastScan = std::chrono::steady_clock::now();
++
++        bool foldersChanged = result.folders.size() != _folders.size();
++        for (size_t i = 0; !foldersChanged && i < result.folders.size(); i++)
++        {
++            foldersChanged = result.folders[i].path != _folders[i].path || result.folders[i].count != _folders[i].count;
++        }
++
++        for (auto& entry : result.entries)
++        {
++            if (entry.read)
++                continue;
++            auto it = _known.find(entry.path);
++            if (it != _known.end() && it->second.size == entry.size && it->second.modified == entry.modified)
++                ApplyInfo(entry, it->second);
++        }
++
++        const bool changed = foldersChanged || !SameListing(result.entries, _entries);
++        _folders = std::move(result.folders);
++        _entries = std::move(result.entries);
++        _byPath.clear();
++        for (size_t i = 0; i < _entries.size(); i++)
++            _byPath[_entries[i].path] = i;
++        if (changed)
++        {
++            _version++;
++            _knownDirty = true;
++        }
++    }
++
++    static Entry* FindEntry(const u8string& path)
++    {
++        auto it = _byPath.find(path);
++        return it != _byPath.end() ? &_entries[it->second] : nullptr;
++    }
++
++    void Update()
++    {
++        LoadKnown();
++        auto& worker = GetContext()->GetBackgroundWorker();
++
++        const auto now = std::chrono::steady_clock::now();
++        if (!_scanJob.isValid() && (!_scanned || _rescanWanted || now - _lastScan >= kRescanInterval))
++        {
++            _rescanWanted = false;
++            _scanJob = worker.addJob(
++                [own = OwnFolder(), added = AddedFolders()]() { return Scan(own, added); },
++                [](ScanResult result) { TakeScan(std::move(result)); });
++        }
++
++        if (_scanned && !_readJob.isValid())
++        {
++            std::vector<std::tuple<u8string, uint64_t, int64_t>> batch;
++            for (const auto& entry : _entries)
++            {
++                if (!entry.read)
++                    batch.emplace_back(entry.path, entry.size, entry.modified);
++                if (batch.size() >= kInfoBatch)
++                    break;
++            }
++            if (!batch.empty())
++            {
++                _readJob = worker.addJob(
++                    [batch]() {
++                        std::vector<ReadResult> results;
++                        for (const auto& [path, size, modified] : batch)
++                            results.push_back({ path, ReadInfo(path, size, modified) });
++                        return results;
++                    },
++                    [](std::vector<ReadResult> results) {
++                        for (auto& result : results)
++                        {
++                            auto* entry = FindEntry(result.path);
++                            if (entry != nullptr && entry->size == result.info.size
++                                && entry->modified == result.info.modified)
++                                ApplyInfo(*entry, result.info);
++                            _known[result.path] = std::move(result.info);
++                        }
++                        _knownDirty = true;
++                        _version++;
++                    });
++            }
++            else if (_knownDirty)
++            {
++                SaveKnown();
++            }
++        }
++
++        while (!_renderJob.isValid() && !_renderQueue.empty())
++        {
++            auto path = _renderQueue.front();
++            _renderQueue.erase(_renderQueue.begin());
++            auto* entry = FindEntry(path);
++            if (entry == nullptr || entry->pictureState != PictureState::pending)
++                continue;
++            auto renderPath = PreviewRenderPath(entry->path, entry->size, static_cast<time_t>(entry->modified));
++            _renderJob = worker.addJob(
++                [path, renderPath]() { return RenderPreview(path, renderPath); },
++                [path](bool) {
++                    if (auto* rendered = FindEntry(path))
++                    {
++                        SetPicture(*rendered);
++                        if (rendered->pictureState == PictureState::pending)
++                            rendered->pictureState = PictureState::none;
++                    }
++                    _version++;
++                });
++        }
++    }
++
++    std::vector<FolderInfo> GetFolders()
++    {
++        Update();
++        return _folders;
++    }
++
++    std::vector<Entry> GetEntries()
++    {
++        Update();
++        return _entries;
++    }
++
++    uint32_t GetVersion()
++    {
++        Update();
++        return _version;
++    }
++
++    void Refresh()
++    {
++        _rescanWanted = true;
++    }
++
++    void RequestPictures(const std::vector<u8string>& paths)
++    {
++        _renderQueue.clear();
++        std::unordered_set<u8string> queued;
++        for (const auto& path : paths)
++        {
++            auto* entry = FindEntry(path);
++            if (entry != nullptr && entry->pictureState == PictureState::pending && queued.insert(path).second)
++                _renderQueue.push_back(path);
++        }
++        Update();
++    }
++
++    bool Contains(const u8string& path)
++    {
++        Update();
++        return FindEntry(path) != nullptr;
++    }
++
++#pragma endregion
++} // namespace OpenRCT2::Ui::Gallery
+diff --git a/src/openrct2-ui/interface/Gallery.h b/src/openrct2-ui/interface/Gallery.h
+new file mode 100644
+index 00000000..593ae800
+--- /dev/null
++++ b/src/openrct2-ui/interface/Gallery.h
+@@ -0,0 +1,112 @@
++/*****************************************************************************
++ * Copyright (c) 2014-2026 OpenRCT2 developers
++ *
++ * For a complete list of all authors, please refer to contributors.md
++ * Interested in contributing? Visit https://github.com/OpenRCT2/OpenRCT2
++ *
++ * OpenRCT2 is licensed under the GNU General Public License version 3.
++ *****************************************************************************/
++
++// The park gallery: the gallery folder in the user directory and the folders the user added to it
++// (config.ini file_browser_gallery_folders), their preview renders, and an index of their parks.
++//
++// Preview renders: each park is rendered once, framed on the area it is built on, by running this
++// executable's "screenshot <file> <image> preview" command in the background. The pictures are kept in
++// the cache folder under a name made from the file's path, size and modification time, so a park that
++// changes is rendered again; a file that cannot be rendered leaves an empty ".none" file.
++//
++// The index lists every park in the gallery folders (subfolders included) with its name, map size and
++// date, read in the background and kept in the cache folder (gallery-index.json), so only new and
++// changed files are read again. Its functions are for the main thread; they start the background work
++// themselves, so a caller that asks regularly (each frame or tick) keeps it going.
++
++#pragma once
++
++#include <openrct2/core/StringTypes.h>
++
++#include <cstdint>
++#include <ctime>
++#include <vector>
++
++namespace OpenRCT2::Ui::Gallery
++{
++    // Folders
++
++    u8string OwnFolder();
++    std::vector<u8string> AddedFolders();
++    void SetAddedFolders(const std::vector<u8string>& folders);
++    u8string NormalisedFolder(const u8string& folder);
++    bool IsGalleryFolder(const u8string& folder);
++
++    // Adds a folder to the gallery; false when it is one already or is not a folder.
++    bool AddFolder(const u8string& folder);
++    // Removes an added folder; false when it is not one.
++    bool RemoveFolder(const u8string& folder);
++
++    // Renders
++
++    constexpr int32_t kRenderWidth = 250;
++    constexpr int32_t kRenderHeight = kRenderWidth / 5 * 4;
++
++    u8string PreviewRenderFolder();
++    u8string PreviewRenderPath(const u8string& path, uint64_t size, time_t modified);
++    // Renders a park's preview into the cache (blocking, for a background thread); true when the picture
++    // is there afterwards.
++    bool RenderPreview(const u8string& parkPath, const u8string& renderPath);
++    bool PreviewRenderFailed(const u8string& renderPath);
++
++    // Index
++
++    enum class PictureState : uint8_t
++    {
++        ready,   // `picture` is a PNG in the render cache
++        pending, // not rendered yet
++        none,    // cannot be rendered (a download, or the render failed)
++    };
++
++    struct FolderInfo
++    {
++        u8string path;
++        u8string name;
++        uint32_t count{}; // parks in it and its subfolders
++        bool own{};       // the user directory's gallery folder (cannot be removed)
++    };
++
++    struct Entry
++    {
++        u8string path;
++        u8string folder; // the gallery folder it was found under
++        u8string name;   // the park's saved name, else the file name without its extension
++        u8string file;   // the file name
++        u8string kind;   // the extension without its dot, lower case: "park", "sv6", "zip"...
++        int32_t mapWidth{};
++        int32_t mapHeight{};
++        int32_t year{}; // the park's own date (0 when unknown)
++        int32_t month{};
++        int32_t day{};
++        int64_t modified{}; // seconds since 1970
++        uint64_t size{};
++        bool read{}; // name, map size and date have been read from the file
++        u8string picture;
++        PictureState pictureState{ PictureState::pending };
++    };
++
++    std::vector<FolderInfo> GetFolders();
++    std::vector<Entry> GetEntries();
++
++    // Bumps whenever folders, entries or a picture change.
++    uint32_t GetVersion();
++
++    // Lists the folders again (it also happens by itself every few seconds while the index is asked for).
++    void Refresh();
++
++    // Renders the pictures of these parks, one at a time in the background; a new call replaces the
++    // parks still waiting.
++    void RequestPictures(const std::vector<u8string>& paths);
++
++    // Whether the file is a park in the gallery's index.
++    bool Contains(const u8string& path);
++
++    // Keeps the background work going; the other index functions call it too.
++    void Update();
++} // namespace OpenRCT2::Ui::Gallery
+diff --git a/src/openrct2-ui/libopenrct2ui.vcxproj b/src/openrct2-ui/libopenrct2ui.vcxproj
+index 6dc2b142..a324a64f 100644
+--- a/src/openrct2-ui/libopenrct2ui.vcxproj
++++ b/src/openrct2-ui/libopenrct2ui.vcxproj
+@@ -72,6 +72,7 @@
+     <ClInclude Include="interface\Dropdown.h" />
+     <ClInclude Include="interface\Graph.h" />
+     <ClInclude Include="interface\FileBrowser.h" />
++    <ClInclude Include="interface\Gallery.h" />
+     <ClInclude Include="interface\InGameConsole.h" />
+     <ClInclude Include="interface\LandTool.h" />
+     <ClInclude Include="interface\Objective.h" />
+@@ -145,6 +146,7 @@
+     <ClCompile Include="interface\Chat.cpp" />
+     <ClCompile Include="interface\Graph.cpp" />
+     <ClCompile Include="interface\FileBrowser.cpp" />
++    <ClCompile Include="interface\Gallery.cpp" />
+     <ClCompile Include="interface\InGameConsole.cpp" />
+     <ClCompile Include="interface\LandTool.cpp" />
+     <ClCompile Include="interface\Objective.cpp" />
+diff --git a/src/openrct2-ui/screensaver/Build.cpp b/src/openrct2-ui/screensaver/Build.cpp
+index d2a60dc3..d31113c1 100644
+--- a/src/openrct2-ui/screensaver/Build.cpp
++++ b/src/openrct2-ui/screensaver/Build.cpp
+@@ -26,10 +26,15 @@
+     #include <sys/types.h>
+     #include <sys/wait.h>
+     #include <unistd.h>
++    #ifdef __linux__
++        #include <sys/prctl.h>
++    #endif
+ #endif
+ 
+ #include "Build.h"
+ 
++#include "../interface/Gallery.h"
++
+ #include <openrct2/Context.h>
+ #include <openrct2/Diagnostic.h>
+ #include <openrct2/OpenRCT2.h>
+@@ -50,6 +55,7 @@
+ #include <openrct2/scenes/title/TitleSequencePlayer.h>
+ 
+ #include <chrono>
++#include <functional>
+ #include <mutex>
+ #include <optional>
+ #include <set>
+@@ -293,7 +299,12 @@ namespace OpenRCT2::Ui::Screensaver::Build
+             return out;
+         }
+ 
+-        bool Launch(const std::vector<std::string>& args, const std::string& cwd, const std::string& log, std::string& error)
++        // Starts a hidden process with its output in `log`; `onStarted` gets its handle before anything waits
++        // for it, and `onExit` its exit code, on a thread of its own. `idle`: at idle priority, and in a job
++        // that ends it when the game exits.
++        bool Spawn(
++            const std::vector<std::string>& args, const std::string& cwd, const std::string& log, bool idle,
++            const std::function<void(HANDLE)>& onStarted, std::function<void(HANDLE, int32_t)> onExit, std::string& error)
+         {
+             std::wstring commandLine;
+             for (const auto& arg : args)
+@@ -325,9 +336,10 @@ namespace OpenRCT2::Ui::Screensaver::Build
+             SetEnvironmentVariableW(L"PYTHONIOENCODING", L"utf-8");
+             auto app = String::toWideChar(args[0]);
+             auto wcwd = String::toWideChar(cwd);
++            const DWORD flags = CREATE_NO_WINDOW
++                | (idle ? IDLE_PRIORITY_CLASS | CREATE_SUSPENDED : BELOW_NORMAL_PRIORITY_CLASS);
+             BOOL ok = CreateProcessW(
+-                app.c_str(), commandLine.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS,
+-                nullptr, wcwd.c_str(), &si, &pi);
++                app.c_str(), commandLine.data(), nullptr, nullptr, TRUE, flags, nullptr, wcwd.c_str(), &si, &pi);
+             CloseHandle(output);
+             if (input != INVALID_HANDLE_VALUE)
+                 CloseHandle(input);
+@@ -336,22 +348,55 @@ namespace OpenRCT2::Ui::Screensaver::Build
+                 error = "Cannot start " + args[0] + " (error " + std::to_string(GetLastError()) + ")";
+                 return false;
+             }
+-            CloseHandle(pi.hThread);
++            if (idle)
+             {
+-                auto& shared = GetShared();
+-                std::lock_guard lock(shared.mutex);
+-                shared.process = pi.hProcess;
++                // Never closed: the system closes it when the game exits, which ends the process
++                static HANDLE job = []() {
++                    HANDLE created = CreateJobObjectW(nullptr, nullptr);
++                    if (created != nullptr)
++                    {
++                        JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
++                        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
++                        SetInformationJobObject(created, JobObjectExtendedLimitInformation, &limits, sizeof(limits));
++                    }
++                    return created;
++                }();
++                if (job != nullptr)
++                    AssignProcessToJobObject(job, pi.hProcess);
++                ResumeThread(pi.hThread);
+             }
+-            std::thread([process = pi.hProcess]() {
++            CloseHandle(pi.hThread);
++            onStarted(pi.hProcess);
++            std::thread([process = pi.hProcess, onExit = std::move(onExit)]() {
+                 WaitForSingleObject(process, INFINITE);
+                 DWORD code = 1;
+                 GetExitCodeProcess(process, &code);
+-                Finish(static_cast<int32_t>(code), code == 0 ? "" : "The generator failed (exit code " + std::to_string(code) + ")");
++                onExit(process, static_cast<int32_t>(code));
+             }).detach();
+             return true;
+         }
+-#else
++
+         bool Launch(const std::vector<std::string>& args, const std::string& cwd, const std::string& log, std::string& error)
++        {
++            return Spawn(
++                args, cwd, log, false,
++                [](HANDLE process) {
++                    auto& shared = GetShared();
++                    std::lock_guard lock(shared.mutex);
++                    shared.process = process;
++                },
++                [](HANDLE, int32_t code) {
++                    Finish(code, code == 0 ? "" : "The generator failed (exit code " + std::to_string(code) + ")");
++                },
++                error);
++        }
++#else
++        // Starts a hidden process with its output in `log`; `onStarted` gets its id before anything waits for
++        // it, and `onExit` its exit code, on a thread of its own. `idle`: at the lowest priority (and on Linux
++        // ended when the game exits).
++        bool Spawn(
++            const std::vector<std::string>& args, const std::string& cwd, const std::string& log, bool idle,
++            const std::function<void(pid_t)>& onStarted, std::function<void(pid_t, int32_t)> onExit, std::string& error)
+         {
+             // Everything the child needs is prepared before fork: it only calls async-signal-safe functions.
+             std::vector<char*> argv;
+@@ -371,6 +416,16 @@ namespace OpenRCT2::Ui::Screensaver::Build
+             if (pid == 0)
+             {
+                 setpgid(0, 0); // its own group: Cancel() stops anything it starts too
++                if (idle)
++                {
++    #ifdef __linux__
++                    prctl(PR_SET_PDEATHSIG, SIGTERM);
++    #endif
++                    if (nice(19) == -1)
++                    {
++                        // Normal priority then
++                    }
++                }
+                 if (input >= 0)
+                     dup2(input, STDIN_FILENO);
+                 dup2(output, STDOUT_FILENO);
+@@ -388,21 +443,32 @@ namespace OpenRCT2::Ui::Screensaver::Build
+                 error = "Cannot start " + args[0];
+                 return false;
+             }
+-            {
+-                auto& shared = GetShared();
+-                std::lock_guard lock(shared.mutex);
+-                shared.pid = pid;
+-            }
+-            std::thread([pid]() {
++            onStarted(pid);
++            std::thread([pid, onExit = std::move(onExit)]() {
+                 int status = 0;
+                 while (waitpid(pid, &status, 0) < 0 && errno == EINTR)
+                 {
+                 }
+                 int32_t code = WIFEXITED(status) ? WEXITSTATUS(status) : 128 + (WIFSIGNALED(status) ? WTERMSIG(status) : 0);
+-                Finish(code, code == 0 ? "" : "The generator failed (exit code " + std::to_string(code) + ")");
++                onExit(pid, code);
+             }).detach();
+             return true;
+         }
++
++        bool Launch(const std::vector<std::string>& args, const std::string& cwd, const std::string& log, std::string& error)
++        {
++            return Spawn(
++                args, cwd, log, false,
++                [](pid_t pid) {
++                    auto& shared = GetShared();
++                    std::lock_guard lock(shared.mutex);
++                    shared.pid = pid;
++                },
++                [](pid_t, int32_t code) {
++                    Finish(code, code == 0 ? "" : "The generator failed (exit code " + std::to_string(code) + ")");
++                },
++                error);
++        }
+ #endif
+     } // namespace
+ 
+@@ -687,6 +753,43 @@ namespace OpenRCT2::Ui::Screensaver::Build
+ #endif
+             return exe;
+         }
++
++        // Writes parks picked in the gallery to a list for the generator (one path per line, UTF-8): only
++        // parks in the gallery's index, so a plugin can name only files the user put in a gallery folder.
++        // The list's path, or empty with the reason in `error`.
++        u8string WriteParkList(const std::vector<u8string>& paths, std::string& error)
++        {
++            if (paths.empty())
++            {
++                error = "No parks given";
++                return {};
++            }
++            std::string text;
++            for (const auto& path : paths)
++            {
++                if (!Gallery::Contains(path))
++                {
++                    error = "Not a park in the gallery: " + path;
++                    return {};
++                }
++                text += path;
++                text += '\n';
++            }
++            auto folder = Path::Combine(ScreensaverFolder(), "live");
++            std::error_code ec;
++            fs::create_directories(fs::u8path(folder), ec);
++            auto list = Path::Combine(folder, "task-parks.txt");
++            try
++            {
++                File::WriteAllBytes(list, text.data(), text.size());
++            }
++            catch (const std::exception& e)
++            {
++                error = std::string("Cannot write the park list: ") + e.what();
++                return {};
++            }
++            return list;
++        }
+     } // namespace
+ 
+     bool AddPark(const std::string& sequence, bool& cancelled, std::string& error)
+@@ -760,6 +863,67 @@ namespace OpenRCT2::Ui::Screensaver::Build
+         return StartTask("new", "", { "--live-new", path, "--openrct2", ConverterPath() }, error);
+     }
+ 
++    bool AddParks(const std::string& sequence, const std::vector<u8string>& paths, std::string& error)
++    {
++        if (!IsSequenceName(sequence))
++        {
++            error = "Not a title sequence name: " + sequence;
++            return false;
++        }
++        if (!CanStartTask(error))
++            return false;
++        auto list = WriteParkList(paths, error);
++        if (list.empty())
++            return false;
++        return StartTask(
++            "add", sequence, { "--live-add", sequence, "--park-list", list, "--openrct2", ConverterPath() }, error);
++    }
++
++    bool NewPlaylistFrom(const std::vector<u8string>& paths, bool& cancelled, std::string& error)
++    {
++        cancelled = false;
++        if (!CanStartTask(error))
++            return false;
++        // Checked before the dialog, written after it
++        for (const auto& path : paths)
++        {
++            if (!Gallery::Contains(path))
++            {
++                error = "Not a park in the gallery: " + path;
++                return false;
++            }
++        }
++        auto folder = Path::Combine(ScreensaverFolder(), "playlists");
++        std::error_code ec;
++        fs::create_directories(fs::u8path(folder), ec);
++        Ui::FileDialogDesc desc;
++        desc.Type = Ui::FileDialogType::save;
++        desc.Title = "New playlist: name it";
++        desc.InitialDirectory = folder;
++        desc.DefaultFilename = Path::Combine(folder, "New playlist.toml");
++        desc.Filters.emplace_back("Playlist", "*.toml");
++        u8string path;
++        try
++        {
++            path = ShowDialog(desc);
++        }
++        catch (const std::exception& e)
++        {
++            error = std::string("No file dialog: ") + e.what();
++            return false;
++        }
++        if (path.empty())
++        {
++            cancelled = true;
++            return false;
++        }
++        auto list = WriteParkList(paths, error);
++        if (list.empty())
++            return false;
++        return StartTask(
++            "new", "", { "--live-new-parks", list, "--to", path, "--openrct2", ConverterPath() }, error);
++    }
++
+     bool CopyPlaylist(const std::string& sequence, bool& cancelled, std::string& error)
+     {
+         cancelled = false;
+@@ -798,6 +962,137 @@ namespace OpenRCT2::Ui::Screensaver::Build
+         return StartTask("copy", sequence, { "--live-copy", sequence, "--to", path }, error);
+     }
+ 
++    namespace
++    {
++        struct DetailsShared
++        {
++            std::mutex mutex;
++            DetailsStatus status;
++#ifdef _WIN32
++            HANDLE process = nullptr;
++#else
++            pid_t pid = 0;
++#endif
++        };
++
++        DetailsShared& GetDetailsShared()
++        {
++            static auto* shared = new DetailsShared();
++            return *shared;
++        }
++
++#ifndef _WIN32
++        // Ends a running details scan when the game exits normally (Windows: its job does; Linux: the
++        // parent-death signal does even when the game does not exit normally)
++        void StopDetailsAtExit()
++        {
++            auto& shared = GetDetailsShared();
++            std::lock_guard lock(shared.mutex);
++            if (shared.pid > 0)
++                kill(-shared.pid, SIGTERM);
++        }
++#endif
++
++        void FinishDetails(int32_t code)
++        {
++            auto& shared = GetDetailsShared();
++            std::lock_guard lock(shared.mutex);
++            shared.status.state = code == 0 ? State::done : State::failed;
++            shared.status.exitCode = code;
++            shared.status.finished = Now();
++            shared.status.error = code == 0 ? "" : "The generator failed (exit code " + std::to_string(code) + ")";
++#ifdef _WIN32
++            if (shared.process != nullptr)
++            {
++                CloseHandle(shared.process);
++                shared.process = nullptr;
++            }
++#else
++            shared.pid = 0;
++#endif
++        }
++    } // namespace
++
++    bool ScanDetails(const std::vector<std::string>& paths, std::string& error)
++    {
++        auto& shared = GetDetailsShared();
++        {
++            std::lock_guard lock(shared.mutex);
++            if (shared.status.state == State::running)
++                return false;
++        }
++        auto generator = ReadGenerator(error);
++        if (!generator)
++            return false;
++        auto live = Path::Combine(ScreensaverFolder(), "live");
++        std::error_code ec;
++        fs::create_directories(fs::u8path(live), ec);
++        auto list = Path::Combine(live, "gallery-parks.txt");
++        std::string text;
++        for (const auto& path : paths)
++        {
++            text += path;
++            text += '\n';
++        }
++        try
++        {
++            File::WriteAllBytes(list, text.data(), text.size());
++        }
++        catch (const std::exception& e)
++        {
++            error = std::string("Cannot write the park list: ") + e.what();
++            return false;
++        }
++        auto user = GetContext()->GetPlatformEnvironment().GetDirectoryPath(DirBase::user);
++        auto cwd = fs::u8path(generator->script).parent_path().parent_path().u8string();
++        std::vector<std::string> args = {
++            generator->python, generator->script, "--gallery-details", list, "--user-dir", user,
++        };
++        {
++            std::lock_guard lock(shared.mutex);
++            shared.status = DetailsStatus{ State::running, 0, Now(), 0, "" };
++        }
++#ifndef _WIN32
++        static const bool atExit = std::atexit(StopDetailsAtExit) == 0;
++        (void)atExit;
++#endif
++        bool started = Spawn(
++            args, std::string(cwd.begin(), cwd.end()), Path::Combine(ScreensaverFolder(), "gallery-details.log"), true,
++#ifdef _WIN32
++            [](HANDLE process) {
++                auto& details = GetDetailsShared();
++                std::lock_guard lock(details.mutex);
++                details.process = process;
++            },
++            [](HANDLE, int32_t code) { FinishDetails(code); },
++#else
++            [](pid_t pid) {
++                auto& details = GetDetailsShared();
++                std::lock_guard lock(details.mutex);
++                details.pid = pid;
++            },
++            [](pid_t, int32_t code) { FinishDetails(code); },
++#endif
++            error);
++        if (!started)
++        {
++            std::lock_guard lock(shared.mutex);
++            shared.status.state = State::failed;
++            shared.status.finished = Now();
++            shared.status.error = error;
++            return false;
++        }
++        LOG_INFO("Screensaver: park details scan of %zu parks started", paths.size());
++        return true;
++    }
++
++    DetailsStatus GetDetailsStatus()
++    {
++        auto& shared = GetDetailsShared();
++        std::lock_guard lock(shared.mutex);
++        return shared.status;
++    }
++
+     Status GetStatus()
+     {
+         auto& shared = GetShared();
+diff --git a/src/openrct2-ui/screensaver/Build.h b/src/openrct2-ui/screensaver/Build.h
+index 77eb82b7..6e875b60 100644
+--- a/src/openrct2-ui/screensaver/Build.h
++++ b/src/openrct2-ui/screensaver/Build.h
+@@ -31,6 +31,7 @@
+ 
+ #include <cstdint>
+ #include <string>
++#include <vector>
+ 
+ namespace OpenRCT2::Ui::Screensaver::Build
+ {
+@@ -92,11 +93,38 @@ namespace OpenRCT2::Ui::Screensaver::Build
+     // as for Export().
+     bool NewPlaylist(bool& cancelled, std::string& error);
+ 
++    // Adds parks picked in the park gallery (Gallery.h; each must be in its index) to the title sequence's
++    // playlist and builds it, with no dialog: the generator's --live-add with --park-list. False with the
++    // reason in `error`.
++    bool AddParks(const std::string& sequence, const std::vector<std::string>& paths, std::string& error);
++
++    // Shows the system's Save dialog to name a new playlist and, once a name is given, runs the generator to
++    // make it of parks picked in the park gallery (each must be in its index): --live-new-parks <list> --to
++    // <file>. False as for Export().
++    bool NewPlaylistFrom(const std::vector<std::string>& paths, bool& cancelled, std::string& error);
++
+     // Shows the system's Save dialog for a playlist file (the user's playlists folder first) and, once
+     // a name is given, runs the generator to copy the title sequence's playlist under that name (with its
+     // installed build when there is one; Apply() then plays the copy). False as for Export().
+     bool CopyPlaylist(const std::string& sequence, bool& cancelled, std::string& error);
+ 
++    struct DetailsStatus
++    {
++        State state = State::idle;
++        int32_t exitCode = 0;
++        int64_t started = 0;  // ms since 1970
++        int64_t finished = 0; // ms since 1970
++        std::string error;
++    };
++
++    // Runs the generator's park details scan (--gallery-details <list>) on these parks: a separate hidden
++    // process at idle priority, outside the one-task slot (builds and the other tasks stay available), ended
++    // when the game exits. The list is <user directory>/screensaver/live/gallery-parks.txt; the generator
++    // writes what it finds next to it. False when a scan runs already (`error` empty) or it cannot start
++    // (the reason in `error`).
++    bool ScanDetails(const std::vector<std::string>& paths, std::string& error);
++    DetailsStatus GetDetailsStatus();
++
+     Status GetStatus();
+ 
+     // Stops a running build; false when none runs.
+diff --git a/src/openrct2-ui/screensaver/Overlay.cpp b/src/openrct2-ui/screensaver/Overlay.cpp
+index b059a43b..7d7db746 100644
+--- a/src/openrct2-ui/screensaver/Overlay.cpp
++++ b/src/openrct2-ui/screensaver/Overlay.cpp
+@@ -476,6 +476,10 @@ namespace OpenRCT2::Ui::Screensaver::Overlay
+         if (it != _pictures.end())
+             return it->second;
+         auto picture = std::make_shared<Picture>();
++        // A file that is not there yet (a park preview still being rendered) is looked for again on the
++        // next draw, not remembered as missing
++        if (!File::Exists(path))
++            return picture;
+         try
+         {
+             auto image = Imaging::ReadFromFile(path, ImageFormat::png32);
+diff --git a/src/openrct2-ui/screensaver/Screensaver.cpp b/src/openrct2-ui/screensaver/Screensaver.cpp
+index d6955410..ff8e13e7 100644
+--- a/src/openrct2-ui/screensaver/Screensaver.cpp
++++ b/src/openrct2-ui/screensaver/Screensaver.cpp
+@@ -293,6 +293,7 @@ namespace OpenRCT2::Ui::Screensaver
+         if (!_active)
+             return;
+         _active = false;
++        gTitlePaused = false;
+         ShowWindows();
+         RestoreConfig();
+         Overlay::Clear();
+diff --git a/src/openrct2-ui/scripting/ScScreensaver.hpp b/src/openrct2-ui/scripting/ScScreensaver.hpp
+index afc620b9..10cc1ecd 100644
+--- a/src/openrct2-ui/scripting/ScScreensaver.hpp
++++ b/src/openrct2-ui/scripting/ScScreensaver.hpp
+@@ -8,12 +8,13 @@
+  *****************************************************************************/
+ 
+ // The `screensaver` global (mode, settings, mouse, overlay, files, clipboard, builds, playlist bundles,
+-// parks and new playlists).
++// parks and new playlists, the park gallery).
+ 
+ #pragma once
+ 
+ #ifdef ENABLE_SCRIPTING
+ 
++    #include "../interface/Gallery.h"
+     #include "../screensaver/Build.h"
+     #include "../screensaver/Overlay.h"
+     #include "../screensaver/Screensaver.h"
+@@ -23,7 +24,9 @@
+     #include <openrct2/PlatformEnvironment.h>
+     #include <openrct2/core/FileSystem.hpp>
+     #include <openrct2/core/Path.hpp>
++    #include <openrct2/scenes/title/TitleScene.h>
+     #include <openrct2/scripting/ScriptEngine.h>
++    #include <openrct2/ui/UiContext.h>
+     #include <algorithm>
+     #include <fstream>
+     #include <iterator>
+@@ -35,6 +38,8 @@ namespace OpenRCT2::Scripting
+     extern ScScreensaverOverlay gScScreensaverOverlay;
+     class ScScreensaver;
+     extern ScScreensaver gScScreensaver;
++    class ScScreensaverGallery;
++    extern ScScreensaverGallery gScScreensaverGallery;
+ 
+     namespace ScreensaverJS
+     {
+@@ -436,6 +441,41 @@ namespace OpenRCT2::Scripting
+             std::sort(names.begin(), names.end());
+             return names;
+         }
++
++        // An array of strings, or nothing when the value is not an array of strings
++        inline std::optional<std::vector<std::string>> GetStringArray(JSContext* ctx, JSValue value)
++        {
++            if (!JS_IsArray(value))
++                return std::nullopt;
++            int64_t length = 0;
++            if (JS_GetLength(ctx, value, &length) != 0)
++                return std::nullopt;
++            std::vector<std::string> result;
++            for (int64_t i = 0; i < length; i++)
++            {
++                JSValue element = JS_GetPropertyInt64(ctx, value, i);
++                const bool isString = JS_IsString(element);
++                if (isString)
++                    result.push_back(JSToStdString(ctx, element));
++                JS_FreeValue(ctx, element);
++                if (!isString)
++                    return std::nullopt;
++            }
++            return result;
++        }
++
++        inline const char* PictureStateName(Ui::Gallery::PictureState state)
++        {
++            switch (state)
++            {
++                case Ui::Gallery::PictureState::ready:
++                    return "ready";
++                case Ui::Gallery::PictureState::none:
++                    return "none";
++                default:
++                    return "pending";
++            }
++        }
+     } // namespace ScreensaverJS
+ 
+     class ScScreensaverOverlay final : public ScBase
+@@ -516,6 +556,167 @@ namespace OpenRCT2::Scripting
+         }
+     };
+ 
++    // screensaver.gallery: the park gallery's folders and parks (Gallery.h). Its lists are read in the
++    // background; `version` changes whenever they or a picture do, so a plugin can ask each tick.
++    class ScScreensaverGallery final : public ScBase
++    {
++    public:
++        void Register(JSContext* ctx)
++        {
++            static constexpr JSCFunctionListEntry funcs[] = {
++                JS_CGETSET_DEF("version", ScScreensaverGallery::version_get, nullptr),
++                JS_CGETSET_DEF("folders", ScScreensaverGallery::folders_get, nullptr),
++                JS_CGETSET_DEF("entries", ScScreensaverGallery::entries_get, nullptr),
++                JS_CFUNC_DEF("addFolder", 0, ScScreensaverGallery::addFolder),
++                JS_CFUNC_DEF("removeFolder", 1, ScScreensaverGallery::removeFolder),
++                JS_CFUNC_DEF("requestPictures", 1, ScScreensaverGallery::requestPictures),
++                JS_CFUNC_DEF("refresh", 0, ScScreensaverGallery::refresh),
++                JS_CFUNC_DEF("scanDetails", 0, ScScreensaverGallery::scanDetails),
++                JS_CGETSET_DEF("detailsStatus", ScScreensaverGallery::detailsStatus_get, nullptr),
++            };
++            RegisterBase(ctx, "ScreensaverGallery", nullptr, funcs);
++        }
++
++        JSValue New(JSContext* ctx)
++        {
++            return MakeWithOpaque(ctx, nullptr);
++        }
++
++    private:
++        static JSValue version_get(JSContext* ctx, JSValue)
++        {
++            return JS_NewUint32(ctx, Ui::Gallery::GetVersion());
++        }
++
++        static JSValue folders_get(JSContext* ctx, JSValue)
++        {
++            JSValue array = JS_NewArray(ctx);
++            uint32_t i = 0;
++            for (const auto& folder : Ui::Gallery::GetFolders())
++            {
++                JSValue obj = JS_NewObject(ctx);
++                JS_SetPropertyStr(ctx, obj, "path", JSFromStdString(ctx, folder.path));
++                JS_SetPropertyStr(ctx, obj, "name", JSFromStdString(ctx, folder.name));
++                JS_SetPropertyStr(ctx, obj, "count", JS_NewUint32(ctx, folder.count));
++                JS_SetPropertyStr(ctx, obj, "own", JS_NewBool(ctx, folder.own));
++                JS_SetPropertyUint32(ctx, array, i++, obj);
++            }
++            return array;
++        }
++
++        static JSValue entries_get(JSContext* ctx, JSValue)
++        {
++            JSValue array = JS_NewArray(ctx);
++            uint32_t i = 0;
++            for (const auto& entry : Ui::Gallery::GetEntries())
++            {
++                JSValue obj = JS_NewObject(ctx);
++                JS_SetPropertyStr(ctx, obj, "path", JSFromStdString(ctx, entry.path));
++                JS_SetPropertyStr(ctx, obj, "folder", JSFromStdString(ctx, entry.folder));
++                JS_SetPropertyStr(ctx, obj, "name", JSFromStdString(ctx, entry.name));
++                JS_SetPropertyStr(ctx, obj, "file", JSFromStdString(ctx, entry.file));
++                JS_SetPropertyStr(ctx, obj, "kind", JSFromStdString(ctx, entry.kind));
++                JSValue mapSize = JS_NewObject(ctx);
++                JS_SetPropertyStr(ctx, mapSize, "x", JS_NewInt32(ctx, entry.mapWidth));
++                JS_SetPropertyStr(ctx, mapSize, "y", JS_NewInt32(ctx, entry.mapHeight));
++                JS_SetPropertyStr(ctx, obj, "mapSize", mapSize);
++                JSValue date = JS_NewObject(ctx);
++                JS_SetPropertyStr(ctx, date, "year", JS_NewInt32(ctx, entry.year));
++                JS_SetPropertyStr(ctx, date, "month", JS_NewInt32(ctx, entry.month));
++                JS_SetPropertyStr(ctx, date, "day", JS_NewInt32(ctx, entry.day));
++                JS_SetPropertyStr(ctx, obj, "date", date);
++                JS_SetPropertyStr(ctx, obj, "modified", JS_NewFloat64(ctx, static_cast<double>(entry.modified)));
++                JS_SetPropertyStr(ctx, obj, "size", JS_NewFloat64(ctx, static_cast<double>(entry.size)));
++                JS_SetPropertyStr(ctx, obj, "read", JS_NewBool(ctx, entry.read));
++                JS_SetPropertyStr(ctx, obj, "picture", JSFromStdString(ctx, entry.picture));
++                JS_SetPropertyStr(
++                    ctx, obj, "pictureState", JSFromStdString(ctx, ScreensaverJS::PictureStateName(entry.pictureState)));
++                JS_SetPropertyUint32(ctx, array, i++, obj);
++            }
++            return array;
++        }
++
++        // addFolder() shows the system's folder dialog and adds the picked folder; false when the dialog
++        // was closed or the folder is in the gallery already.
++        static JSValue addFolder(JSContext* ctx, JSValue, int, JSValue*)
++        {
++            u8string folder;
++            try
++            {
++                // TODO: localised strings when offered upstream
++                folder = GetContext()->GetUiContext().ShowDirectoryDialog("Add folder to gallery");
++            }
++            catch (const std::exception& e)
++            {
++                JS_ThrowPlainError(ctx, "No folder dialog: %s", e.what());
++                return JS_EXCEPTION;
++            }
++            return JS_NewBool(ctx, !folder.empty() && Ui::Gallery::AddFolder(folder));
++        }
++
++        // removeFolder(path) removes a folder added to the gallery; false when it is not one.
++        static JSValue removeFolder(JSContext* ctx, JSValue, int argc, JSValue* argv)
++        {
++            if (argc < 1 || !JS_IsString(argv[0]))
++            {
++                JS_ThrowTypeError(ctx, "removeFolder(path): path must be a string");
++                return JS_EXCEPTION;
++            }
++            return JS_NewBool(ctx, Ui::Gallery::RemoveFolder(JSToStdString(ctx, argv[0])));
++        }
++
++        // requestPictures(paths) renders the pictures of these parks (the tiles on screen), one at a time
++        // in the background; each call replaces the parks still waiting.
++        static JSValue requestPictures(JSContext* ctx, JSValue, int argc, JSValue* argv)
++        {
++            auto paths = argc > 0 ? ScreensaverJS::GetStringArray(ctx, argv[0]) : std::nullopt;
++            if (!paths)
++            {
++                JS_ThrowTypeError(ctx, "requestPictures(paths): paths must be an array of strings");
++                return JS_EXCEPTION;
++            }
++            Ui::Gallery::RequestPictures(*paths);
++            return JS_UNDEFINED;
++        }
++
++        static JSValue refresh(JSContext*, JSValue, int, JSValue*)
++        {
++            Ui::Gallery::Refresh();
++            return JS_UNDEFINED;
++        }
++
++        // scanDetails() runs the generator's park details scan (builders, scripts, event views) on every park
++        // in the index, in its own background process (Build.h ScanDetails); false when one runs already,
++        // throws when it cannot start.
++        static JSValue scanDetails(JSContext* ctx, JSValue, int, JSValue*)
++        {
++            std::vector<std::string> paths;
++            for (const auto& entry : Ui::Gallery::GetEntries())
++                paths.push_back(entry.path);
++            std::string error;
++            if (Ui::Screensaver::Build::ScanDetails(paths, error))
++                return JS_NewBool(ctx, true);
++            if (!error.empty())
++            {
++                JS_ThrowPlainError(ctx, "%s", error.c_str());
++                return JS_EXCEPTION;
++            }
++            return JS_NewBool(ctx, false);
++        }
++
++        static JSValue detailsStatus_get(JSContext* ctx, JSValue)
++        {
++            auto status = Ui::Screensaver::Build::GetDetailsStatus();
++            JSValue obj = JS_NewObject(ctx);
++            JS_SetPropertyStr(ctx, obj, "state", JSFromStdString(ctx, Ui::Screensaver::Build::StateName(status.state)));
++            JS_SetPropertyStr(ctx, obj, "exitCode", JS_NewInt32(ctx, status.exitCode));
++            JS_SetPropertyStr(ctx, obj, "started", JS_NewFloat64(ctx, static_cast<double>(status.started)));
++            JS_SetPropertyStr(ctx, obj, "finished", JS_NewFloat64(ctx, static_cast<double>(status.finished)));
++            JS_SetPropertyStr(ctx, obj, "error", JSFromStdString(ctx, status.error));
++            return obj;
++        }
++    };
++
+     class ScScreensaver final : public ScBase
+     {
+     public:
+@@ -544,9 +745,11 @@ namespace OpenRCT2::Scripting
+                 JS_CFUNC_DEF("applyBuild", 1, ScScreensaver::applyBuild),
+                 JS_CFUNC_DEF("exportPlaylist", 1, ScScreensaver::exportPlaylist),
+                 JS_CFUNC_DEF("importPlaylist", 0, ScScreensaver::importPlaylist),
+-                JS_CFUNC_DEF("addPark", 1, ScScreensaver::addPark),
+-                JS_CFUNC_DEF("newPlaylist", 0, ScScreensaver::newPlaylist),
++                JS_CFUNC_DEF("addPark", 2, ScScreensaver::addPark),
++                JS_CFUNC_DEF("newPlaylist", 1, ScScreensaver::newPlaylist),
+                 JS_CFUNC_DEF("copyPlaylist", 1, ScScreensaver::copyPlaylist),
++                JS_CGETSET_DEF("gallery", ScScreensaver::gallery_get, nullptr),
++                JS_CGETSET_DEF("paused", ScScreensaver::paused_get, ScScreensaver::paused_set),
+             };
+             RegisterBase(ctx, "Screensaver", nullptr, funcs);
+             ScreensaverJS::InstallListeners();
+@@ -568,6 +771,21 @@ namespace OpenRCT2::Scripting
+             return JS_NewBool(ctx, Ui::Screensaver::IsActive());
+         }
+ 
++        static JSValue gallery_get(JSContext* ctx, JSValue);
++
++        // paused: the title screen holds still (no park updates, no title sequence steps) while input,
++        // drawing, plugins and background work go on; only in the mode, which clears it on exit.
++        static JSValue paused_get(JSContext* ctx, JSValue)
++        {
++            return JS_NewBool(ctx, gTitlePaused);
++        }
++
++        static JSValue paused_set(JSContext* ctx, JSValue, JSValue value)
++        {
++            gTitlePaused = Ui::Screensaver::IsActive() && JS_ToBool(ctx, value) != 0;
++            return JS_UNDEFINED;
++        }
++
+         static JSValue launchedByFlag_get(JSContext* ctx, JSValue)
+         {
+             return JS_NewBool(ctx, Ui::Screensaver::LaunchedByFlag());
+@@ -780,7 +998,8 @@ namespace OpenRCT2::Scripting
+ 
+         // addPark(sequence) shows the system's Open dialog for a park and adds the picked one to that
+         // title sequence's playlist, then builds it, in the background (buildStatus follows it). False
+-        // when the dialog was closed; throws with the reason when it cannot start.
++        // when the dialog was closed; throws with the reason when it cannot start. addPark(sequence, paths)
++        // adds parks picked in the gallery (paths from gallery.entries) with no dialog.
+         static JSValue addPark(JSContext* ctx, JSValue, int argc, JSValue* argv)
+         {
+             if (argc < 1 || !JS_IsString(argv[0]))
+@@ -788,8 +1007,23 @@ namespace OpenRCT2::Scripting
+                 JS_ThrowTypeError(ctx, "addPark(sequence): sequence must be a string");
+                 return JS_EXCEPTION;
+             }
+-            bool cancelled = false;
+             std::string error;
++            if (argc > 1 && !JS_IsUndefined(argv[1]))
++            {
++                auto paths = ScreensaverJS::GetStringArray(ctx, argv[1]);
++                if (!paths)
++                {
++                    JS_ThrowTypeError(ctx, "addPark(sequence, paths): paths must be an array of strings");
++                    return JS_EXCEPTION;
++                }
++                if (!Ui::Screensaver::Build::AddParks(JSToStdString(ctx, argv[0]), *paths, error))
++                {
++                    JS_ThrowPlainError(ctx, "%s", error.c_str());
++                    return JS_EXCEPTION;
++                }
++                return JS_NewBool(ctx, true);
++            }
++            bool cancelled = false;
+             if (!Ui::Screensaver::Build::AddPark(JSToStdString(ctx, argv[0]), cancelled, error) && !cancelled)
+             {
+                 JS_ThrowPlainError(ctx, "%s", error.c_str());
+@@ -800,11 +1034,29 @@ namespace OpenRCT2::Scripting
+ 
+         // newPlaylist() shows the system's folder dialog and makes a playlist of the parks in the picked
+         // folder, in the background (buildStatus follows it; the generator lists its parks). False when the dialog was
+-        // closed; throws with the reason when it cannot start.
+-        static JSValue newPlaylist(JSContext* ctx, JSValue, int, JSValue*)
++        // closed; throws with the reason when it cannot start. newPlaylist({ paths }) makes it of parks picked
++        // in the gallery instead, naming it in the system's Save dialog.
++        static JSValue newPlaylist(JSContext* ctx, JSValue, int argc, JSValue* argv)
+         {
+             bool cancelled = false;
+             std::string error;
++            if (argc > 0 && JS_IsObject(argv[0]))
++            {
++                JSValue value = JS_GetPropertyStr(ctx, argv[0], "paths");
++                auto paths = ScreensaverJS::GetStringArray(ctx, value);
++                JS_FreeValue(ctx, value);
++                if (!paths)
++                {
++                    JS_ThrowTypeError(ctx, "newPlaylist({ paths }): paths must be an array of strings");
++                    return JS_EXCEPTION;
++                }
++                if (!Ui::Screensaver::Build::NewPlaylistFrom(*paths, cancelled, error) && !cancelled)
++                {
++                    JS_ThrowPlainError(ctx, "%s", error.c_str());
++                    return JS_EXCEPTION;
++                }
++                return JS_NewBool(ctx, !cancelled);
++            }
+             if (!Ui::Screensaver::Build::NewPlaylist(cancelled, error) && !cancelled)
+             {
+                 JS_ThrowPlainError(ctx, "%s", error.c_str());
+@@ -838,6 +1090,11 @@ namespace OpenRCT2::Scripting
+     {
+         return gScScreensaverOverlay.New(ctx);
+     }
++
++    inline JSValue ScScreensaver::gallery_get(JSContext* ctx, JSValue)
++    {
++        return gScScreensaverGallery.New(ctx);
++    }
+ } // namespace OpenRCT2::Scripting
+ 
+ #endif
+diff --git a/src/openrct2-ui/scripting/UiExtensions.cpp b/src/openrct2-ui/scripting/UiExtensions.cpp
+index 3cb4e5bf..7974302e 100644
+--- a/src/openrct2-ui/scripting/UiExtensions.cpp
++++ b/src/openrct2-ui/scripting/UiExtensions.cpp
+@@ -30,6 +30,7 @@ ScGraphicsContext OpenRCT2::Scripting::gScGraphicsContext;
+ ScImageManager OpenRCT2::Scripting::gScImageManager;
+ ScScreensaver OpenRCT2::Scripting::gScScreensaver;
+ ScScreensaverOverlay OpenRCT2::Scripting::gScScreensaverOverlay;
++ScScreensaverGallery OpenRCT2::Scripting::gScScreensaverGallery;
+ ScTileSelection OpenRCT2::Scripting::gScTileSelection;
+ ScTool OpenRCT2::Scripting::gScTool;
+ ScUi OpenRCT2::Scripting::gScUi;
+@@ -69,6 +70,7 @@ void UiScriptExtensions::Extend(ScriptEngine& scriptEngine)
+     gScImageManager.Register(ctx);
+     gScScreensaver.Register(ctx);
+     gScScreensaverOverlay.Register(ctx);
++    gScScreensaverGallery.Register(ctx);
+     gScTileSelection.Register(ctx);
+     gScTool.Register(ctx);
+     gScUi.Register(ctx);
+@@ -108,6 +110,7 @@ void UiScriptExtensions::Unregister()
+     gScImageManager.Unregister();
+     gScScreensaver.Unregister();
+     gScScreensaverOverlay.Unregister();
++    gScScreensaverGallery.Unregister();
+     gScTileSelection.Unregister();
+     gScTool.Unregister();
+     gScUi.Unregister();
+diff --git a/src/openrct2-ui/windows/LoadSave.cpp b/src/openrct2-ui/windows/LoadSave.cpp
+index 2e4e3df8..5efedf18 100644
+--- a/src/openrct2-ui/windows/LoadSave.cpp
++++ b/src/openrct2-ui/windows/LoadSave.cpp
+@@ -8,32 +8,13 @@
+  *****************************************************************************/
+ 
+ #include <SDL_keycode.h>
+-#ifdef _WIN32
+-    #ifndef NOMINMAX
+-        #define NOMINMAX
+-    #endif
+-    #ifndef WIN32_LEAN_AND_MEAN
+-        #define WIN32_LEAN_AND_MEAN
+-    #endif
+-    #include <windows.h>
+-    // windows.h's macros would rename the game's own functions
+-    #undef CreateDirectory
+-    #undef CreateWindow
+-    #undef DrawText
+-    #undef GetMessage
+-    #undef LoadImage
+-#else
+-    #include <fcntl.h>
+-    #include <sys/wait.h>
+-    #include <unistd.h>
+-#endif
+-#include <cerrno>
+ #include <cstring>
+ #include <ctime>
+ #include <iterator>
+ #include <memory>
+ #include <openrct2-ui/interface/Dropdown.h>
+ #include <openrct2-ui/interface/FileBrowser.h>
++#include <openrct2-ui/interface/Gallery.h>
+ #include <openrct2-ui/interface/Widget.h>
+ #include <openrct2-ui/interface/Window.h>
+ #include <openrct2-ui/windows/Windows.h>
+@@ -116,188 +97,15 @@ namespace OpenRCT2::Ui::Windows
+         bool renderTried{}; // A render was asked for this session
+     };
+ 
+-    // Preview renders: each park is rendered once, framed on the area it is built on, by running this
+-    // executable's "screenshot <file> <image> preview" command in the background. The pictures are kept
+-    // in the cache folder under a name made from the file's path, size and modification time, so a park
+-    // that changes is rendered again; a file that cannot be rendered leaves an empty ".none" file.
+-    static constexpr int32_t kRenderWidth = kPreviewWidthScreenshot;
+-    static constexpr int32_t kRenderHeight = kRenderWidth / 5 * 4;
+-
+-    // The park gallery: the gallery folder in the user directory and the folders added to it, whose parks
+-    // are listed in place
+-    static u8string GalleryFolder()
+-    {
+-        auto& env = GetContext()->GetPlatformEnvironment();
+-        return Path::Combine(env.GetDirectoryPath(DirBase::user), u8"gallery");
+-    }
+-
+-    static std::vector<u8string> AddedGalleryFolders()
+-    {
+-        std::vector<u8string> folders;
+-        for (auto folder : String::split(Config::Get().general.fileBrowserGalleryFolders, "|"))
+-        {
+-            if (!folder.empty())
+-                folders.emplace_back(folder);
+-        }
+-        return folders;
+-    }
+-
+-    static void SetAddedGalleryFolders(const std::vector<u8string>& folders)
+-    {
+-        u8string joined;
+-        for (const auto& folder : folders)
+-        {
+-            if (!joined.empty())
+-                joined += '|';
+-            joined += folder;
+-        }
+-        Config::Get().general.fileBrowserGalleryFolders = joined;
+-        Config::Save();
+-    }
+-
+-    static u8string NormalisedFolder(const u8string& folder)
+-    {
+-        auto absolute = Path::GetAbsolute(folder);
+-        while (absolute.size() > 1 && (absolute.back() == '/' || absolute.back() == '\\'))
+-            absolute.pop_back();
+-        return absolute;
+-    }
+-
+-    static bool IsGalleryFolder(const u8string& folder)
+-    {
+-        const auto normalised = NormalisedFolder(folder);
+-        if (Path::Equals(normalised, NormalisedFolder(GalleryFolder())))
+-            return true;
+-        for (const auto& added : AddedGalleryFolders())
+-        {
+-            if (Path::Equals(normalised, NormalisedFolder(added)))
+-                return true;
+-        }
+-        return false;
+-    }
+-
+-    static u8string PreviewRenderFolder()
+-    {
+-        auto& env = GetContext()->GetPlatformEnvironment();
+-        return Path::Combine(env.GetDirectoryPath(DirBase::cache), u8"previews");
+-    }
+-
+-    static u8string PreviewRenderPath(const u8string& path, uint64_t size, time_t modified)
+-    {
+-        // FNV-1a over the render version, path, size and time; a new version redoes renders and failures
+-        constexpr std::string_view kRenderVersion = "5|";
+-        uint64_t hash = 0xcbf29ce484222325ull;
+-        auto mix = [&hash](std::string_view text) {
+-            for (auto c : text)
+-            {
+-                hash ^= static_cast<uint8_t>(c);
+-                hash *= 0x100000001b3ull;
+-            }
+-        };
+-        mix(kRenderVersion);
+-        mix(path);
+-        mix("|" + std::to_string(size) + "|" + std::to_string(static_cast<int64_t>(modified)));
+-        char name[32];
+-        std::snprintf(name, sizeof(name), "%016llx.png", static_cast<unsigned long long>(hash));
+-        return Path::Combine(PreviewRenderFolder(), name);
+-    }
+-
+-    // Runs a command and waits for it, its output discarded; true when it exits normally.
+-    static bool RunHidden(const std::vector<u8string>& args)
+-    {
+-#ifdef _WIN32
+-        // Quoted as the C runtime parses command lines
+-        std::wstring commandLine;
+-        for (const auto& arg : args)
+-        {
+-            if (!commandLine.empty())
+-                commandLine += L' ';
+-            auto wide = String::toWideChar(arg);
+-            commandLine += L'"';
+-            size_t backslashes = 0;
+-            for (auto c : wide)
+-            {
+-                if (c == L'\\')
+-                {
+-                    backslashes++;
+-                    continue;
+-                }
+-                commandLine.append(c == L'"' ? backslashes * 2 + 1 : backslashes, L'\\');
+-                backslashes = 0;
+-                commandLine += c;
+-            }
+-            commandLine.append(backslashes * 2, L'\\');
+-            commandLine += L'"';
+-        }
+-
+-        STARTUPINFOW startupInfo{};
+-        startupInfo.cb = sizeof(startupInfo);
+-        PROCESS_INFORMATION processInfo{};
+-        if (!CreateProcessW(
+-                nullptr, commandLine.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW | IDLE_PRIORITY_CLASS, nullptr,
+-                nullptr, &startupInfo, &processInfo))
+-        {
+-            return false;
+-        }
+-        WaitForSingleObject(processInfo.hProcess, INFINITE);
+-        CloseHandle(processInfo.hThread);
+-        CloseHandle(processInfo.hProcess);
+-        return true;
+-#else
+-        std::vector<char*> argv;
+-        for (const auto& arg : args)
+-            argv.push_back(const_cast<char*>(arg.c_str()));
+-        argv.push_back(nullptr);
+-
+-        pid_t pid = fork();
+-        if (pid == 0)
+-        {
+-            int devNull = open("/dev/null", O_RDWR);
+-            if (devNull >= 0)
+-            {
+-                dup2(devNull, STDIN_FILENO);
+-                dup2(devNull, STDOUT_FILENO);
+-                dup2(devNull, STDERR_FILENO);
+-            }
+-            if (nice(19) == -1)
+-            {
+-                // Normal priority then
+-            }
+-            execv(argv[0], argv.data());
+-            _exit(127);
+-        }
+-        if (pid < 0)
+-            return false;
+-        int status = 0;
+-        while (waitpid(pid, &status, 0) < 0)
+-        {
+-            if (errno != EINTR)
+-                return false;
+-        }
+-        return WIFEXITED(status);
+-#endif
+-    }
+-
+-    // Renders a park's preview into the cache; true when the picture is there afterwards.
+-    static bool RenderPreview(const u8string& parkPath, const u8string& renderPath)
+-    {
+-        Path::CreateDirectory(PreviewRenderFolder());
+-        const auto partPath = renderPath + u8".part.png";
+-        // Subcommands take no data path options, so the render uses the default user folder's settings
+-        RunHidden({ Platform::GetCurrentExecutablePath(), "screenshot", parkPath, partPath, "preview",
+-                    std::to_string(kRenderWidth), std::to_string(kRenderHeight) });
+-        if (File::Exists(partPath) && File::Move(partPath, renderPath))
+-            return true;
+-
+-        File::Delete(partPath);
+-        File::WriteAllBytes(Path::WithExtension(renderPath, u8".none"), nullptr, 0);
+-        return false;
+-    }
+-
+-    static bool PreviewRenderFailed(const u8string& renderPath)
+-    {
+-        return File::Exists(Path::WithExtension(renderPath, u8".none"));
+-    }
++    // Preview renders and gallery folders: Gallery.h
++    using Gallery::AddedFolders;
++    using Gallery::IsGalleryFolder;
++    using Gallery::NormalisedFolder;
++    using Gallery::OwnFolder;
++    using Gallery::PreviewRenderFailed;
++    using Gallery::PreviewRenderPath;
++    using Gallery::RenderPreview;
++    using Gallery::SetAddedFolders;
+ 
+     // A preview render as palette pixels, if there is one that fits a preview image.
+     static std::optional<PreviewImage> ReadPreviewRender(const u8string& renderPath)
+@@ -688,9 +496,9 @@ namespace OpenRCT2::Ui::Windows
+         void PopulateGallery()
+         {
+             _listItems.clear();
+-            Path::CreateDirectory(GalleryFolder());
+-            std::vector<u8string> folders{ GalleryFolder() };
+-            for (auto& folder : AddedGalleryFolders())
++            Path::CreateDirectory(OwnFolder());
++            std::vector<u8string> folders{ OwnFolder() };
++            for (auto& folder : AddedFolders())
+                 folders.push_back(std::move(folder));
+ 
+             std::unordered_set<u8string> seen;
+@@ -1434,9 +1242,9 @@ namespace OpenRCT2::Ui::Windows
+                 buffer.assign("{BLACK}");
+                 if (_gallery)
+                 {
+-                    const auto added = AddedGalleryFolders().size();
++                    const auto added = AddedFolders().size();
+                     auto more = added == 0 ? u8string{} : " + " + std::to_string(added) + (added == 1 ? " folder" : " folders");
+-                    buffer += shortenPath(GalleryFolder(), pathWidth - getStringWidth(more, FontStyle::medium), FontStyle::medium);
++                    buffer += shortenPath(OwnFolder(), pathWidth - getStringWidth(more, FontStyle::medium), FontStyle::medium);
+                     buffer += more;
+                 }
+                 else
+@@ -1633,7 +1441,7 @@ namespace OpenRCT2::Ui::Windows
+                 if (_gallery)
+                 {
+                     gDropdown.items[numItems++] = Dropdown::MenuLabel("Add folder to gallery...");
+-                    for (const auto& folder : AddedGalleryFolders())
++                    for (const auto& folder : AddedFolders())
+                     {
+                         if (_dropdownFolders.size() >= 16)
+                             break;
+@@ -1718,9 +1526,9 @@ namespace OpenRCT2::Ui::Windows
+                 }
+                 if (!folder.empty() && !IsGalleryFolder(folder))
+                 {
+-                    auto folders = AddedGalleryFolders();
++                    auto folders = AddedFolders();
+                     folders.push_back(NormalisedFolder(folder));
+-                    SetAddedGalleryFolders(folders);
++                    SetAddedFolders(folders);
+                 }
+                 if (_gallery)
+                     Refresh();
+@@ -1728,13 +1536,13 @@ namespace OpenRCT2::Ui::Windows
+             }
+             else if (selectedIndex >= 12 && selectedIndex - 12 < static_cast<int32_t>(_dropdownFolders.size()))
+             {
+-                auto folders = AddedGalleryFolders();
++                auto folders = AddedFolders();
+                 const auto removed = _dropdownFolders[selectedIndex - 12];
+                 folders.erase(
+                     std::remove_if(
+                         folders.begin(), folders.end(), [&removed](const u8string& f) { return Path::Equals(f, removed); }),
+                     folders.end());
+-                SetAddedGalleryFolders(folders);
++                SetAddedFolders(folders);
+                 Refresh();
+             }
+             else if (selectedIndex == 8 || selectedIndex == 9)
+diff --git a/src/openrct2/ParkImporter.h b/src/openrct2/ParkImporter.h
+index 271bd631..ee9df863 100644
+--- a/src/openrct2/ParkImporter.h
++++ b/src/openrct2/ParkImporter.h
+@@ -11,6 +11,7 @@
+ 
+ #include "core/StringTypes.h"
+ #include "object/ObjectList.h"
++#include "world/Location.hpp"
+ 
+ #include <memory>
+ #include <vector>
+@@ -64,6 +65,12 @@ public:
+     }
+     virtual bool PopulateIndexEntry(ScenarioIndexEntry* dst) = 0;
+     virtual OpenRCT2::ParkPreview GetParkPreview() = 0;
++    // The map size in tiles (edges included), for importers that can read it without importing the park;
++    // zero otherwise
++    virtual TileCoordsXY GetMapSize()
++    {
++        return {};
++    }
+ };
+ 
+ namespace OpenRCT2::ParkImporter
+diff --git a/src/openrct2/park/ParkFile.cpp b/src/openrct2/park/ParkFile.cpp
+index 7f7c3bef..180beabc 100644
+--- a/src/openrct2/park/ParkFile.cpp
++++ b/src/openrct2/park/ParkFile.cpp
+@@ -312,6 +312,16 @@ namespace OpenRCT2
+             return preview;
+         }
+ 
++        TileCoordsXY ReadMapSize()
++        {
++            TileCoordsXY size{};
++            _os->readWriteChunk(ParkFileChunkType::titles, [&size](OrcaStream::ChunkStream& cs) {
++                cs.readWrite(size.x);
++                cs.readWrite(size.y);
++            });
++            return size;
++        }
++
+     private:
+         static uint8_t GetMinCarsPerTrain(uint8_t value)
+         {
+@@ -3025,6 +3035,11 @@ public:
+     {
+         return _parkFile->ReadPreviewChunk();
+     }
++
++    TileCoordsXY GetMapSize() override
++    {
++        return _parkFile->ReadMapSize();
++    }
+ };
+ 
+ std::unique_ptr<IParkImporter> ParkImporter::CreateParkFile(IObjectRepository& objectRepository)
+diff --git a/src/openrct2/scenes/title/TitleScene.cpp b/src/openrct2/scenes/title/TitleScene.cpp
+index 78273d36..a0a99d50 100644
+--- a/src/openrct2/scenes/title/TitleScene.cpp
++++ b/src/openrct2/scenes/title/TitleScene.cpp
+@@ -39,6 +39,7 @@ bool gPreviewingTitleSequenceInGame;
+ bool gTitleRunsWeather;
+ TitleTimeOfDay gTitleTimeOfDay = TitleTimeOfDay::day;
+ bool gTitleNeutralDaylight;
++bool gTitlePaused;
+ 
+ ITitleSequencePlayer* TitleScene::GetSequencePlayer()
+ {
+@@ -143,7 +144,7 @@ void TitleScene::Tick()
+     ScreenshotCheck();
+     TitleHandleKeyboardInput();
+ 
+-    if (!gOpenRCT2Headless && GameIsNotPaused())
++    if (!gOpenRCT2Headless && GameIsNotPaused() && !gTitlePaused)
+     {
+         TryLoadSequence();
+         _sequencePlayer->Update();
+diff --git a/src/openrct2/scenes/title/TitleScene.h b/src/openrct2/scenes/title/TitleScene.h
+index fa6547c3..30264a02 100644
+--- a/src/openrct2/scenes/title/TitleScene.h
++++ b/src/openrct2/scenes/title/TitleScene.h
+@@ -60,6 +60,9 @@ extern bool gTitleRunsWeather;
+ extern TitleTimeOfDay gTitleTimeOfDay;
+ // The mode's light effects leave daylight as it is: no brightening in hot weather (LightFX).
+ extern bool gTitleNeutralDaylight;
++// While set, the title screen holds still: no park updates and no title sequence steps (the screensaver
++// mode's editor sets it while it renders park previews). Input, drawing and plugins keep running.
++extern bool gTitlePaused;
+ 
+ void TitleCreateWindows();
+ void* TitleGetSequencePlayer();

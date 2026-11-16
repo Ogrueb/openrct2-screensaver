@@ -65,9 +65,37 @@ implementation options").
    scripting API needs it; the list reads files as the Load window always has. Owner's test (2026-11-16):
    every item passes, the larger icon included; a folder of zip downloads lists nothing (the Load window
    reads only `.park` and `.sv6`).
-4. **The editor's Parks panel** (after the standalone live-editor work): a read-only `gallery` scripting
-   API (entries with path, name, map size, date, picture) and path arguments for Add park and New playlist,
-   so the editor draws the gallery as tiles and adds ticked parks without the system dialog.
+4. **The editor's gallery pane** (design approved by the owner 2026-11-16, mockups in the project files'
+   `editor-ui/gallery/`). Engine side, patch 0024 (2026-11-16): a shared module `interface/Gallery` takes the
+   Load window's folder and render helpers and keeps an index of every park in the gallery folders (name, map
+   size and date read in the background, a batch of 8 at a time, kept in the cache folder's `gallery-index.json`
+   so only new and changed files are read again; folders listed again every 10 s while the index is asked for).
+   It lists `.park`, `.sv6`, `.sc6`, `.sv4`, `.sc4` and `.zip` (downloads, which get no picture); only `.park`
+   files have their name, map size and date read. The plugin API:
+   - `screensaver.gallery.version`: bumps when folders, entries or a picture change (cheap; asking keeps the
+     background work going).
+   - `screensaver.gallery.folders`: `[{ path, name, count, own }]`, the user directory's `gallery` folder first.
+   - `screensaver.gallery.entries`: `[{ path, folder, name, file, kind, mapSize: {x, y}, date: {year, month, day},
+     modified (s since 1970), size, read, picture, pictureState }]`, `pictureState` "ready" (then `picture` is the
+     PNG's absolute path), "pending" or "none".
+   - `addFolder()` (the system's folder dialog; false when closed or already there), `removeFolder(path)`,
+     `requestPictures(paths)` (renders those parks one at a time; each call replaces the waiting ones),
+     `refresh()`.
+   - `screensaver.addPark(sequence, paths)` and `screensaver.newPlaylist({ paths })` (the latter names the
+     playlist in a Save dialog) take parks from `entries` with no Open dialog; only parks in the index are
+     accepted, as a plugin names only what the user put in a gallery folder. The generator gets them in
+     `<user>/screensaver/live/task-parks.txt` (one path per line): `--live-add <sequence> --park-list <file>`,
+     `--live-new-parks <file> --to <playlist.toml>`.
+   - `screensaver.gallery.scanDetails()` runs the generator's park details scan (builders, scripts, event views)
+     on every park in the index: `mksequence.py --gallery-details <user>/screensaver/live/gallery-parks.txt
+     --user-dir <dir>` as its own hidden process at idle priority, outside the build task slot (builds, Add park
+     and the rest stay available), one at a time (false while one runs), ended when the game exits (a job object
+     on Windows, the parent-death signal on Linux, an exit handler elsewhere); output in
+     `screensaver/gallery-details.log`. `gallery.detailsStatus`: `{ state, exitCode, started, finished, error }`.
+     The generator writes `live/gallery-details.json`, which the plugin reads.
+   - `screensaver.paused`: the title screen holds still (no park updates or title sequence steps; input,
+     drawing, plugin intervals and background work go on); mode only, cleared when the mode exits.
+   - Overlay images whose file is not there yet are looked for again on the next draw.
 
 ## The screensaver editor's pane (2026-11-16)
 
