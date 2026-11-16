@@ -576,8 +576,9 @@ the pane is open the park behind it is paused (`screensaver.paused`), which leav
 renders, and the mode's shortcuts are off.
 
 - **Left column:** the gallery's folders with their park counts (a click shows one folder, a second click all;
-  ✕ removes an added folder), Add folder, and the filters: Show All / Not in playlist (adding only), Map size
-  Any / S / M / L (under 100, under 200, larger: the longer side in tiles), Has Scripts and Event views, Sort by
+  ✕ removes an added folder), Add folder, and the filters: Show All / Not in playlist (adding only), Park size
+  Any / S / M / L (under 64, under 128, larger: the longer side of the built area in tiles, the content box the
+  preview renders are framed on, not the raw map; owner, 2026-11-16; the map until the park is read, and for RCT saves), Has Scripts and Event views, Sort by
   Name, Date or Size, and the Tiles per row slider (1-7, default 4, plugin setting `galleryColumns`). "Browse for a file…"
   ("From a folder…" for a new playlist) opens the old system dialog for parks outside the gallery.
 - **Grid:** one tile per park with the engine's preview render (requested for the tiles in view; a placeholder
@@ -587,12 +588,15 @@ renders, and the mode's shortcuts are off.
   views), then the picks in order (drag to reorder, ✕ to drop; for a new playlist at most six rows, then a scrollbar, so the
   generation options stay in view), for a new playlist the generation options of the New playlist pane, and
   the action: "Add N parks and build" (`screensaver.addPark(sequence, paths)`) or "Create playlist with N
-  parks…" (`screensaver.newPlaylist({paths})`, the Save dialog naming it), then built and played as before.
+  parks…" (`screensaver.newPlaylist({paths})`, the Save dialog naming it), then built and played at once: the
+  picks are already chosen and ordered, so there is no draft step (owner's test, 2026-11-16).
 
-Builders, scripts and event views are not in the engine's index. The pane starts `gallery.scanDetails()`, the
+Builders, the built area, scripts and event views are not in the engine's index. The pane starts `gallery.scanDetails()`, the
 generator's `--gallery-details` pass (`gallery_details`: one idle process, incremental by file size and date),
 and reads its `live/gallery-details.json` every 2 s; until a park is read, the tile shows no byline and the
-Has filters leave it out. Generator side: `--live-add <sequence> --park-list <file>` adds several parks (one
+Has filters leave it out. While names are still arriving the tiles keep their places and are sorted once at the
+end (owner's test: the order jumped). Scripts are the companion scripts a download ships, so a folder of loose
+`.park` files has none. Generator side: `--live-add <sequence> --park-list <file>` adds several parks (one
 that fails is reported and the rest are added), `--live-new-parks <file> --to <playlist.toml>` makes a playlist
 of the listed parks in their order.
 

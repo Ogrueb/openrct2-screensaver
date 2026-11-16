@@ -56,6 +56,7 @@ export interface ParkDetails {
     scripts?: string[];
     events?: number;
     released?: string; // YYYY-MM-DD (the NE catalog)
+    built?: [number, number]; // the built area in tiles: the content box the preview render is framed on
     error?: string;
 }
 
@@ -101,10 +102,18 @@ interface Hit {
     off: boolean;
 }
 
-/** S under 100 tiles on the longer side, M under 200, L from there (the settings page's classes). */
-export function sizeClass(entry: GalleryEntry): SizeClass {
-    const side = Math.max(entry.mapSize?.x ?? 0, entry.mapSize?.y ?? 0);
-    return side <= 0 ? "any" : side < 100 ? "s" : side < 200 ? "m" : "l";
+/** A park's size in tiles: its built area (the generator's content box, which the preview renders are framed
+ *  on; owner, 2026-11-16: not the raw map, which is often far larger than what is built), the map until the
+ *  generator has read the park and for RCT saves. */
+export function builtSize(entry: GalleryEntry, details?: ParkDetails): { x: number; y: number } {
+    return details?.built ? { x: details.built[0], y: details.built[1] } : { x: entry.mapSize?.x ?? 0, y: entry.mapSize?.y ?? 0 };
+}
+
+/** S under 64 built tiles on the longer side, M under 128, L from there. */
+export function sizeClass(entry: GalleryEntry, details?: ParkDetails): SizeClass {
+    const size = builtSize(entry, details);
+    const side = Math.max(size.x, size.y);
+    return side <= 0 ? "any" : side < 64 ? "s" : side < 128 ? "m" : "l";
 }
 
 export interface GalleryFilter {
@@ -121,14 +130,14 @@ export function filterEntries(entries: GalleryEntry[], f: GalleryFilter, details
     used: (e: GalleryEntry) => boolean, nameOf: (e: GalleryEntry) => string): GalleryEntry[] {
     const shown = entries.filter(e => (!f.folder || e.folder === f.folder)
         && (!f.hideUsed || !used(e))
-        && (f.size === "any" || sizeClass(e) === f.size)
+        && (f.size === "any" || sizeClass(e, details[e.path]) === f.size)
         && (!f.scripts || (details[e.path]?.scripts?.length ?? 0) > 0)
         && (!f.events || (details[e.path]?.events ?? 0) > 0));
     const when = (e: GalleryEntry) => {
         const released = details[e.path]?.released;
         return released ? Date.parse(released) / 1000 : e.modified;
     };
-    const area = (e: GalleryEntry) => (e.mapSize?.x ?? 0) * (e.mapSize?.y ?? 0);
+    const area = (e: GalleryEntry) => { const size = builtSize(e, details[e.path]); return size.x * size.y; };
     const byName = (a: GalleryEntry, b: GalleryEntry) => nameOf(a).localeCompare(nameOf(b), undefined, { sensitivity: "base" });
     return shown.sort(f.sort === "date" ? (a, b) => when(b) - when(a) || byName(a, b)
         : f.sort === "size" ? (a, b) => area(b) - area(a) || byName(a, b) : byName);
@@ -158,6 +167,8 @@ export class Gallery {
     private generation: Generation | undefined;
     private details: Record<string, ParkDetails> = {};
     private detailsDone = false;
+    private rank = new Map<string, number>(); // the tiles' places while names are still being read
+    private rankKey = "";
     private detailsRead = 0;
     private scanned = -1; // the entry count the details scan was started for
     private shownEntries: GalleryEntry[] = [];
@@ -264,6 +275,7 @@ export class Gallery {
                 }
             } catch {
                 this.scanned = count; // (no generator: the pane shows what the engine knows)
+                this.detailsDone = true;
             }
         }
         if (Date.now() - this.detailsRead < DETAILS_MS || (this.detailsDone && this.scanned === count && this.detailsRead > 0)) {
@@ -276,7 +288,7 @@ export class Gallery {
         }
         try {
             const file = JSON.parse(text) as { detailsVersion?: number; done?: boolean; parks?: Record<string, ParkDetails> };
-            if (file.detailsVersion === 1 && file.parks) {
+            if (file.detailsVersion === 2 && file.parks) {
                 this.dirty = true;
                 this.details = file.parks;
                 this.detailsDone = file.done === true;
@@ -303,7 +315,19 @@ export class Gallery {
         const key = `${api.version}|${JSON.stringify(this.filter)}`;
         if (key !== this.listKey) {
             this.listKey = key;
-            this.shownEntries = filterEntries(api.entries.slice(), this.filter, this.details, e => this.used(e), e => this.nameOf(e));
+            const shown = filterEntries(api.entries.slice(), this.filter, this.details, e => this.used(e), e => this.nameOf(e));
+            // Names arrive as the engine and the generator read the parks: the tiles keep their places while
+            // they do and are sorted once when everything is read (owner's test, 2026-11-16: the order jumped)
+            const settled = this.detailsDone && api.entries.every(e => e.read !== false);
+            const rankKey = `${JSON.stringify(this.filter)}|${settled}|${api.entries.length}`;
+            if (rankKey !== this.rankKey || !this.rank.size) {
+                this.rankKey = rankKey;
+                this.rank = new Map(shown.map((e, i) => [e.path, i]));
+            } else {
+                const rank = (e: GalleryEntry) => this.rank.get(e.path) ?? Number.MAX_SAFE_INTEGER;
+                shown.sort((x, y) => rank(x) - rank(y));
+            }
+            this.shownEntries = shown;
             // Picks whose file left the gallery go
             const known = new Set(api.entries.map(e => e.path));
             this.picks = this.picks.filter(p => known.has(p));
@@ -603,8 +627,8 @@ export class Gallery {
                 ["Every park of the gallery", "Leave out the parks the playlist already plays"]);
         }
         const sizes: SizeClass[] = ["any", "s", "m", "l"];
-        group("Map size", sizes.map((_, i) => `size.${i}`), ["Any", "S", "M", "L"], sizes.map(s => this.filter.size === s),
-            ["Every map size", "Maps under 100 tiles on the longer side", "Maps of 100 to 199 tiles", "Maps of 200 tiles and more"]);
+        group("Park size", sizes.map((_, i) => `size.${i}`), ["Any", "S", "M", "L"], sizes.map(s => this.filter.size === s),
+            ["Every size", "Built area under 64 tiles on its longer side", "Built area of 64 to 127 tiles", "Built area of 128 tiles and more"]);
         const noDetails = !this.hasDetails;
         const waitTip = typeof api.scanDetails === "function" ? "The parks are still being read" : "Needs the generator's park details, which this game build does not read";
         group("Has", ["has.scripts", "has.events"], ["Scripts", narrow ? "Events" : "Event views"], [this.filter.scripts, this.filter.events],
@@ -849,7 +873,7 @@ export class Gallery {
             }
             if (twoLines && ny + 34 <= lower) {
                 const by = [d?.builders?.length ? d.builders.slice(0, 2).join(", ") + (d.builders.length > 2 ? ` +${d.builders.length - 2}` : "") : "",
-                    d?.released ? d.released.slice(0, 4) : "", e.mapSize && e.mapSize.x > 0 ? `${e.mapSize.x}×${e.mapSize.y}` : e.kind !== "park" ? e.kind.toUpperCase() : ""]
+                    d?.released ? d.released.slice(0, 4) : "", d?.built ? `${d.built[0]}×${d.built[1]}` : e.mapSize && e.mapSize.x > 0 ? `${e.mapSize.x}×${e.mapSize.y}` : e.kind !== "park" ? e.kind.toUpperCase() : ""]
                     .filter(Boolean).join(" · ");
                 text(`${id}.by`, this.fit(by, 12, m.tile - 14), tx + 7, ny + 17, 12, { colour: THEME.textDim, shadow: undefined, ...dim });
             }
@@ -887,6 +911,7 @@ export class Gallery {
         const rows: [string, string][] = [
             ["Builders", d?.builders?.length ? d.builders.join(", ") : d ? "unknown" : "…"],
             ["Released", d?.released ? d.released.slice(0, 4) : d ? "unknown" : "…"],
+            ["Built area", d?.built ? `${d.built[0]}×${d.built[1]} tiles` : d ? "unknown" : "…"],
             ["Map", e.mapSize && e.mapSize.x > 0 ? `${e.mapSize.x}×${e.mapSize.y}` : e.kind === "park" ? "…" : `${e.kind.toUpperCase()} (read once added)`],
             ["Scripts", d ? (d.scripts?.length ? d.scripts.join(", ") : "none") : "…"],
             ["Event views", d ? (d.events ? `${d.events}` : "none") : "…"],
@@ -927,7 +952,9 @@ export class Gallery {
             } else if (k % 2 === 0 || hover === id) {
                 rect(`${id}.bg`, r, hover === id ? THEME.face : "#2c5a3a40");
             }
-            text(`${id}.grip`, "⋮⋮", r.x + 6, r.y + 9, 12, { colour: "#ffffff70", shadow: undefined });
+            for (let dot = 0; dot < 6; dot++) { // the grip, drawn (the game's font has no such glyph)
+                rect(`${id}.grip.${dot}`, { x: r.x + 8 + (dot % 2) * 4, y: r.y + Math.round(PICK_ROW / 2) - 5 + Math.floor(dot / 2) * 4, width: 2, height: 2 }, THEME.textDim, Z.icon);
+            }
             text(`${id}.n`, `${k + 1}`, r.x + 28, r.y + 9, 13, { colour: THEME.textDim, shadow: undefined });
             if (e?.pictureState === "ready" && e.picture) {
                 scene.set(`${id}.pic`, { type: "image", src: e.picture, x: r.x + 52, y: r.y + 1, width: 40, height: 32, z: Z.bevel });

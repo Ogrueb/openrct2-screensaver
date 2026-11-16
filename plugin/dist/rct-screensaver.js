@@ -6232,17 +6232,24 @@
   var PICK_ROW = 34;
   var NEW_PICK_ROWS = 6;
   var ORANGE = THEME.dragLine;
-  function sizeClass(entry) {
-    const side = Math.max(entry.mapSize?.x ?? 0, entry.mapSize?.y ?? 0);
-    return side <= 0 ? "any" : side < 100 ? "s" : side < 200 ? "m" : "l";
+  function builtSize(entry, details) {
+    return details?.built ? { x: details.built[0], y: details.built[1] } : { x: entry.mapSize?.x ?? 0, y: entry.mapSize?.y ?? 0 };
+  }
+  function sizeClass(entry, details) {
+    const size = builtSize(entry, details);
+    const side = Math.max(size.x, size.y);
+    return side <= 0 ? "any" : side < 64 ? "s" : side < 128 ? "m" : "l";
   }
   function filterEntries(entries, f, details, used, nameOf) {
-    const shown = entries.filter((e) => (!f.folder || e.folder === f.folder) && (!f.hideUsed || !used(e)) && (f.size === "any" || sizeClass(e) === f.size) && (!f.scripts || (details[e.path]?.scripts?.length ?? 0) > 0) && (!f.events || (details[e.path]?.events ?? 0) > 0));
+    const shown = entries.filter((e) => (!f.folder || e.folder === f.folder) && (!f.hideUsed || !used(e)) && (f.size === "any" || sizeClass(e, details[e.path]) === f.size) && (!f.scripts || (details[e.path]?.scripts?.length ?? 0) > 0) && (!f.events || (details[e.path]?.events ?? 0) > 0));
     const when = (e) => {
       const released = details[e.path]?.released;
       return released ? Date.parse(released) / 1e3 : e.modified;
     };
-    const area = (e) => (e.mapSize?.x ?? 0) * (e.mapSize?.y ?? 0);
+    const area = (e) => {
+      const size = builtSize(e, details[e.path]);
+      return size.x * size.y;
+    };
     const byName = (a, b) => nameOf(a).localeCompare(nameOf(b), void 0, { sensitivity: "base" });
     return shown.sort(f.sort === "date" ? (a, b) => when(b) - when(a) || byName(a, b) : f.sort === "size" ? (a, b) => area(b) - area(a) || byName(a, b) : byName);
   }
@@ -6266,6 +6273,9 @@
       this.pickScroll = 0;
       this.details = {};
       this.detailsDone = false;
+      this.rank = /* @__PURE__ */ new Map();
+      // the tiles' places while names are still being read
+      this.rankKey = "";
       this.detailsRead = 0;
       this.scanned = -1;
       // the entry count the details scan was started for
@@ -6364,6 +6374,7 @@
           }
         } catch {
           this.scanned = count;
+          this.detailsDone = true;
         }
       }
       if (Date.now() - this.detailsRead < DETAILS_MS || this.detailsDone && this.scanned === count && this.detailsRead > 0) {
@@ -6376,7 +6387,7 @@
       }
       try {
         const file = JSON.parse(text);
-        if (file.detailsVersion === 1 && file.parks) {
+        if (file.detailsVersion === 2 && file.parks) {
           this.dirty = true;
           this.details = file.parks;
           this.detailsDone = file.done === true;
@@ -6398,7 +6409,17 @@
       const key = `${api.version}|${JSON.stringify(this.filter)}`;
       if (key !== this.listKey) {
         this.listKey = key;
-        this.shownEntries = filterEntries(api.entries.slice(), this.filter, this.details, (e) => this.used(e), (e) => this.nameOf(e));
+        const shown = filterEntries(api.entries.slice(), this.filter, this.details, (e) => this.used(e), (e) => this.nameOf(e));
+        const settled = this.detailsDone && api.entries.every((e) => e.read !== false);
+        const rankKey = `${JSON.stringify(this.filter)}|${settled}|${api.entries.length}`;
+        if (rankKey !== this.rankKey || !this.rank.size) {
+          this.rankKey = rankKey;
+          this.rank = new Map(shown.map((e, i) => [e.path, i]));
+        } else {
+          const rank = (e) => this.rank.get(e.path) ?? Number.MAX_SAFE_INTEGER;
+          shown.sort((x, y) => rank(x) - rank(y));
+        }
+        this.shownEntries = shown;
         const known = new Set(api.entries.map((e) => e.path));
         this.picks = this.picks.filter((p) => known.has(p));
       }
@@ -6685,11 +6706,11 @@
       }
       const sizes = ["any", "s", "m", "l"];
       group(
-        "Map size",
+        "Park size",
         sizes.map((_, i) => `size.${i}`),
         ["Any", "S", "M", "L"],
         sizes.map((s) => this.filter.size === s),
-        ["Every map size", "Maps under 100 tiles on the longer side", "Maps of 100 to 199 tiles", "Maps of 200 tiles and more"]
+        ["Every size", "Built area under 64 tiles on its longer side", "Built area of 64 to 127 tiles", "Built area of 128 tiles and more"]
       );
       const noDetails = !this.hasDetails;
       const waitTip = typeof api.scanDetails === "function" ? "The parks are still being read" : "Needs the generator's park details, which this game build does not read";
@@ -6981,7 +7002,7 @@
           const by = [
             d?.builders?.length ? d.builders.slice(0, 2).join(", ") + (d.builders.length > 2 ? ` +${d.builders.length - 2}` : "") : "",
             d?.released ? d.released.slice(0, 4) : "",
-            e.mapSize && e.mapSize.x > 0 ? `${e.mapSize.x}\xD7${e.mapSize.y}` : e.kind !== "park" ? e.kind.toUpperCase() : ""
+            d?.built ? `${d.built[0]}\xD7${d.built[1]}` : e.mapSize && e.mapSize.x > 0 ? `${e.mapSize.x}\xD7${e.mapSize.y}` : e.kind !== "park" ? e.kind.toUpperCase() : ""
           ].filter(Boolean).join(" \xB7 ");
           text(`${id}.by`, this.fit(by, 12, m.tile - 14), tx + 7, ny + 17, 12, { colour: THEME.textDim, shadow: void 0, ...dim });
         }
@@ -7013,6 +7034,7 @@
       const rows = [
         ["Builders", d?.builders?.length ? d.builders.join(", ") : d ? "unknown" : "\u2026"],
         ["Released", d?.released ? d.released.slice(0, 4) : d ? "unknown" : "\u2026"],
+        ["Built area", d?.built ? `${d.built[0]}\xD7${d.built[1]} tiles` : d ? "unknown" : "\u2026"],
         ["Map", e.mapSize && e.mapSize.x > 0 ? `${e.mapSize.x}\xD7${e.mapSize.y}` : e.kind === "park" ? "\u2026" : `${e.kind.toUpperCase()} (read once added)`],
         ["Scripts", d ? d.scripts?.length ? d.scripts.join(", ") : "none" : "\u2026"],
         ["Event views", d ? d.events ? `${d.events}` : "none" : "\u2026"],
@@ -7048,7 +7070,9 @@
         } else if (k % 2 === 0 || hover === id) {
           rect(`${id}.bg`, r, hover === id ? THEME.face : "#2c5a3a40");
         }
-        text(`${id}.grip`, "\u22EE\u22EE", r.x + 6, r.y + 9, 12, { colour: "#ffffff70", shadow: void 0 });
+        for (let dot = 0; dot < 6; dot++) {
+          rect(`${id}.grip.${dot}`, { x: r.x + 8 + dot % 2 * 4, y: r.y + Math.round(PICK_ROW / 2) - 5 + Math.floor(dot / 2) * 4, width: 2, height: 2 }, THEME.textDim, Z.icon);
+        }
         text(`${id}.n`, `${k + 1}`, r.x + 28, r.y + 9, 13, { colour: THEME.textDim, shadow: void 0 });
         if (e?.pictureState === "ready" && e.picture) {
           scene.set(`${id}.pic`, { type: "image", src: e.picture, x: r.x + 52, y: r.y + 1, width: 40, height: 32, z: Z.bevel });
@@ -7538,6 +7562,8 @@
       this.setOpen = true;
       // the Settings foldout (top right) unfolded
       this.setGroup = "playlist";
+      // the New playlist pane (top centre) open, with its generation choices
+      this.galleryNew = false;
       // the choices of the New playlist the dialog is making
       this.clipShown = false;
       // a Copy/Paste note is on its button (it goes after a moment)
@@ -8303,11 +8329,22 @@
           this.parks.first = Math.max(0, row - Math.max(1, this.parkRows()) + 1);
         }
       }
+      if (this.galleryNew && !builder.running && (builder.made?.at ?? 0) === this.seenMade) {
+        this.galleryNew = false;
+      }
       const made = builder.made;
       if (made && made.at !== this.seenMade) {
         this.seenMade = made.at;
         this.dropdown = { persistent: true, downAt: this.now() };
-        if (made.task === "new" && made.parks?.length) {
+        if (made.task === "new" && this.galleryNew) {
+          this.galleryNew = false;
+          this.playlists = void 0;
+          if (this.madeGen) {
+            saveOtherPlaylistProps(made.sequence, made.playlist, { generation: this.madeGen });
+            this.madeGen = void 0;
+          }
+          this.openMade = made.sequence;
+        } else if (made.task === "new" && made.parks?.length) {
           this.playlists = void 0;
           const props = this.madeGen ? { generation: this.madeGen } : {};
           this.madeGen = void 0;
@@ -8321,6 +8358,11 @@
           const at = this.playlists.findIndex((pl) => pl.name === made.sequence);
           this.parks.first = Math.max(0, at - 3);
         }
+      }
+      if (this.openMade && !builder.running) {
+        const sequence = this.openMade;
+        this.openMade = void 0;
+        builder.openPlaylist(sequence);
       }
       const plOpen = this.dropdown !== void 0 && this.playlists !== void 0;
       scene.set("plfield", { type: "rect", ...plField, fill: plOpen ? THEME.faceDown : this.hit() === "plfield" ? THEME.faceHover : THEME.editorList, z: Z.face });
@@ -8583,6 +8625,7 @@
           const started = builder.newPlaylistOf(paths);
           if (started) {
             this.madeGen = generation;
+            this.galleryNew = true;
           }
           return started;
         },
