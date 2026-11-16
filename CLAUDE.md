@@ -7,7 +7,7 @@ See README.md for usage.
 ## Decisions
 - **Build on top of OpenRCT2, never fork it.** This repo holds tools, a plugin, and (later)
   a small patch set against OpenRCT2 plus a build script. Target the latest OpenRCT2
-  release (currently v0.5.6), not `develop`.
+  release (currently v0.5.7, since 2026-11-15; the patches moved over from v0.5.6 unchanged), not `develop`.
 - **Title screen, not a separate renderer.** Extend the title scene. Wrapper scope (owner,
   2026-10-31, `docs/wallpaper-wrapper.md`): one borderless window, our minimal UI drawn by an engine
   patch in place of the stock windows, a screensaver mode from a main menu toggle or a launch flag;
@@ -19,7 +19,7 @@ See README.md for usage.
   buttons, sharp corners, partly transparent backings). The controls bar (`plugin/src/ui/`) shows on mouse
   move and hides with the cursor: previous park, previous view, Hold, next view, next park, then a smaller
   row below: speed, shuffle, titles, music (an off/ride-music toggle), time of day (day, night, cycle; icons; titles drive the park name captions, `ui/captions.ts`, top left) (caption styles, owner 2026-11-03: gold, silver, wood portrait frames, Minimal dark and light, Aero (a frost texture, no blur), Canvas in a gallery frame; an Accent color; picked in the settings panel's Title frame flyout), edit views (the
-  view editor on the overlay, `ui/editor-panel.ts`; the stock engine keeps its window; an Events list under the route for timed event views, 2026-11-10; live editing, stage 1 of the live editor (owner 2026-11-09, `docs/enhancements.md` section 2): a drag on the park moves the selected view, the wheel zooms it, a view set from the camera sits at the height of what is at the screen's centre so turns pivot on it (a Fit height button was unclear in the owner's test, 2026-11-10), Ctrl+Z/Ctrl+Y undo; the map on M, `ui/view-map.ts`, 2026-11-10: every view a box or marker with dotted pan lines, drag boxes, corner handle zooms, right-click adds, double-click frames, event views locked; since 2026-11-10 three panes, the owner's design: views with a park dropdown and drag reordering top left, an icon toolbox bottom left, restore points and Playlist properties top right, saved in the game and written to the playlist by `--install`, `docs/screensaver-ui.md` "Editing UI"), settings (a panel with the stock
+  view editor on the overlay, `ui/editor-panel.ts`; the stock engine keeps its window; an Events list under the route for timed event views, 2026-11-10, with the park's event settings since 2026-11-15: a row per animation spot and show with an On switch, hold steppers, the default hold and the show's pan share, baked into its profile at the next build, and carried by Copy/Paste; live editing, stage 1 of the live editor (owner 2026-11-09, `docs/enhancements.md` section 2): a drag on the park moves the selected view, the wheel zooms it, a view set from the camera sits at the height of what is at the screen's centre so turns pivot on it (a Fit height button was unclear in the owner's test, 2026-11-10), Ctrl+Z/Ctrl+Y undo; the map on M, `ui/view-map.ts`, 2026-11-10: every view a box or marker with dotted pan lines, drag boxes, corner handle zooms, right-click adds, double-click frames, event views locked; since 2026-11-10 three panes, the owner's design: views with a park dropdown and drag reordering top left, an icon toolbox bottom left, restore points and Playlist properties top right, saved in the game and written to the playlist by `--install`, `docs/screensaver-ui.md` "Editing UI"), settings (a panel with the stock
   options that apply to the mode: window style, light effects, weather gloom; owner 2026-11-02). Icons are
   PNGs drawn by `tools/mkicons.py` at every output size.
 - **Languages:** Python wherever there is a choice (stdlib only). The plugin must be
@@ -303,7 +303,7 @@ See README.md for usage.
   `TitleSequence.commands = …` saves the script to disk. `play()` loads the sequence
   and executes its first `LOAD` synchronously; `seek()` to a `LOAD` only sets the position,
   and the park loads on the player's next update (the freeze happens there).
-- Plugin API version for v0.5.6 is 124; plugins run on QuickJS-NG (ES2020+ is fine).
+- Plugin API version for v0.5.6 and v0.5.7 is 124; plugins run on QuickJS-NG (ES2020+ is fine).
   `gamesetspeed` accepts 1–4 (up to 8 only with debugging tools); `context.gameSpeed`
   returns that 1-based value despite its doc comment.
 - Shared storage keys are dotted paths into nested JSON objects
@@ -537,7 +537,11 @@ See README.md for usage.
 - `plugin/`: TypeScript plugin (type-check with `tsc`, bundle with esbuild); `npm test`
   runs it against a mock title screen API.
 - `docs/companion-plugins.md`: how parks' bundled plugins load, and how to run them on the title screen.
-- `tools/settings.py` + `tools/settings.html`: the generator's settings page (built 2026-10-31 from the
+- `tools/settings.py` + `tools/settings.html`: the generator's settings page, a legacy tool since 2026-11-16
+  (owner; roadmap "Settings page: a legacy tool": labeled on the page and in the README, no new features, new
+  options go into the game, a smoke test before each release, standalone `.exe` builds dropped, removed once
+  the park library is in the game; it still covers macOS, the stock engine, renders, show camera paths,
+  filters and backups) (built 2026-10-31 from the
   mockup, wiring in `docs/settings-ui-wiring.md`): local server like drawviews.py with a per-run token and
   Host/Origin checks; edits a playlist and park profiles in place (`tools/tomlwrite.py` `patch`: comments
   kept; a change it can't place rewrites the file; never asks before a write (owner, 2026-10-31: the

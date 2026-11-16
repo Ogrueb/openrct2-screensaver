@@ -311,9 +311,9 @@ Revisit with that presentation if any interface stays on screen.
 - OpenRCT2's own Windows CI builds with `scripts/setenv && build` (`msbuild openrct2.proj`,
   which downloads the prebuilt dependency libraries) on `windows-2025-vs2026` and uploads only
   `bin/openrct2.exe` and `bin/openrct2.com`; the data files are unchanged by our patches.
-- Our workflow: check out OpenRCT2 at tag `v0.5.6`, `git apply engine/patches/*.patch`, run the
+- Our workflow: check out OpenRCT2 at tag `v0.5.7`, `git apply engine/patches/*.patch`, run the
   same build, upload the two binaries. Installing a build means replacing those two files in
-  the existing v0.5.6 install. Expect 25 to 40 minutes per CI build; incremental builds in Visual
+  the existing v0.5.7 install. Expect 25 to 40 minutes per CI build; incremental builds in Visual
   Studio on the owner's PC are the faster loop once the first full build is done there.
 
 ## Status (2026-10-27)

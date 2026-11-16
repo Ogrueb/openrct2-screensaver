@@ -1,5 +1,9 @@
 # Generator settings UI: what each control sets
 
+**Legacy tool (owner, 2026-11-16).** The screensaver mode's editor makes and edits playlists in the game
+(`docs/screensaver-ui.md`); the settings page is kept for macOS, the stock engine, renders, show camera
+paths and backups, and gets no new features (`docs/roadmap.md`, "Settings page: a legacy tool").
+
 The settings UI (mockup "Screensaver generator settings", roadmap step 5) writes a TOML playlist
 and runs the tools on it. This page maps every control to the playlist key or tool it drives, and
 records the audit of 2026-10-31: where the mockup and the scripts disagreed and what was done.

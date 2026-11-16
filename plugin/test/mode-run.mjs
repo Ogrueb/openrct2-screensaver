@@ -32,6 +32,25 @@ playlist.parks.forEach((p, i) => {
     p.settings = { ...parkValues, ...(p1 ? { count: 6, scripts: true } : {}), profile: p1 ? "p1" : null, savedName: `Park ${i}`,
         mapSize: [64, 64], adjusted: p1 ? ["count"] : [], locked: p1 ? ["parkCap"] : [] };
 });
+// The first park's animation spots and show, with their settings (mksequence.py event_facts): the three event
+// views' spots, a lift off by default, and a show of its own profile's, not played.
+{
+    const facts = {
+        spots: [
+            { name: "train", companion: "AdvancedTrack", on: true, offByDefault: false, status: "view: train", view: "train", cue: { ride: 3, ticks: 40 } },
+            { name: "ufo", companion: "Animator", on: true, offByDefault: false, status: "view: ufo", view: "ufo", cue: { tick: 2400, lead: 2, every: 4800, ticks: 200, cut: true } },
+            { name: "fountain", companion: "Animator", on: true, offByDefault: false, status: "view: fountain", view: "fountain", hold: 8 },
+            { name: "lift", companion: "AdvancedTrack", on: false, offByDefault: true, status: "off by default" },
+        ],
+        shows: [{ name: "eclipse", hold: 120, own: true, view: { x: 40, y: 40, zoom: 0, rotation: 0 }, path: [{ x: 50, y: 50, ticks: 400 }] }],
+        show: "", animationHold: null, holdDefault: 10, cueHold: 5, locked: [],
+    };
+    Object.assign(playlist.parks[0].settings, {
+        eventFacts: facts, events: true, showPan: 0.5, animationHold: null, show: "",
+        spots: { train: { off: false }, ufo: { off: false }, fountain: { off: false, hold: 8 }, lift: { off: true } },
+        showDefs: { eclipse: { hold: 120, view: { x: 40, y: 40, zoom: 0, rotation: 0 }, path: [{ x: 50, y: 50, ticks: 400 }] } },
+    });
+}
 const store = { RCTScreensaver: { playlist, settings: { fadeMs: 0, titleMusic: "ride", window: "windowed" } } };
 const lookup = key => key.split(".").reduce((o, k) => (o == null ? undefined : o[k]), store);
 const commands = [];
@@ -356,7 +375,9 @@ assert.ok(scene.get("rcts.bar.titles.icon").src.includes("titles-off"), "on -> o
         assert.equal(clip.views.length, own().length, "every view of the park but its event views");
         const events = JSON.stringify(edits().filter(isEvent));
         assert.ok(clip.views.every(v => v.origin === undefined), "without the playlist indexes");
-        assert.equal(ed("copy.text").text, `Copied ${clip.views.length}`, "the button says it worked");
+        assert.equal(ed("copy.text").text, `Copied ${clip.views.length} + events`, "the button says it worked");
+        assert.equal(clip.events.extras.show, "", "with the park's event settings, as the drawing page copies them");
+        assert.equal(JSON.stringify(clip.events.animation.lift), JSON.stringify({ off: true }));
         const copied = JSON.stringify(own().map(v => [v.x, v.y, v.zoom]));
         const total = edits().length;
         edClick("add");
@@ -494,16 +515,17 @@ assert.ok(scene.get("rcts.bar.titles.icon").src.includes("titles-off"), "on -> o
         const route = [...scene.keys()].filter(k => /^rcts\.ed\.row\.\d+$/.test(k)).length;
         assert.equal(route, 6, "the route list: five views and the fixed animation stop");
         assert.equal(ed("cell.5.0").text, "6", "numbered along the route only");
-        assert.equal(ed("text.events").text, "Events  2", "the event list's title counts them");
+        assert.equal(ed("text.events").text, "Events  5", "the event list's title counts them: the event views, the spots and the show");
         assert.ok(ed("events").y > ed("list").y + ed("list").height, "under the route list");
         assert.ok(ed("frame").y + ed("frame").height >= ed("events").y + ed("events").height, "inside the views pane");
+        dump("events-list");
         const cell = (i, c) => ed(`ecell.${i}.${c}`).text;
-        assert.deepEqual([cell(0, 0), cell(0, 1), cell(0, 2)], ["E1", "train", "train"], "the car cue first: it plays after the route");
-        assert.match(cell(0, 3), /ride 3/, "its trigger");
-        assert.equal(cell(0, 5), "after view 6");
-        assert.deepEqual([cell(1, 0), cell(1, 1), cell(1, 2)], ["E2", "clock", "ufo"], "then the cut-in on the park's clock");
-        assert.equal(cell(1, 3), "at 1:00, every 2:00");
-        assert.match(cell(1, 5), /^(in \d+:\d\d|now)$/, "with when it plays next");
+        assert.deepEqual([cell(0, 0), cell(0, 1)], ["E1", "train"], "the car cue first: it plays after the route");
+        assert.match(cell(0, 2), /ride 3/, "its trigger");
+        assert.equal(cell(0, 4), "after view 6");
+        assert.deepEqual([cell(1, 0), cell(1, 1)], ["E2", "ufo"], "then the cut-in on the park's clock");
+        assert.equal(cell(1, 2), "at 1:00, every 2:00");
+        assert.match(cell(1, 4), /^(in \d+:\d\d|now)$/, "with when it plays next");
         assert.ok(![...scene.keys()].some(k => k.startsWith("rcts.ed.egrip")), "no drag handles: their order is their timing");
         const ev = [...scene.keys()].find(k => /^rcts\.ed\.event\.\d+$/.test(k) && Math.abs(scene.get(k).y - ed("ecell.1.0").y) < 24);
         const index = Number(ev.split(".").pop());
@@ -516,6 +538,79 @@ assert.ok(scene.get("rcts.bar.titles.icon").src.includes("titles-off"), "on -> o
         assert.equal(JSON.stringify(saved["RCTScreensaver.edits"]), before, "dragging an event row changes nothing");
         assert.equal(cell(1, 0), "E2");
         assert.ok(index >= 0);
+        edClick("row.0");
+    }
+    // The park's event settings in the Events list (owner, 2026-11-15; the drawing page's Events panel): every
+    // animation spot and show with its switch, hold and pan; saved at once for the next build's bake.
+    {
+        const cell = (i, c) => ed(`ecell.${i}.${c}`)?.text;
+        const parkKey = playlist.parks[0].key ?? playlist.parks[0].fileName;
+        const set = () => saved["RCTScreensaver.playlistProps"]?.[playlist.sequence]?.parks?.[parkKey]?.set;
+        assert.ok(ed("evon.0"), "the first event view's spot has its switch");
+        assert.deepEqual([cell(2, 0), cell(2, 1), cell(2, 4)], ["6", "fountain", "on the route"], "a continuous spot: its stop on the route");
+        assert.deepEqual([cell(3, 0), cell(3, 1), cell(3, 4)], ["", "lift", "off"], "a spot off by default: no view");
+        assert.deepEqual([cell(4, 1), cell(4, 2), cell(4, 3), cell(4, 4)], ["eclipse", "show, pans 50%", "120 s", "off"], "the show, not played");
+        assert.equal(cell(3, 3), "10 s", "a spot without its own hold shows the default");
+        // Switch the lift on: saved at once, amber until a build.
+        edClick("evon.3");
+        assert.equal(JSON.stringify(set().spots), JSON.stringify({ lift: { off: false } }), "the lift on (its profile turns it on)");
+        assert.equal(cell(3, 4), "next build");
+        assert.equal(ed("ecell.3.4").colour, "#ffb000", "amber: not built yet");
+        assert.ok(ed("evon.3.mark"), "the switch marked as changed");
+        edClick("evon.3");
+        assert.equal(set(), undefined, "back off: no change left");
+        // The default hold, right of the title.
+        edClick("evdef.more");
+        assert.equal(set().animationHold, 11);
+        assert.equal(cell(3, 3), "11 s", "spots without their own follow it");
+        edClick("evdef.less");
+        assert.equal(set(), undefined, "back at the build's: no change");
+        // A spot's own hold: the selected row's stepper.
+        edClick("evrow.3");
+        assert.ok(ed("evhold.more.3"), "a stepper on the selected row");
+        edClick("evhold.more.3");
+        assert.equal(JSON.stringify(set().spots), JSON.stringify({ lift: { hold: 11 } }));
+        assert.equal(ed("ecell.3.3").colour, "#ffb000");
+        edClick("evhold.less.3");
+        assert.equal(set(), undefined, "at the default again: no own hold");
+        // The show: played as the last view, its hold and pan share.
+        edClick("evrow.4");
+        edClick("evon.4");
+        assert.equal(set().show, "eclipse");
+        assert.equal(cell(4, 4), "next build");
+        edClick("evhold.more.4");
+        assert.equal(JSON.stringify(set().showDefs), JSON.stringify({ eclipse: { hold: 125 } }), "the show's longest time, in its profile's [show.eclipse]");
+        edClick("evpan.more.4");
+        assert.equal(set().showPan, 0.55);
+        dump("events-settings");
+        // Copy carries the changes; Paste of the build's settings takes them back, and the drawing page's text
+        // (only what a profile sets) applies to this park's own spots and shows.
+        edClick("copy");
+        const changed = JSON.parse(mode.clipboard).events;
+        assert.equal(changed.extras.show, "eclipse");
+        assert.equal(changed.show.eclipse.hold, 125);
+        assert.equal(changed.views.show_pan, 0.55);
+        edClick("evpan.less.4"); edClick("evhold.less.4"); edClick("evon.4");
+        assert.equal(set(), undefined, "all back: no change left");
+        mode.clipboard = JSON.stringify({ format: "rct-screensaver-views", version: 1, views: [], events: changed });
+        edClick("paste");
+        assert.equal(ed("paste.text").text, "Pasted events", "events alone paste too");
+        assert.equal(set().show, "eclipse");
+        assert.equal(JSON.stringify(set().showDefs), JSON.stringify({ eclipse: { hold: 125 } }));
+        mode.clipboard = JSON.stringify({ format: "rct-screensaver-views", version: 1, views: [],
+            events: { extras: { animation_hold: 12 }, animation: { lift: { off: false }, nowhere: { off: true } }, show: { other: { hold: 3 } } } });
+        edClick("paste");
+        const after = set();
+        assert.equal(after.animationHold, 12);
+        assert.equal(after.show, undefined, "no show in the text: none, as built");
+        assert.equal(JSON.stringify(after.spots), JSON.stringify({ fountain: { hold: null }, lift: { off: false } }),
+            "only this park's spots; one the text leaves out goes back to its defaults (the fountain's own hold goes)");
+        assert.equal(JSON.stringify(after.showDefs), JSON.stringify({ eclipse: { hold: 125 } }), "a show not its own left out");
+        mode.clipboard = JSON.stringify({ format: "rct-screensaver-views", version: 1, views: [], events: changed });
+        edClick("paste");
+        edClick("evrow.4");
+        edClick("evpan.less.4"); edClick("evhold.less.4"); edClick("evon.4");
+        assert.equal(set(), undefined, "all back again");
         edClick("row.0");
     }
     // The map (M): the camera steps out two levels, every view at its angle a box, the rest markers.

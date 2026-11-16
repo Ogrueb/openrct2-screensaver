@@ -8,7 +8,7 @@ import { measureLoaded } from "./measure";
 import { Pan, PanChanges, Pose, panTolerance } from "./pan";
 import { DESIGN_SCREEN, NO_SCALING, Scaling, Screen, scaleTolerance, scaleViews, scalingFor, screenOf } from "./scale";
 import {
-    Cue, Edits, GENERATION_DEFAULTS, Generation, ParkEntry, ParkSettings, ParkSettingsChange, ParkValues, Playlist, PlaylistProps, Settings, View, Visits, isPinned, placeCuts, loadEdits, loadPlaylistProps, loadVisits,
+    Cue, Edits, GENERATION_DEFAULTS, Generation, EventFacts, ParkEntry, ParkSettings, ParkSettingsChange, ParkValues, ShowDef, ShowDefChange, SpotChange, SpotSetting, Playlist, PlaylistProps, Settings, View, Visits, isPinned, placeCuts, loadEdits, loadPlaylistProps, loadVisits,
     saveEdits, savePlaylistProps, saveSettings, saveVisits,
 } from "./storage";
 
@@ -815,9 +815,109 @@ export class Player {
         const out = { ...built } as ParkValues;
         const defaults = this.playlist.parkDefaults;
         for (const [k, v] of Object.entries(set) as [keyof ParkValues, ParkValues[keyof ParkValues] | null][]) {
+            if (k === "spots" || k === "showDefs") {
+                continue; // (eventSettings merges these)
+            }
             (out as unknown as Record<string, unknown>)[k] = v === null ? defaults?.[k] ?? built[k] : v;
         }
         return out;
+    }
+
+    /** The current park's event settings as the Events list shows them (its changes over the build's), with
+     *  what changed since the build; undefined: the park has no animation spots or shows. */
+    get eventSettings(): EventSettings | undefined {
+        const park = this.currentPark();
+        const built = park?.settings;
+        const facts = built?.eventFacts;
+        const v = this.parkSettings;
+        if (!park || !built || !facts || !v) {
+            return undefined;
+        }
+        const set = this.parkSettingsSet;
+        const spots: Record<string, SpotSetting> = {};
+        for (const f of facts.spots) {
+            spots[f.name] = spotAfter(f, built.spots?.[f.name], set.spots?.[f.name]);
+        }
+        const showDefs: Record<string, ShowDef> = {};
+        for (const sh of facts.shows.filter(sh => sh.own)) {
+            showDefs[sh.name] = showDefAfter(built.showDefs?.[sh.name] ?? {}, set.showDefs?.[sh.name]);
+        }
+        const hold = set.animationHold === null ? null : (v.animationHold ?? null);
+        return {
+            facts, built, spots, showDefs, show: v.show ?? "", animationHold: hold, showPan: v.showPan,
+            events: v.events, locked: built.locked as string[],
+            changed: {
+                spots: Object.keys(set.spots ?? {}), showDefs: Object.keys(set.showDefs ?? {}),
+                show: "show" in set, animationHold: "animationHold" in set, showPan: "showPan" in set,
+            },
+        };
+    }
+
+    /** Changes one of the current park's animation spots: off, or its own hold (null: back to the default).
+     *  Back at the build's value it is no change; saved at once, baked into the park's profile at the next build. */
+    setSpot(name: string, change: SpotChange): void {
+        const park = this.currentPark();
+        const built = park?.settings;
+        const fact = built?.eventFacts?.spots.find(f => f.name === name);
+        if (!park || !built || !fact) {
+            return;
+        }
+        const pk = park.key ?? park.fileName;
+        const c = this.parkChange(pk, park, built);
+        const spots = { ...(c.set.spots ?? {}) };
+        const next: SpotChange = { ...(spots[name] ?? {}), ...change };
+        if (change.off !== undefined && change.off !== null && change.off === fact.offByDefault) {
+            next.off = null; // (the default: no key in the profile)
+        }
+        const was = built.spots?.[name] ?? { off: !fact.on };
+        const after = spotAfter(fact, was, next);
+        if (after.off === was.off) {
+            delete next.off; // (back at the build's)
+        }
+        if (after.hold === was.hold) {
+            delete next.hold;
+        }
+        if (Object.keys(next).length) {
+            spots[name] = next;
+        } else {
+            delete spots[name];
+        }
+        c.set.spots = spots;
+        if (!Object.keys(spots).length) {
+            delete c.set.spots;
+        }
+        this.saveParkChange(pk, c);
+        log(`event spot ${name}: ${JSON.stringify(change)} (${park.name})`);
+    }
+
+    /** Changes the camera or length of a show defined in the current park's profile (null: the key goes). */
+    setShowDef(name: string, change: ShowDefChange): void {
+        const park = this.currentPark();
+        const built = park?.settings;
+        if (!park || !built || !built.eventFacts?.shows.some(sh => sh.name === name && sh.own)) {
+            return;
+        }
+        const pk = park.key ?? park.fileName;
+        const c = this.parkChange(pk, park, built);
+        const defs = { ...(c.set.showDefs ?? {}) };
+        const was = built.showDefs?.[name] ?? {};
+        const next: ShowDefChange = { ...(defs[name] ?? {}), ...change };
+        for (const k of Object.keys(next) as (keyof ShowDef)[]) {
+            if (JSON.stringify(next[k] ?? undefined) === JSON.stringify(was[k])) {
+                delete next[k];
+            }
+        }
+        if (Object.keys(next).length) {
+            defs[name] = next;
+        } else {
+            delete defs[name];
+        }
+        c.set.showDefs = defs;
+        if (!Object.keys(defs).length) {
+            delete c.set.showDefs;
+        }
+        this.saveParkChange(pk, c);
+        log(`show ${name}: ${JSON.stringify(change)} (${park.name})`);
     }
 
     /** The current park's settings changes (null: back to the playlist's). */
@@ -847,7 +947,7 @@ export class Player {
         }
         const pk = park.key ?? park.fileName;
         const change = this.parkChange(pk, park, built);
-        const back = built[key] === value;
+        const back = built[key] === value || (value === null && key === "animationHold" && built.animationHold === null);
         if (back) {
             delete change.set[key];
         } else {
@@ -870,7 +970,7 @@ export class Player {
         const within = (k: keyof ParkValues) => !keys || keys.includes(k);
         change.set = Object.fromEntries(Object.entries(change.set).filter(([k]) => !within(k as keyof ParkValues)));
         for (const k of built.adjusted.filter(k => !built.locked.includes(k) && within(k))) {
-            change.set[k] = null;
+            (change.set as Record<string, unknown>)[k] = null;
         }
         this.saveParkChange(pk, change);
         log(`park settings back to the playlist's (${park.name})`);
@@ -911,8 +1011,10 @@ export class Player {
                 left[pk] = change; // (left out of this build: kept for the next)
                 continue;
             }
-            const set = Object.fromEntries(Object.entries(change.set).filter(([k, v]) =>
-                v === null ? built.adjusted.includes(k as keyof ParkValues) : built[k as keyof ParkValues] !== v));
+            const set = Object.fromEntries(Object.entries(change.set).map(([k, v]) =>
+                [k, k === "spots" ? pruneSpots(built, v as Record<string, SpotChange>) : k === "showDefs" ? pruneShowDefs(built, v as Record<string, ShowDefChange>) : v])
+                .filter(([k, v]) => k === "spots" || k === "showDefs" ? v !== undefined
+                    : v === null ? built.adjusted.includes(k as keyof ParkValues) : built[k as keyof ParkValues] !== v));
             if (Object.keys(set).length) {
                 left[pk] = { ...change, profile: built.profile, set };
             }
@@ -2030,4 +2132,66 @@ function canHoldSwitch(sequence: TitleSequence): boolean {
 
 function backgroundLoading(sequence: TitleSequence): boolean {
     return (sequence as unknown as { backgroundLoading?: boolean }).backgroundLoading === true;
+}
+
+/** The current park's event settings as the Events list shows them (Player.eventSettings). */
+export interface EventSettings {
+    facts: EventFacts;
+    built: ParkSettings; // the park's settings as built
+    spots: Record<string, SpotSetting>;
+    showDefs: Record<string, ShowDef>;
+    show: string;
+    animationHold: number | null;
+    showPan: number;
+    events?: boolean;
+    locked: string[];
+    changed: { spots: string[]; showDefs: string[]; show: boolean; animationHold: boolean; showPan: boolean };
+}
+
+/** A spot's settings after a change over its built ones (null: the default). */
+function spotAfter(fact: EventFacts["spots"][number], built: SpotSetting | undefined, change: SpotChange | undefined): SpotSetting {
+    const was = built ?? { off: !fact.on };
+    const off = change?.off === undefined ? was.off : change.off === null ? fact.offByDefault : change.off;
+    const hold = change?.hold === undefined ? was.hold : change.hold === null ? undefined : change.hold;
+    return hold === undefined ? { off } : { off, hold };
+}
+
+function showDefAfter(built: ShowDef, change: ShowDefChange | undefined): ShowDef {
+    const out: ShowDef = { ...built };
+    for (const [k, v] of Object.entries(change ?? {}) as [keyof ShowDef, unknown][]) {
+        if (v === null) {
+            delete out[k];
+        } else {
+            (out as Record<string, unknown>)[k] = v;
+        }
+    }
+    return out;
+}
+
+/** A park's spot changes a new build has not made its own yet (undefined: none left). */
+function pruneSpots(built: ParkSettings, spots: Record<string, SpotChange>): Record<string, SpotChange> | undefined {
+    const left: Record<string, SpotChange> = {};
+    for (const [name, change] of Object.entries(spots ?? {})) {
+        const fact = built.eventFacts?.spots.find(f => f.name === name);
+        if (!fact) {
+            continue; // (the park no longer has it)
+        }
+        const was = built.spots?.[name] ?? { off: !fact.on };
+        const after = spotAfter(fact, was, change);
+        if (after.off !== was.off || after.hold !== was.hold) {
+            left[name] = change;
+        }
+    }
+    return Object.keys(left).length ? left : undefined;
+}
+
+function pruneShowDefs(built: ParkSettings, defs: Record<string, ShowDefChange>): Record<string, ShowDefChange> | undefined {
+    const left: Record<string, ShowDefChange> = {};
+    for (const [name, change] of Object.entries(defs ?? {})) {
+        const was = built.showDefs?.[name];
+        if (was && JSON.stringify(showDefAfter(was, change)) !== JSON.stringify(was)) {
+            left[name] = change;
+        }
+    }
+    return Object.keys(left).length ? left : undefined;
 }

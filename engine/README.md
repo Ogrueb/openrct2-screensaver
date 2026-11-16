@@ -23,7 +23,7 @@ title). Check the draft on the releases page and publish it there.
 
 To work on a patch locally, clone OpenRCT2 at the release tag, `git am` the patches in order,
 edit (`git rebase -i` to change an earlier patch), and regenerate the whole series in one run with
-`git format-patch --zero-commit --no-signature -N v0.5.6 -o <repo>/engine/patches`, after
+`git format-patch --zero-commit --no-signature -N v0.5.7 -o <repo>/engine/patches`, after
 clearing the folder, so the headers stay uniform.
 
 ## The series

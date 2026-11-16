@@ -21,7 +21,7 @@ enhancements"). Problems in parks or other people's content that the project doe
 | 2 | Wallpaper wrapper | Done (2026-10-31 to 11-03; PRs up to #158): screensaver mode, overlay, controls bar, settings panel, view editor, park name captions with frame styles; live-tested by the owner |
 | 3 | Performance testing with logging, and optimizations | Potential enhancement (2026-11-07), grouped with the overnight soaks: framework built 2026-11-02, first runs 2026-11-03, PresentMon next |
 | 6 | Release | Done: v0.1.0 (2026-11-03, github.com/Ogrueb/openrct2-screensaver), v0.2.0 (2026-11-05, fixes and a Linux beta), v0.2.1 (2026-11-06, import fixes), v0.3.0 (2026-11-11, the live view editor as a beta) |
-| 7 | Standalone tool builds (settings page, drawing page) | Potential enhancement (2026-11-07), split out of the release step |
+| 7 | Standalone tool builds (settings page, drawing page) | Dropped (owner, 2026-11-16): the settings page is a legacy tool, kept in the source archive without new features |
 | L | Basic Linux support | Done (2026-11-03 to 11-05), shipped as a beta AppImage in v0.2.0 |
 
 ## Done recently, with the decisions made on the way
@@ -450,7 +450,7 @@ Requirements, in order:
 
 1. **A Linux machine** (the obstacle: the owner has none set up). A VM or a second drive with a
    desktop distribution is enough; the tests need a display (X11 and Wayland both), not
-   performance. Install OpenRCT2 v0.5.6 from the official release (the AppImage or the distro
+   performance. Install OpenRCT2 v0.5.7 from the official release (the AppImage or the distro
    package) and the RCT2 data files.
 2. **An engine build for Linux** in `.github/workflows/engine.yml`: a second job copied from
    OpenRCT2's own Ubuntu CI job (CMake, the same patch application as the Windows job). The
@@ -522,19 +522,26 @@ growth (4.7 → 7.3 MB in the hour), thermal throttling on the PC, and the crash
 owner saw on 2026-10-30. `perf/soak.toml` is ready: `full` (9 h) first, then `no-background-loading`,
 `no-companions`, `opengl` or `two-parks` only if `full` shows growth. Each night needs the owner's OK.
 
-### Standalone tool builds (split out of the release step; an enhancement, owner, 2026-11-07)
+### Settings page: a legacy tool (owner, 2026-11-16; replaces the standalone tool builds)
 
-The settings page and drawing page still need a Python 3.11+ install (`Settings.cmd`, `./settings.sh`).
-The game's own builds no longer do on Windows (2026-11-13, engine patch 0020): every engine build ships the
-generator in its data folder with Python's embeddable package, so the screensaver mode makes, builds and
-imports playlists without a source checkout (`docs/screensaver-ui.md`, "Standalone"). Left from the
-release step:
+The screensaver mode now makes, builds, imports and exports playlists and sets every generator option,
+per playlist and per park, including RCT2 saves, loose objects and the parks' event settings (PRs #42-#48),
+and the engine build carries the generator with a Python on Windows. The thread "Weigh keeping the external
+Generator as a fallback" (evaluation 2026-11-14, reassessed 2026-11-15 after PRs #46-#49) found the settings
+page cheap to keep (about 5,100 lines nothing else depends on, nothing in the engine download, no follow-up
+changes in the last four feature PRs) but no longer the way users should make playlists. So:
 
-- Package `tools/drawviews.py` (with its page) as a standalone Windows `.exe` (PyInstaller or
-  similar, built in CI) so drawing views needs no Python install (owner, 2026-10-27).
-- Package the settings UI server (`tools/settings.py`, see `docs/settings-ui-wiring.md`) the same
-  way, and test it there (owner, 2026-10-31): in a frozen build the tools are called in-process,
-  not as `python` subprocesses; check SmartScreen and antivirus warnings on the unsigned build.
+- The settings page (`tools/settings.py`, `Settings.cmd`, `settings.sh`) stays in the source archive as a
+  legacy tool, labeled so on the page and in the README ("Settings page (legacy)"): no new features, a smoke
+  test before each release (`docs/testing.md`). New options go into the game. It still covers macOS and the
+  stock engine, renders and the contact sheet, a show's camera view and path (the drawing page's Events panel,
+  served by the settings page), park filters, backups, and editing with the game closed.
+- The standalone `.exe` builds of the settings and drawing pages (PyInstaller, in-process tool calls,
+  SmartScreen checks on unsigned builds; owner 2026-10-27 and 2026-10-31) are dropped: the game's own builds
+  need no Python install on Windows.
+- The drawing page stays either way (owner, 2026-11-10).
+- Remove the settings page once the park library is in the game. Before that, either `tools/drawviews.py`
+  on its own gets the show camera editor, or a show's camera becomes a hand edit of the park's profile.
 
 ### Live view editor in the screensaver mode (owner, 2026-11-02)
 
