@@ -86,6 +86,13 @@ implementation options").
      accepted, as a plugin names only what the user put in a gallery folder. The generator gets them in
      `<user>/screensaver/live/task-parks.txt` (one path per line): `--live-add <sequence> --park-list <file>`,
      `--live-new-parks <file> --to <playlist.toml>`.
+   - `screensaver.gallery.scanDetails()` runs the generator's park details scan (builders, scripts, event views)
+     on every park in the index: `mksequence.py --gallery-details <user>/screensaver/live/gallery-parks.txt
+     --user-dir <dir>` as its own hidden process at idle priority, outside the build task slot (builds, Add park
+     and the rest stay available), one at a time (false while one runs), ended when the game exits (a job object
+     on Windows, the parent-death signal on Linux, an exit handler elsewhere); output in
+     `screensaver/gallery-details.log`. `gallery.detailsStatus`: `{ state, exitCode, started, finished, error }`.
+     The generator writes `live/gallery-details.json`, which the plugin reads.
    - `screensaver.paused`: the title screen holds still (no park updates or title sequence steps; input,
      drawing, plugin intervals and background work go on); mode only, cleared when the mode exits.
    - Overlay images whose file is not there yet are looked for again on the next draw.

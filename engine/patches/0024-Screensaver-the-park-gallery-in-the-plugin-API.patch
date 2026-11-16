@@ -17,18 +17,18 @@ previews. Overlay images that are not there yet are looked for again.
  src/openrct2-ui/interface/Gallery.cpp       | 684 ++++++++++++++++++++
  src/openrct2-ui/interface/Gallery.h         | 112 ++++
  src/openrct2-ui/libopenrct2ui.vcxproj       |   2 +
- src/openrct2-ui/screensaver/Build.cpp       | 100 +++
- src/openrct2-ui/screensaver/Build.h         |  11 +
+ src/openrct2-ui/screensaver/Build.cpp       | 329 +++++++++-
+ src/openrct2-ui/screensaver/Build.h         |  28 +
  src/openrct2-ui/screensaver/Overlay.cpp     |   4 +
  src/openrct2-ui/screensaver/Screensaver.cpp |   1 +
- src/openrct2-ui/scripting/ScScreensaver.hpp | 238 ++++++-
+ src/openrct2-ui/scripting/ScScreensaver.hpp | 271 +++++++-
  src/openrct2-ui/scripting/UiExtensions.cpp  |   3 +
  src/openrct2-ui/windows/LoadSave.cpp        | 232 +------
  src/openrct2/ParkImporter.h                 |   7 +
  src/openrct2/park/ParkFile.cpp              |  15 +
  src/openrct2/scenes/title/TitleScene.cpp    |   3 +-
  src/openrct2/scenes/title/TitleScene.h      |   3 +
- 14 files changed, 1195 insertions(+), 220 deletions(-)
+ 14 files changed, 1457 insertions(+), 237 deletions(-)
  create mode 100644 src/openrct2-ui/interface/Gallery.cpp
  create mode 100644 src/openrct2-ui/interface/Gallery.h
 
@@ -861,10 +861,17 @@ index 6dc2b142..a324a64f 100644
      <ClCompile Include="interface\LandTool.cpp" />
      <ClCompile Include="interface\Objective.cpp" />
 diff --git a/src/openrct2-ui/screensaver/Build.cpp b/src/openrct2-ui/screensaver/Build.cpp
-index d2a60dc3..9b699020 100644
+index d2a60dc3..d31113c1 100644
 --- a/src/openrct2-ui/screensaver/Build.cpp
 +++ b/src/openrct2-ui/screensaver/Build.cpp
-@@ -30,6 +30,8 @@
+@@ -26,10 +26,15 @@
+     #include <sys/types.h>
+     #include <sys/wait.h>
+     #include <unistd.h>
++    #ifdef __linux__
++        #include <sys/prctl.h>
++    #endif
+ #endif
  
  #include "Build.h"
  
@@ -873,7 +880,162 @@ index d2a60dc3..9b699020 100644
  #include <openrct2/Context.h>
  #include <openrct2/Diagnostic.h>
  #include <openrct2/OpenRCT2.h>
-@@ -687,6 +689,43 @@ namespace OpenRCT2::Ui::Screensaver::Build
+@@ -50,6 +55,7 @@
+ #include <openrct2/scenes/title/TitleSequencePlayer.h>
+ 
+ #include <chrono>
++#include <functional>
+ #include <mutex>
+ #include <optional>
+ #include <set>
+@@ -293,7 +299,12 @@ namespace OpenRCT2::Ui::Screensaver::Build
+             return out;
+         }
+ 
+-        bool Launch(const std::vector<std::string>& args, const std::string& cwd, const std::string& log, std::string& error)
++        // Starts a hidden process with its output in `log`; `onStarted` gets its handle before anything waits
++        // for it, and `onExit` its exit code, on a thread of its own. `idle`: at idle priority, and in a job
++        // that ends it when the game exits.
++        bool Spawn(
++            const std::vector<std::string>& args, const std::string& cwd, const std::string& log, bool idle,
++            const std::function<void(HANDLE)>& onStarted, std::function<void(HANDLE, int32_t)> onExit, std::string& error)
+         {
+             std::wstring commandLine;
+             for (const auto& arg : args)
+@@ -325,9 +336,10 @@ namespace OpenRCT2::Ui::Screensaver::Build
+             SetEnvironmentVariableW(L"PYTHONIOENCODING", L"utf-8");
+             auto app = String::toWideChar(args[0]);
+             auto wcwd = String::toWideChar(cwd);
++            const DWORD flags = CREATE_NO_WINDOW
++                | (idle ? IDLE_PRIORITY_CLASS | CREATE_SUSPENDED : BELOW_NORMAL_PRIORITY_CLASS);
+             BOOL ok = CreateProcessW(
+-                app.c_str(), commandLine.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS,
+-                nullptr, wcwd.c_str(), &si, &pi);
++                app.c_str(), commandLine.data(), nullptr, nullptr, TRUE, flags, nullptr, wcwd.c_str(), &si, &pi);
+             CloseHandle(output);
+             if (input != INVALID_HANDLE_VALUE)
+                 CloseHandle(input);
+@@ -336,22 +348,55 @@ namespace OpenRCT2::Ui::Screensaver::Build
+                 error = "Cannot start " + args[0] + " (error " + std::to_string(GetLastError()) + ")";
+                 return false;
+             }
+-            CloseHandle(pi.hThread);
++            if (idle)
+             {
+-                auto& shared = GetShared();
+-                std::lock_guard lock(shared.mutex);
+-                shared.process = pi.hProcess;
++                // Never closed: the system closes it when the game exits, which ends the process
++                static HANDLE job = []() {
++                    HANDLE created = CreateJobObjectW(nullptr, nullptr);
++                    if (created != nullptr)
++                    {
++                        JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
++                        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
++                        SetInformationJobObject(created, JobObjectExtendedLimitInformation, &limits, sizeof(limits));
++                    }
++                    return created;
++                }();
++                if (job != nullptr)
++                    AssignProcessToJobObject(job, pi.hProcess);
++                ResumeThread(pi.hThread);
+             }
+-            std::thread([process = pi.hProcess]() {
++            CloseHandle(pi.hThread);
++            onStarted(pi.hProcess);
++            std::thread([process = pi.hProcess, onExit = std::move(onExit)]() {
+                 WaitForSingleObject(process, INFINITE);
+                 DWORD code = 1;
+                 GetExitCodeProcess(process, &code);
+-                Finish(static_cast<int32_t>(code), code == 0 ? "" : "The generator failed (exit code " + std::to_string(code) + ")");
++                onExit(process, static_cast<int32_t>(code));
+             }).detach();
+             return true;
+         }
+-#else
++
+         bool Launch(const std::vector<std::string>& args, const std::string& cwd, const std::string& log, std::string& error)
++        {
++            return Spawn(
++                args, cwd, log, false,
++                [](HANDLE process) {
++                    auto& shared = GetShared();
++                    std::lock_guard lock(shared.mutex);
++                    shared.process = process;
++                },
++                [](HANDLE, int32_t code) {
++                    Finish(code, code == 0 ? "" : "The generator failed (exit code " + std::to_string(code) + ")");
++                },
++                error);
++        }
++#else
++        // Starts a hidden process with its output in `log`; `onStarted` gets its id before anything waits for
++        // it, and `onExit` its exit code, on a thread of its own. `idle`: at the lowest priority (and on Linux
++        // ended when the game exits).
++        bool Spawn(
++            const std::vector<std::string>& args, const std::string& cwd, const std::string& log, bool idle,
++            const std::function<void(pid_t)>& onStarted, std::function<void(pid_t, int32_t)> onExit, std::string& error)
+         {
+             // Everything the child needs is prepared before fork: it only calls async-signal-safe functions.
+             std::vector<char*> argv;
+@@ -371,6 +416,16 @@ namespace OpenRCT2::Ui::Screensaver::Build
+             if (pid == 0)
+             {
+                 setpgid(0, 0); // its own group: Cancel() stops anything it starts too
++                if (idle)
++                {
++    #ifdef __linux__
++                    prctl(PR_SET_PDEATHSIG, SIGTERM);
++    #endif
++                    if (nice(19) == -1)
++                    {
++                        // Normal priority then
++                    }
++                }
+                 if (input >= 0)
+                     dup2(input, STDIN_FILENO);
+                 dup2(output, STDOUT_FILENO);
+@@ -388,21 +443,32 @@ namespace OpenRCT2::Ui::Screensaver::Build
+                 error = "Cannot start " + args[0];
+                 return false;
+             }
+-            {
+-                auto& shared = GetShared();
+-                std::lock_guard lock(shared.mutex);
+-                shared.pid = pid;
+-            }
+-            std::thread([pid]() {
++            onStarted(pid);
++            std::thread([pid, onExit = std::move(onExit)]() {
+                 int status = 0;
+                 while (waitpid(pid, &status, 0) < 0 && errno == EINTR)
+                 {
+                 }
+                 int32_t code = WIFEXITED(status) ? WEXITSTATUS(status) : 128 + (WIFSIGNALED(status) ? WTERMSIG(status) : 0);
+-                Finish(code, code == 0 ? "" : "The generator failed (exit code " + std::to_string(code) + ")");
++                onExit(pid, code);
+             }).detach();
+             return true;
+         }
++
++        bool Launch(const std::vector<std::string>& args, const std::string& cwd, const std::string& log, std::string& error)
++        {
++            return Spawn(
++                args, cwd, log, false,
++                [](pid_t pid) {
++                    auto& shared = GetShared();
++                    std::lock_guard lock(shared.mutex);
++                    shared.pid = pid;
++                },
++                [](pid_t, int32_t code) {
++                    Finish(code, code == 0 ? "" : "The generator failed (exit code " + std::to_string(code) + ")");
++                },
++                error);
++        }
+ #endif
+     } // namespace
+ 
+@@ -687,6 +753,43 @@ namespace OpenRCT2::Ui::Screensaver::Build
  #endif
              return exe;
          }
@@ -917,7 +1079,7 @@ index d2a60dc3..9b699020 100644
      } // namespace
  
      bool AddPark(const std::string& sequence, bool& cancelled, std::string& error)
-@@ -760,6 +799,67 @@ namespace OpenRCT2::Ui::Screensaver::Build
+@@ -760,6 +863,67 @@ namespace OpenRCT2::Ui::Screensaver::Build
          return StartTask("new", "", { "--live-new", path, "--openrct2", ConverterPath() }, error);
      }
  
@@ -985,8 +1147,146 @@ index d2a60dc3..9b699020 100644
      bool CopyPlaylist(const std::string& sequence, bool& cancelled, std::string& error)
      {
          cancelled = false;
+@@ -798,6 +962,137 @@ namespace OpenRCT2::Ui::Screensaver::Build
+         return StartTask("copy", sequence, { "--live-copy", sequence, "--to", path }, error);
+     }
+ 
++    namespace
++    {
++        struct DetailsShared
++        {
++            std::mutex mutex;
++            DetailsStatus status;
++#ifdef _WIN32
++            HANDLE process = nullptr;
++#else
++            pid_t pid = 0;
++#endif
++        };
++
++        DetailsShared& GetDetailsShared()
++        {
++            static auto* shared = new DetailsShared();
++            return *shared;
++        }
++
++#ifndef _WIN32
++        // Ends a running details scan when the game exits normally (Windows: its job does; Linux: the
++        // parent-death signal does even when the game does not exit normally)
++        void StopDetailsAtExit()
++        {
++            auto& shared = GetDetailsShared();
++            std::lock_guard lock(shared.mutex);
++            if (shared.pid > 0)
++                kill(-shared.pid, SIGTERM);
++        }
++#endif
++
++        void FinishDetails(int32_t code)
++        {
++            auto& shared = GetDetailsShared();
++            std::lock_guard lock(shared.mutex);
++            shared.status.state = code == 0 ? State::done : State::failed;
++            shared.status.exitCode = code;
++            shared.status.finished = Now();
++            shared.status.error = code == 0 ? "" : "The generator failed (exit code " + std::to_string(code) + ")";
++#ifdef _WIN32
++            if (shared.process != nullptr)
++            {
++                CloseHandle(shared.process);
++                shared.process = nullptr;
++            }
++#else
++            shared.pid = 0;
++#endif
++        }
++    } // namespace
++
++    bool ScanDetails(const std::vector<std::string>& paths, std::string& error)
++    {
++        auto& shared = GetDetailsShared();
++        {
++            std::lock_guard lock(shared.mutex);
++            if (shared.status.state == State::running)
++                return false;
++        }
++        auto generator = ReadGenerator(error);
++        if (!generator)
++            return false;
++        auto live = Path::Combine(ScreensaverFolder(), "live");
++        std::error_code ec;
++        fs::create_directories(fs::u8path(live), ec);
++        auto list = Path::Combine(live, "gallery-parks.txt");
++        std::string text;
++        for (const auto& path : paths)
++        {
++            text += path;
++            text += '\n';
++        }
++        try
++        {
++            File::WriteAllBytes(list, text.data(), text.size());
++        }
++        catch (const std::exception& e)
++        {
++            error = std::string("Cannot write the park list: ") + e.what();
++            return false;
++        }
++        auto user = GetContext()->GetPlatformEnvironment().GetDirectoryPath(DirBase::user);
++        auto cwd = fs::u8path(generator->script).parent_path().parent_path().u8string();
++        std::vector<std::string> args = {
++            generator->python, generator->script, "--gallery-details", list, "--user-dir", user,
++        };
++        {
++            std::lock_guard lock(shared.mutex);
++            shared.status = DetailsStatus{ State::running, 0, Now(), 0, "" };
++        }
++#ifndef _WIN32
++        static const bool atExit = std::atexit(StopDetailsAtExit) == 0;
++        (void)atExit;
++#endif
++        bool started = Spawn(
++            args, std::string(cwd.begin(), cwd.end()), Path::Combine(ScreensaverFolder(), "gallery-details.log"), true,
++#ifdef _WIN32
++            [](HANDLE process) {
++                auto& details = GetDetailsShared();
++                std::lock_guard lock(details.mutex);
++                details.process = process;
++            },
++            [](HANDLE, int32_t code) { FinishDetails(code); },
++#else
++            [](pid_t pid) {
++                auto& details = GetDetailsShared();
++                std::lock_guard lock(details.mutex);
++                details.pid = pid;
++            },
++            [](pid_t, int32_t code) { FinishDetails(code); },
++#endif
++            error);
++        if (!started)
++        {
++            std::lock_guard lock(shared.mutex);
++            shared.status.state = State::failed;
++            shared.status.finished = Now();
++            shared.status.error = error;
++            return false;
++        }
++        LOG_INFO("Screensaver: park details scan of %zu parks started", paths.size());
++        return true;
++    }
++
++    DetailsStatus GetDetailsStatus()
++    {
++        auto& shared = GetDetailsShared();
++        std::lock_guard lock(shared.mutex);
++        return shared.status;
++    }
++
+     Status GetStatus()
+     {
+         auto& shared = GetShared();
 diff --git a/src/openrct2-ui/screensaver/Build.h b/src/openrct2-ui/screensaver/Build.h
-index 77eb82b7..f45b85c3 100644
+index 77eb82b7..6e875b60 100644
 --- a/src/openrct2-ui/screensaver/Build.h
 +++ b/src/openrct2-ui/screensaver/Build.h
 @@ -31,6 +31,7 @@
@@ -997,7 +1297,7 @@ index 77eb82b7..f45b85c3 100644
  
  namespace OpenRCT2::Ui::Screensaver::Build
  {
-@@ -92,6 +93,16 @@ namespace OpenRCT2::Ui::Screensaver::Build
+@@ -92,11 +93,38 @@ namespace OpenRCT2::Ui::Screensaver::Build
      // as for Export().
      bool NewPlaylist(bool& cancelled, std::string& error);
  
@@ -1014,6 +1314,28 @@ index 77eb82b7..f45b85c3 100644
      // Shows the system's Save dialog for a playlist file (the user's playlists folder first) and, once
      // a name is given, runs the generator to copy the title sequence's playlist under that name (with its
      // installed build when there is one; Apply() then plays the copy). False as for Export().
+     bool CopyPlaylist(const std::string& sequence, bool& cancelled, std::string& error);
+ 
++    struct DetailsStatus
++    {
++        State state = State::idle;
++        int32_t exitCode = 0;
++        int64_t started = 0;  // ms since 1970
++        int64_t finished = 0; // ms since 1970
++        std::string error;
++    };
++
++    // Runs the generator's park details scan (--gallery-details <list>) on these parks: a separate hidden
++    // process at idle priority, outside the one-task slot (builds and the other tasks stay available), ended
++    // when the game exits. The list is <user directory>/screensaver/live/gallery-parks.txt; the generator
++    // writes what it finds next to it. False when a scan runs already (`error` empty) or it cannot start
++    // (the reason in `error`).
++    bool ScanDetails(const std::vector<std::string>& paths, std::string& error);
++    DetailsStatus GetDetailsStatus();
++
+     Status GetStatus();
+ 
+     // Stops a running build; false when none runs.
 diff --git a/src/openrct2-ui/screensaver/Overlay.cpp b/src/openrct2-ui/screensaver/Overlay.cpp
 index b059a43b..7d7db746 100644
 --- a/src/openrct2-ui/screensaver/Overlay.cpp
@@ -1042,7 +1364,7 @@ index d6955410..ff8e13e7 100644
          RestoreConfig();
          Overlay::Clear();
 diff --git a/src/openrct2-ui/scripting/ScScreensaver.hpp b/src/openrct2-ui/scripting/ScScreensaver.hpp
-index afc620b9..a9055e0e 100644
+index afc620b9..10cc1ecd 100644
 --- a/src/openrct2-ui/scripting/ScScreensaver.hpp
 +++ b/src/openrct2-ui/scripting/ScScreensaver.hpp
 @@ -8,12 +8,13 @@
@@ -1121,7 +1443,7 @@ index afc620b9..a9055e0e 100644
      } // namespace ScreensaverJS
  
      class ScScreensaverOverlay final : public ScBase
-@@ -516,6 +556,134 @@ namespace OpenRCT2::Scripting
+@@ -516,6 +556,167 @@ namespace OpenRCT2::Scripting
          }
      };
  
@@ -1140,6 +1462,8 @@ index afc620b9..a9055e0e 100644
 +                JS_CFUNC_DEF("removeFolder", 1, ScScreensaverGallery::removeFolder),
 +                JS_CFUNC_DEF("requestPictures", 1, ScScreensaverGallery::requestPictures),
 +                JS_CFUNC_DEF("refresh", 0, ScScreensaverGallery::refresh),
++                JS_CFUNC_DEF("scanDetails", 0, ScScreensaverGallery::scanDetails),
++                JS_CGETSET_DEF("detailsStatus", ScScreensaverGallery::detailsStatus_get, nullptr),
 +            };
 +            RegisterBase(ctx, "ScreensaverGallery", nullptr, funcs);
 +        }
@@ -1251,12 +1575,43 @@ index afc620b9..a9055e0e 100644
 +            Ui::Gallery::Refresh();
 +            return JS_UNDEFINED;
 +        }
++
++        // scanDetails() runs the generator's park details scan (builders, scripts, event views) on every park
++        // in the index, in its own background process (Build.h ScanDetails); false when one runs already,
++        // throws when it cannot start.
++        static JSValue scanDetails(JSContext* ctx, JSValue, int, JSValue*)
++        {
++            std::vector<std::string> paths;
++            for (const auto& entry : Ui::Gallery::GetEntries())
++                paths.push_back(entry.path);
++            std::string error;
++            if (Ui::Screensaver::Build::ScanDetails(paths, error))
++                return JS_NewBool(ctx, true);
++            if (!error.empty())
++            {
++                JS_ThrowPlainError(ctx, "%s", error.c_str());
++                return JS_EXCEPTION;
++            }
++            return JS_NewBool(ctx, false);
++        }
++
++        static JSValue detailsStatus_get(JSContext* ctx, JSValue)
++        {
++            auto status = Ui::Screensaver::Build::GetDetailsStatus();
++            JSValue obj = JS_NewObject(ctx);
++            JS_SetPropertyStr(ctx, obj, "state", JSFromStdString(ctx, Ui::Screensaver::Build::StateName(status.state)));
++            JS_SetPropertyStr(ctx, obj, "exitCode", JS_NewInt32(ctx, status.exitCode));
++            JS_SetPropertyStr(ctx, obj, "started", JS_NewFloat64(ctx, static_cast<double>(status.started)));
++            JS_SetPropertyStr(ctx, obj, "finished", JS_NewFloat64(ctx, static_cast<double>(status.finished)));
++            JS_SetPropertyStr(ctx, obj, "error", JSFromStdString(ctx, status.error));
++            return obj;
++        }
 +    };
 +
      class ScScreensaver final : public ScBase
      {
      public:
-@@ -544,9 +712,11 @@ namespace OpenRCT2::Scripting
+@@ -544,9 +745,11 @@ namespace OpenRCT2::Scripting
                  JS_CFUNC_DEF("applyBuild", 1, ScScreensaver::applyBuild),
                  JS_CFUNC_DEF("exportPlaylist", 1, ScScreensaver::exportPlaylist),
                  JS_CFUNC_DEF("importPlaylist", 0, ScScreensaver::importPlaylist),
@@ -1270,7 +1625,7 @@ index afc620b9..a9055e0e 100644
              };
              RegisterBase(ctx, "Screensaver", nullptr, funcs);
              ScreensaverJS::InstallListeners();
-@@ -568,6 +738,21 @@ namespace OpenRCT2::Scripting
+@@ -568,6 +771,21 @@ namespace OpenRCT2::Scripting
              return JS_NewBool(ctx, Ui::Screensaver::IsActive());
          }
  
@@ -1292,7 +1647,7 @@ index afc620b9..a9055e0e 100644
          static JSValue launchedByFlag_get(JSContext* ctx, JSValue)
          {
              return JS_NewBool(ctx, Ui::Screensaver::LaunchedByFlag());
-@@ -780,7 +965,8 @@ namespace OpenRCT2::Scripting
+@@ -780,7 +998,8 @@ namespace OpenRCT2::Scripting
  
          // addPark(sequence) shows the system's Open dialog for a park and adds the picked one to that
          // title sequence's playlist, then builds it, in the background (buildStatus follows it). False
@@ -1302,7 +1657,7 @@ index afc620b9..a9055e0e 100644
          static JSValue addPark(JSContext* ctx, JSValue, int argc, JSValue* argv)
          {
              if (argc < 1 || !JS_IsString(argv[0]))
-@@ -788,8 +974,23 @@ namespace OpenRCT2::Scripting
+@@ -788,8 +1007,23 @@ namespace OpenRCT2::Scripting
                  JS_ThrowTypeError(ctx, "addPark(sequence): sequence must be a string");
                  return JS_EXCEPTION;
              }
@@ -1327,7 +1682,7 @@ index afc620b9..a9055e0e 100644
              if (!Ui::Screensaver::Build::AddPark(JSToStdString(ctx, argv[0]), cancelled, error) && !cancelled)
              {
                  JS_ThrowPlainError(ctx, "%s", error.c_str());
-@@ -800,11 +1001,29 @@ namespace OpenRCT2::Scripting
+@@ -800,11 +1034,29 @@ namespace OpenRCT2::Scripting
  
          // newPlaylist() shows the system's folder dialog and makes a playlist of the parks in the picked
          // folder, in the background (buildStatus follows it; the generator lists its parks). False when the dialog was
@@ -1359,7 +1714,7 @@ index afc620b9..a9055e0e 100644
              if (!Ui::Screensaver::Build::NewPlaylist(cancelled, error) && !cancelled)
              {
                  JS_ThrowPlainError(ctx, "%s", error.c_str());
-@@ -838,6 +1057,11 @@ namespace OpenRCT2::Scripting
+@@ -838,6 +1090,11 @@ namespace OpenRCT2::Scripting
      {
          return gScScreensaverOverlay.New(ctx);
      }
