@@ -300,7 +300,18 @@ through its function only. Needs an engine build with patch 0016 and an install 
       is not views says "No views" and changes nothing. (owner's game test 2026-11-12: passed; the
       round trip with the drawing page not tried)
 
-## 5. Loose objects across imports (importparks.py)
+## 5. Settings page smoke test (legacy; before each release)
+
+The settings page gets no new features (`docs/roadmap.md`, "Settings page: a legacy tool"), so one short
+pass before a release keeps it working:
+
+- [ ] `Settings.cmd` opens the page with "Legacy" beside its title; scan a folder of two or three parks,
+      Build, Render, Install, then play the result in the screensaver mode.
+- [ ] Edit views opens the drawing page on the build; a show's camera path saved in its Events panel
+      reaches the park's profile in the user folder.
+- [ ] Export a bundle and Import it again.
+
+## 6. Loose objects across imports (importparks.py)
 `object/rct-screensaver/installed.json` records which import (the downloads given, by path) uses
 each loose object file; importing a folder again replaces only that folder's objects.
 
