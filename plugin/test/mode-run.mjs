@@ -1584,9 +1584,9 @@ console.log("ok: parks ticked on and off, Add park, and switching, new and dupli
     entries[23] = park(23, { picture: "", pictureState: "pending" });
     entries[22] = park(22, { file: inUse, path: `C:/parks/lib/${inUse}` });
     entries[3] = park(3, { kind: "sv6", file: "zz old.sv6", path: "C:/parks/lib/zz old.sv6", name: "", mapSize: { x: 0, y: 0 }, pictureState: "none", picture: "" });
-    const details = { detailsVersion: 1, done: true, parks: {
-        [entries[0].path]: { name: "Zeta World", builders: ["ann", "bob", "cy"], scripts: ["Animator"], events: 2, released: "2015-06-01" },
-        [entries[5].path]: { builders: [], scripts: [], events: 0, released: "2020-01-01" } } };
+    const details = { detailsVersion: 2, done: true, parks: {
+        [entries[0].path]: { name: "Zeta World", builders: ["ann", "bob", "cy"], scripts: ["Animator"], events: 2, released: "2015-06-01", built: [40, 30] },
+        [entries[5].path]: { builders: [], scripts: [], events: 0, released: "2020-01-01", built: [20, 24] } } };
     Object.assign(mode, {
         added: [], made: [], scans: 0, pictureAsks: [], isPaused: false, dialogClosed: false,
         addPark(name, paths) { this.added.push([name, paths]); this.buildStatus = { ...this.buildStatus, state: "running", task: "add", sequence: name, started: now }; return true; },
@@ -1661,11 +1661,13 @@ console.log("ok: parks ticked on and off, Add park, and switching, new and dupli
     // Filters: folders, size, what the generator found
     gaClick("size.3"); tick();
     assert.ok(tileOf(() => true) && !tileOf(t => t === "Park Z"), "L leaves out the small maps");
+    gaClick("size.1"); tick();
+    assert.ok(tileOf(t => t === "Park U"), "S goes by the built area, not the map (a 160-tile map with 20×24 built; owner, 2026-11-16)");
     gaClick("size.0"); tick();
     gaClick("has.scripts"); tick();
     assert.equal(ga("tile.0.name").text, "Zeta World", "Scripts: the parks whose download ships scripts, by the generator's name");
     assert.ok(!ga("tile.1.bg"));
-    assert.match(ga("tile.0.by").text, /^ann, bob \+1 · 2015 · 60×60$/, "builders, year and map size under the name");
+    assert.match(ga("tile.0.by").text, /^ann, bob \+1 · 2015 · 40×30$/, "builders, year and built area under the name");
     assert.deepEqual([ga("tile.0.m0t").text, ga("tile.0.m1t").text].sort(), ["events", "scripts"], "and what its scripts bring on the picture");
     mouse("move", ...at(ga("tile.0.bg"))); tick();
     assert.equal(ga("d.v0").text, "ann, bob, cy", "the park under the mouse in the details");
@@ -1702,6 +1704,7 @@ console.log("ok: parks ticked on and off, Add park, and switching, new and dupli
     assert.match(ga("h.picks").text, /8 PARKS$/);
     assert.ok(ga("pick.7.name") && !ga("pick.1.name"), "six rows of picks, scrolled to the newest");
     assert.ok(ga("picks.thumb"), "with a scroll bar");
+    assert.ok(ga("pick.7.grip.0") && ga("pick.7.grip.5"), "each pick has its drawn drag handle");
     assert.ok(ga("gseg.motion.0").y > ga("picks").y + ga("picks").height, "the options stay below the list");
     gaClick("gseg.motion.1"); tick();
     dump("gallery-new");
@@ -1717,6 +1720,8 @@ console.log("ok: parks ticked on and off, Add park, and switching, new and dupli
     mode.buildStatus = { ...mode.buildStatus, state: "done", finished: now };
     tick(8);
     assert.equal(JSON.parse(mode.files.get("Evening.json")).props.generation.motion, "static", "the options go into the new playlist's live file");
+    assert.equal(mode.builds.at(-1), "Evening", "the playlist of the gallery's picks is built and played at once (owner's test, 2026-11-16)");
+    assert.ok(!scene.has("rcts.ed.draft"), "with no draft step");
     // Keys are the pane's while it is open
     edClick("parkAdd"); tick(2);
     if (ga("title")) {

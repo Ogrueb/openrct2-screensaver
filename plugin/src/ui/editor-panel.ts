@@ -176,6 +176,8 @@ export class EditorPanel implements EditorView {
     private setGroup: "playlist" | "park" = "playlist"; // and which group it shows
     gallery: Gallery | undefined; // the park gallery pane (main.ts sets it)
     private newGen: Generation | undefined; // the New playlist pane (top centre) open, with its generation choices
+    private galleryNew = false; // the playlist New is making has the gallery's picks: built at once, no draft
+    private openMade: string | undefined; // that playlist, to switch to once the builder is free
     private madeGen: Generation | undefined; // the choices of the New playlist the dialog is making
     private clipShown = false; // a Copy/Paste note is on its button (it goes after a moment)
     private buildShown = ""; // the build pane's state as last drawn (buildSignature)
@@ -914,11 +916,23 @@ export class EditorPanel implements EditorView {
                 this.parks.first = Math.max(0, row - Math.max(1, this.parkRows()) + 1);
             }
         }
+        if (this.galleryNew && !builder.running && (builder.made?.at ?? 0) === this.seenMade) {
+            this.galleryNew = false; // (the Save dialog was closed, or it failed)
+        }
         const made = builder.made;
         if (made && made.at !== this.seenMade) {
             this.seenMade = made.at;
             this.dropdown = { persistent: true, downAt: this.now() };
-            if (made.task === "new" && made.parks?.length) {
+            if (made.task === "new" && this.galleryNew) {
+                // The gallery's picks are already chosen and ordered: built and played at once
+                this.galleryNew = false;
+                this.playlists = undefined;
+                if (this.madeGen) {
+                    saveOtherPlaylistProps(made.sequence, made.playlist, { generation: this.madeGen });
+                    this.madeGen = undefined;
+                }
+                this.openMade = made.sequence;
+            } else if (made.task === "new" && made.parks?.length) {
                 // Its parks, to tick and order before its first build
                 this.playlists = undefined;
                 // with the New playlist pane's generation choices, for its first build's bake
@@ -934,6 +948,11 @@ export class EditorPanel implements EditorView {
                 const at = this.playlists.findIndex(pl => pl.name === made.sequence);
                 this.parks.first = Math.max(0, at - 3);
             }
+        }
+        if (this.openMade && !builder.running) {
+            const sequence = this.openMade;
+            this.openMade = undefined;
+            builder.openPlaylist(sequence);
         }
         // Playlist row
         const plOpen = this.dropdown !== undefined && this.playlists !== undefined;
@@ -1178,6 +1197,7 @@ export class EditorPanel implements EditorView {
                 const started = builder.newPlaylistOf(paths);
                 if (started) {
                     this.madeGen = generation;
+                    this.galleryNew = true;
                 }
                 return started;
             },

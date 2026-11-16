@@ -4302,12 +4302,12 @@ def live_new_parks(park_paths, to, user_dir, openrct2=None):
 
 
 GALLERY_DETAILS_FILE = "gallery-details.json"
-GALLERY_DETAILS_VERSION = 1
+GALLERY_DETAILS_VERSION = 2  # 2: built
 
 
 def gallery_park_details(path):
     """What the game's gallery shows of a park beyond its picture: {name, builders, scripts (the companions it
-    ships), events (animation spots and shows those offer)}. An RCT save has only its builders."""
+    ships), events (animation spots and shows those offer), built ([x, y] tiles of the content box)}. An RCT save has only its builders."""
     out = {"builders": parkinfo.download_authors(path), "scripts": [], "events": 0}
     ne = nedesigns.match(path)
     if ne and ne.get("released"):
@@ -4323,6 +4323,11 @@ def gallery_park_details(path):
     ne = nedesigns.match(path, saved)
     if ne and ne.get("released"):
         out["released"] = ne["released"]
+    # The built area, as the preview renders frame it: the park size the pane filters and sorts by
+    _, counts, surface, heights = parkinfo.visible_element_counts(parkinfo.chunk_reader(chunks, body, 0x30))
+    box = content_bounds(counts, heights, surface)
+    if box:
+        out["built"] = [box["x1"] - box["x0"] + 1, box["y1"] - box["y0"] + 1]
     entry = {"file": path}
     found = companions.find(entry, "", member)
     if found:
