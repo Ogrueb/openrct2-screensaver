@@ -54,7 +54,7 @@ implementation options").
    (`Unknown option`), so a render uses the default user folder's settings. Owner's test 2026-11-15:
    every park rendered (41 of 41, `.sv6` included), cached across restarts, a few seconds each.
 3. **Gallery folders** (engine patch 0023, 2026-11-16, after the owner found the renders "serviceable at
-   this stage"). A Gallery button (a photo icon, left of the folder buttons; Load Game only) lists the parks
+   this stage"). A Gallery button (two stacked pictures drawn to fill the button, left of the folder buttons; Load Game only) lists the parks
    in the user directory's `gallery` folder (made on first use) and in the folders added to it, subfolders
    included, as a grid whatever the view setting; the title reads "Park gallery" and the path line the
    gallery folder plus the number of added ones. The customize menu adds the shown folder ("Add this folder

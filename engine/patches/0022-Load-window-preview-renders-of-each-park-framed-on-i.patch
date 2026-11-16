@@ -1,8 +1,8 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: RCT Screensaver <noreply@example.invalid>
 Date: Sun, 15 Nov 2026 19:00:00 +0000
-Subject: [PATCH] Load window: preview renders of each park, framed on its
- built area
+Subject: [PATCH 22/24] Load window: preview renders of each park, framed on
+ its built area
 
 "openrct2 screenshot <file> <image> preview <width> <height>" renders a
 park at its saved rotation, framed on the area it is built on: the tiles

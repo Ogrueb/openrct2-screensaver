@@ -1,8 +1,8 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: RCT Screensaver <noreply@example.invalid>
 Date: Tue, 3 Nov 2026 17:46:30 +0000
-Subject: [PATCH] Diagnostics: park load timings and the perf log (test builds
- only)
+Subject: [PATCH 24/24] Diagnostics: park load timings and the perf log (test
+ builds only)
 
 Test-only instrumentation, kept last so a release build drops this one
 patch.

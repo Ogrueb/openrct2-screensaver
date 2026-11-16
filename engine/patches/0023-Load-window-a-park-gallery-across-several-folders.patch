@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: RCT Screensaver <noreply@example.invalid>
 Date: Mon, 16 Nov 2026 02:43:14 +0000
-Subject: [PATCH] Load window: a park gallery across several folders
+Subject: [PATCH 23/24] Load window: a park gallery across several folders
 
 A Gallery button in the Load window for parks lists the parks in the user
 directory's gallery folder and in folders added to it, with their subfolders,
@@ -9,13 +9,13 @@ as a grid. The customize menu adds the shown folder (or, in the gallery, any
 folder) and removes added ones; config.ini keeps them as
 file_browser_gallery_folders.
 ---
- src/openrct2-ui/windows/LoadSave.cpp | 330 ++++++++++++++++++++++-----
+ src/openrct2-ui/windows/LoadSave.cpp | 357 +++++++++++++++++++++++----
  src/openrct2/config/Config.cpp       |   2 +
  src/openrct2/config/Config.h         |   1 +
- 3 files changed, 281 insertions(+), 52 deletions(-)
+ 3 files changed, 308 insertions(+), 52 deletions(-)
 
 diff --git a/src/openrct2-ui/windows/LoadSave.cpp b/src/openrct2-ui/windows/LoadSave.cpp
-index 8e27ea5..253183e 100644
+index 8e27ea5..2e4e3df 100644
 --- a/src/openrct2-ui/windows/LoadSave.cpp
 +++ b/src/openrct2-ui/windows/LoadSave.cpp
 @@ -72,6 +72,7 @@
@@ -100,7 +100,7 @@ index 8e27ea5..253183e 100644
          makeWidget({                              64, kWindowSize.height - 50 }, { kWindowSize.width - 133,                      14 }, WidgetType::textBox,     WindowColour::secondary                                                                ), // WIDX_FILENAME_TEXTBOX
 -        makeWidget({          kWindowSize.width - 65, kWindowSize.height - 50 }, {                      60,                      14 }, WidgetType::button,      WindowColour::secondary, STR_FILEBROWSER_SAVE_BUTTON                                   )  // WIDX_SAVE
 +        makeWidget({          kWindowSize.width - 65, kWindowSize.height - 50 }, {                      60,                      14 }, WidgetType::button,      WindowColour::secondary, STR_FILEBROWSER_SAVE_BUTTON                                   ), // WIDX_SAVE
-+        makeWidget({     kWindowSize.width - 125 - 4,                      20 }, {                      20,                      20 }, WidgetType::flatBtn,     WindowColour::primary,   SPR_SHOP_ITEM_PHOTO                                           )  // WIDX_GALLERY
++        makeWidget({     kWindowSize.width - 125 - 4,                      20 }, {                      20,                      20 }, WidgetType::flatBtn,     WindowColour::primary                                                                  )  // WIDX_GALLERY
      );
      // clang-format on
  
@@ -331,9 +331,44 @@ index 8e27ea5..253183e 100644
  
              auto paddingBottom = ShowPreviews() ? kPadding : kPadding + 10;
  
-@@ -1253,14 +1399,23 @@ namespace OpenRCT2::Ui::Windows
+@@ -1245,6 +1391,30 @@ namespace OpenRCT2::Ui::Windows
+             }
+         }
+ 
++        // Two stacked pictures, the front one a landscape, drawn to fill the 20x20 button
++        void DrawGalleryIcon(RenderTarget& rt, const Widget& widget)
++        {
++            const auto o = windowPos + ScreenCoordsXY{ widget.left + 1, widget.top + 2 };
++            const auto rect = [&](int32_t l, int32_t t, int32_t r, int32_t b, PaletteIndex colour) {
++                Rectangle::fill(rt, { o + ScreenCoordsXY{ l, t }, o + ScreenCoordsXY{ r, b } }, colour);
++            };
++            const auto outline = getColourMap(Colour::black).midLight;
++            // Back picture: frame only
++            rect(5, 0, 17, 10, outline);
++            rect(6, 1, 16, 9, getColourMap(Colour::white).light);
++            // Front picture: frame, sky, sun and two hills
++            rect(1, 4, 14, 15, outline);
++            rect(2, 5, 13, 14, getColourMap(Colour::lightBlue).light);
++            rect(9, 6, 11, 8, getColourMap(Colour::brightYellow).lighter);
++            const auto hillFar = getColourMap(Colour::mossGreen).midLight;
++            rect(5, 10, 9, 14, hillFar);
++            rect(6, 9, 8, 9, hillFar);
++            const auto hillNear = getColourMap(Colour::darkGreen).light;
++            rect(2, 11, 13, 14, hillNear);
++            rect(9, 10, 12, 10, hillNear);
++            rect(2, 12, 4, 12, hillNear);
++        }
++
+         void onDraw(RenderTarget& rt) override
+         {
+             drawWidgets(rt);
+@@ -1252,15 +1422,27 @@ namespace OpenRCT2::Ui::Windows
+             if (ShowPreviews())
                  DrawPreview(rt);
  
++            if (widgets[WIDX_GALLERY].isVisible())
++                DrawGalleryIcon(rt, widgets[WIDX_GALLERY]);
++
              {
 -                const auto& widget = widgets[WIDX_PARENT_FOLDER];
 +                const auto& widget = widgets[WIDX_GALLERY].isVisible() ? widgets[WIDX_GALLERY] : widgets[WIDX_PARENT_FOLDER];
@@ -358,7 +393,7 @@ index 8e27ea5..253183e 100644
  
                  // Draw path text
                  const auto normalisedPath = Platform::StrDecompToPrecomp(buffer.data());
-@@ -1316,6 +1471,19 @@ namespace OpenRCT2::Ui::Windows
+@@ -1316,6 +1498,19 @@ namespace OpenRCT2::Ui::Windows
                      close();
                      break;
  
@@ -378,7 +413,7 @@ index 8e27ea5..253183e 100644
                  case WIDX_PARENT_FOLDER:
                      PopulateList(_parentDirectory, _extensionPattern);
                      initScrollWidgets();
-@@ -1338,9 +1506,7 @@ namespace OpenRCT2::Ui::Windows
+@@ -1338,9 +1533,7 @@ namespace OpenRCT2::Ui::Windows
                      else
                      {
                          // If user cancels file dialog, refresh list
@@ -389,7 +424,7 @@ index 8e27ea5..253183e 100644
                      }
                  }
                  break;
-@@ -1388,6 +1554,7 @@ namespace OpenRCT2::Ui::Windows
+@@ -1388,6 +1581,7 @@ namespace OpenRCT2::Ui::Windows
                      break;
  
                  case WIDX_DEFAULT_FOLDER:
@@ -397,7 +432,7 @@ index 8e27ea5..253183e 100644
                      PopulateList(GetInitialDirectoryByType(type).c_str(), _extensionPattern);
                      initScrollWidgets();
                      numListItems = static_cast<uint16_t>(_listItems.size());
-@@ -1430,10 +1597,37 @@ namespace OpenRCT2::Ui::Windows
+@@ -1430,10 +1624,37 @@ namespace OpenRCT2::Ui::Windows
              gDropdown.items[8] = Dropdown::MenuLabel("List view");
              gDropdown.items[9] = Dropdown::MenuLabel("Grid view");
  
@@ -436,7 +471,7 @@ index 8e27ea5..253183e 100644
  
              auto& config = Config::Get().general;
  
-@@ -1447,6 +1641,9 @@ namespace OpenRCT2::Ui::Windows
+@@ -1447,6 +1668,9 @@ namespace OpenRCT2::Ui::Windows
              gDropdown.items[9].setChecked(IsGridView());
              gDropdown.items[8].setDisabled(!CanShowGrid());
              gDropdown.items[9].setDisabled(!CanShowGrid());
@@ -446,7 +481,7 @@ index 8e27ea5..253183e 100644
          }
  
          void onDropdown(WidgetIndex widgetIndex, int32_t selectedIndex) override
-@@ -1484,6 +1681,35 @@ namespace OpenRCT2::Ui::Windows
+@@ -1484,6 +1708,35 @@ namespace OpenRCT2::Ui::Windows
                      changed = true;
                  }
              }
