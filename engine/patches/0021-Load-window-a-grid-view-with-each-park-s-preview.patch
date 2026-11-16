@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: RCT Screensaver <noreply@example.invalid>
 Date: Sun, 15 Nov 2026 03:00:00 +0000
-Subject: [PATCH 21/24] Load window: a grid view with each park's preview
+Subject: [PATCH] Load window: a grid view with each park's preview
 
 The file browser's customize menu gets List view and Grid view (config
 value file_browser_grid_view). In grid view each file is a tile with a

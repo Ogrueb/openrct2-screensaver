@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: RCT Screensaver <noreply@example.invalid>
 Date: Mon, 16 Nov 2026 02:43:14 +0000
-Subject: [PATCH 23/24] Load window: a park gallery across several folders
+Subject: [PATCH] Load window: a park gallery across several folders
 
 A Gallery button in the Load window for parks lists the parks in the user
 directory's gallery folder and in folders added to it, with their subfolders,
