@@ -574,7 +574,8 @@ See README.md for usage.
   AppImage under Wayland, README "Linux" under Installing; X11 and sound untested).
 - `docs/park-gallery.md`: the park gallery (owner, 2026-11-15): standalone engine patches, a grid view in the stock
   Load window first (patch 0021) with the engine's own preview renders (0022, owner 2026-11-15: the embedded screenshots
-  are random crops and often missing); diagnostics moved to 0023, matched by name in the workflow. Then gallery folders,
-  then the editor's Parks panel.
+  are random crops and often missing), then gallery folders (0023, 2026-11-16: a Gallery button, added folders in
+  `config.ini`); diagnostics moved to 0024, matched by name in the workflow. Then
+  the editor's Parks panel.
 - `docs/roadmap.md`: planned work, and what was done with the decisions made on the way.
 - `docs/known-issues.md`: problems in parks or third-party content that the project does not fix.

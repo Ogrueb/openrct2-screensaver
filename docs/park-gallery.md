@@ -53,10 +53,16 @@ implementation options").
    mode keeps the minimap). 250x200, the pane's size. The subcommand takes no data path options
    (`Unknown option`), so a render uses the default user folder's settings. Owner's test 2026-11-15:
    every park rendered (41 of 41, `.sv6` included), cached across restarts, a few seconds each.
-3. **Gallery folders.** A `gallery` folder in the user directory and a list of added folders, a cached
-   index (on `FileIndex`, as scenarios and objects have) of name, map size, date and preview, a Gallery
-   button in the Load window (opening the gallery in grid view across its folders), Add folder and Add to
-   gallery.
+3. **Gallery folders** (engine patch 0023, 2026-11-16, after the owner found the renders "serviceable at
+   this stage"). A Gallery button (a photo icon, left of the folder buttons; Load Game only) lists the parks
+   in the user directory's `gallery` folder (made on first use) and in the folders added to it, subfolders
+   included, as a grid whatever the view setting; the title reads "Park gallery" and the path line the
+   gallery folder plus the number of added ones. The customize menu adds the shown folder ("Add this folder
+   to gallery", grayed when it is one already), and in the gallery "Add folder to gallery..." (the system's
+   folder dialog) and "Remove <folder>" for each added one. Added folders are `file_browser_gallery_folders`
+   in `config.ini`, separated by `|`. The default-folder button leaves the gallery. Not yet: a cached index
+   of name, map size and date (on `FileIndex`, as scenarios and objects have), left for stage 4, where the
+   scripting API needs it; the list reads files as the Load window always has.
 4. **The editor's Parks panel** (after the standalone live-editor work): a read-only `gallery` scripting
    API (entries with path, name, map size, date, picture) and path arguments for Add park and New playlist,
    so the editor draws the gallery as tiles and adds ticked parks without the system dialog.

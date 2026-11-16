@@ -19,7 +19,7 @@ on:
   workflow_dispatch:
     inputs:
       release:
-        description: "Release build: leave out the diagnostics patch (0023)"
+        description: "Release build: leave out the diagnostics patch (0024)"
         type: boolean
         default: false
       publish_tag:
