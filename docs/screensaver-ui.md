@@ -568,6 +568,34 @@ own, and the build's bake writes them into the playlist (`apply_generation`: `[v
 top-level `park_scripts`, `park_plugins`). The timing holds the editor saves are in the time scale the
 playlist was built with, so a new time scale scales them too.
 
+### The park gallery pane (owner, 2026-11-16; `plugin/src/ui/gallery.ts`, mockups in the project files' `editor-ui/gallery/`)
+
+Add park and New playlist open one pane over the editor (and over the fresh install's panel) on engines with
+the `screensaver.gallery` API (`docs/park-gallery.md`, stage 4); without it they keep the system dialogs. While
+the pane is open the park behind it is paused (`screensaver.paused`), which leaves the engine time for preview
+renders, and the mode's shortcuts are off.
+
+- **Left column:** the gallery's folders with their park counts (a click shows one folder, a second click all;
+  ✕ removes an added folder), Add folder, and the filters: Show All / Not in playlist (adding only), Map size
+  Any / S / M / L (under 100, under 200, larger: the longer side in tiles), Has Scripts and Event views, Sort by
+  Name, Date or Size, and the Tiles per row slider (1-7, default 4, plugin setting `galleryColumns`). "Browse for a file…"
+  ("From a folder…" for a new playlist) opens the old system dialog for parks outside the gallery.
+- **Grid:** one tile per park with the engine's preview render (requested for the tiles in view; a placeholder
+  until it is there), name and builders. The wheel scrolls by whole rows. A click picks a park, numbered in pick
+  order; a second click drops it. Parks the playlist already plays carry "in playlist" and cannot be picked.
+- **Right column:** the hovered park's details (file, folder, map size, saved date, builders, scripts, event
+  views), then the picks in order (drag to reorder, ✕ to drop; for a new playlist at most six rows, then a scrollbar, so the
+  generation options stay in view), for a new playlist the generation options of the New playlist pane, and
+  the action: "Add N parks and build" (`screensaver.addPark(sequence, paths)`) or "Create playlist with N
+  parks…" (`screensaver.newPlaylist({paths})`, the Save dialog naming it), then built and played as before.
+
+Builders, scripts and event views are not in the engine's index. The pane starts `gallery.scanDetails()`, the
+generator's `--gallery-details` pass (`gallery_details`: one idle process, incremental by file size and date),
+and reads its `live/gallery-details.json` every 2 s; until a park is read, the tile shows no byline and the
+Has filters leave it out. Generator side: `--live-add <sequence> --park-list <file>` adds several parks (one
+that fails is reported and the rest are added), `--live-new-parks <file> --to <playlist.toml>` makes a playlist
+of the listed parks in their order.
+
 ### Live file (2026-11-10, owner's go-ahead in "Explore saving playlists without the Generator")
 
 On the patched engine (patch 0016's files API), every save of the editor (view edits, a reset, the park

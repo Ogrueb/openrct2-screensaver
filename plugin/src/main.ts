@@ -9,6 +9,7 @@ import { Captions } from "./ui/captions";
 import { ControlsBar } from "./ui/controls";
 import { EditorPanel } from "./ui/editor-panel";
 import { Welcome } from "./ui/welcome";
+import { Gallery } from "./ui/gallery";
 
 const UPDATE_INTERVAL_MS = 100;
 const DEBUG_INTERVAL_MS = 1000;
@@ -20,6 +21,7 @@ let bar: ControlsBar | undefined; // the screensaver mode's controls (patched en
 let captions: Captions | undefined; // and its park name captions
 let editorPanel: EditorPanel | undefined; // the editor's overlay view in the mode
 let welcome: Welcome | undefined; // the mode with no playlist to play: how to get one
+let gallery: Gallery | undefined; // the park gallery pane, over the editor or the welcome panel
 let onTitleScreen = false;
 let lastDebug = 0;
 // The patched engine's screensaver mode: playback runs only while it is on (the stock title
@@ -57,6 +59,10 @@ function startPlayer(): void {
     const inMode = mode?.active && mode.overlay;
     // In the mode the editor is drawn on the overlay: windows do not show there.
     editorPanel = inMode ? new EditorPanel(mode!) : undefined;
+    if (editorPanel) {
+        gallery = gallery ?? new Gallery(mode!);
+        editorPanel.gallery = gallery;
+    }
     editor = new Editor(player, editorPanel);
     player.start();
     if (inMode) {
@@ -74,12 +80,14 @@ function startPlayer(): void {
 /** In the mode, a playlist that cannot play shows how to get one (a fresh install has none). */
 function showWelcome(problem: string): void {
     if (mode?.active && mode.overlay) {
-        welcome = new Welcome(mode, problem);
+        gallery = gallery ?? new Gallery(mode);
+        welcome = new Welcome(mode, problem, gallery);
         welcome.open();
     }
 }
 
 function stopPlayer(release = false): void {
+    gallery?.close();
     welcome?.close();
     welcome = undefined;
     bar?.close();
@@ -210,6 +218,7 @@ function update(): void {
         startPlayer();
     }
     welcome?.update();
+    gallery?.update();
     if (!player?.isRunning) {
         return;
     }
@@ -225,7 +234,7 @@ function update(): void {
 
 function onTitle(action: (p: Player) => void): () => void {
     return () => {
-        if (context.mode === "title" && player?.isRunning && (!mode || mode.active)) {
+        if (context.mode === "title" && player?.isRunning && (!mode || mode.active) && !gallery?.isOpen) {
             action(player);
         }
     };
@@ -366,6 +375,10 @@ function main(): void {
             }
             // The editor panel takes the mouse over it, and the park around it while the editor is open
             // (a drag that started there keeps it to the end); the bar gets the rest.
+            if (gallery?.isOpen) {
+                gallery.onMouse(e); // (every mouse event is the gallery's while it is open)
+                return;
+            }
             if (welcome) {
                 welcome.onMouse(e);
                 return;

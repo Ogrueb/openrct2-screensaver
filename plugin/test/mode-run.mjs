@@ -1566,6 +1566,178 @@ console.log("ok: Import and Export playlist through the file dialogs");
 }
 console.log("ok: parks ticked on and off, Add park, and switching, new and duplicated playlists");
 
+// The park gallery (engine patch "the park gallery in the plugin API"; plugin/src/ui/gallery.ts): Add park and
+// New playlist open one pane over the editor with the engine's gallery as tiles; ticked parks are added to the
+// playlist or make a new one, the park behind paused meanwhile.
+{
+    const ed = id => scene.get("rcts.ed." + id);
+    const ga = id => scene.get("rcts.gallery." + id);
+    const at = e => [e.x + (e.width ?? 0) / 2, e.y + (e.height ?? 0) / 2];
+    const clickOn = e => { const [x, y] = at(e); mouse("move", x, y); mouse("down", x, y); mouse("up", x, y); };
+    const edClick = id => { assert.ok(ed(id), `${id} is shown`); clickOn(ed(id)); };
+    const gaClick = id => { assert.ok(ga(id), `${id} is shown`); clickOn(ga(id)); };
+    const inUse = (playlist.parks[0].key ?? playlist.parks[0].fileName).split("|")[0];
+    const park = (i, more = {}) => ({ path: `C:/parks/lib/park${i}.park`, folder: "C:/parks/lib", name: `Park ${String.fromCharCode(90 - i)}`, file: `park${i}.park`,
+        kind: "park", mapSize: { x: 60 + 20 * i, y: 60 + 20 * i }, date: { year: 1, month: 3, day: 1 }, modified: 1000 + i, size: 100, read: true,
+        picture: `C:/cache/previews/${i}.png`, pictureState: "ready", ...more });
+    const entries = [...Array(26).keys()].map(i => park(i));
+    entries[23] = park(23, { picture: "", pictureState: "pending" });
+    entries[22] = park(22, { file: inUse, path: `C:/parks/lib/${inUse}` });
+    entries[3] = park(3, { kind: "sv6", file: "zz old.sv6", path: "C:/parks/lib/zz old.sv6", name: "", mapSize: { x: 0, y: 0 }, pictureState: "none", picture: "" });
+    const details = { detailsVersion: 1, done: true, parks: {
+        [entries[0].path]: { name: "Zeta World", builders: ["ann", "bob", "cy"], scripts: ["Animator"], events: 2, released: "2015-06-01" },
+        [entries[5].path]: { builders: [], scripts: [], events: 0, released: "2020-01-01" } } };
+    Object.assign(mode, {
+        added: [], made: [], scans: 0, pictureAsks: [], isPaused: false, dialogClosed: false,
+        addPark(name, paths) { this.added.push([name, paths]); this.buildStatus = { ...this.buildStatus, state: "running", task: "add", sequence: name, started: now }; return true; },
+        newPlaylist(options) { this.made.push(options); if (this.dialogClosed) return false; this.buildStatus = { ...this.buildStatus, state: "running", task: "new", sequence: "", started: now }; return true; },
+        copyPlaylist() { return false; },
+        gallery: {
+            version: 1, entries,
+            folders: [{ path: "C:/Users/me/Documents/OpenRCT2/gallery", name: "gallery", count: 0, own: true }, { path: "C:/parks/lib", name: "lib", count: 26, own: false }],
+            addFolder() { this.folders.push({ path: "C:/more", name: "more", count: 0, own: false }); this.version++; return true; },
+            removeFolder(path) { this.folders = this.folders.filter(f => f.path !== path); this.version++; },
+            requestPictures(paths) { mode.pictureAsks.push(paths); },
+            refresh() {},
+            scanDetails() { mode.scans++; mode.files.set("gallery-details.json", JSON.stringify(details)); return true; },
+        },
+    });
+    Object.defineProperty(mode, "paused", { configurable: true, get() { return this.isPaused; }, set(v) { this.isPaused = v; } });
+    mode.buildStatus = { ...mode.buildStatus, state: "idle", task: "" };
+    mode.set(true);
+    tick(20);
+    shortcuts["rctscreensaver.edit"]();
+    tick(2);
+    edClick("parkAdd"); tick(25);
+    assert.deepEqual(mode.added, [], "Add park opens the gallery, not the Open dialog");
+    assert.equal(ga("title").text, "Park gallery");
+    assert.match(ga("sub").text, /^add parks to the playlist /);
+    assert.equal(mode.isPaused, true, "the park behind is paused while the gallery is open");
+    assert.equal(mode.scans, 1, "the details scan is started once");
+    assert.ok(ga("dim").z > ed("build.state").z + 100, "the pane lies over the editor");
+    dump("gallery-add-empty");
+    // Tiles: sorted by name (the generator's name first), four per row by default
+    assert.equal(ga("tile.0.name").text, "Park A", "sorted by name");
+    assert.equal(ga("tile.0.pic").src, entries[25].picture, "with the engine's render");
+    assert.ok(Math.abs(ga("tile.1.bg").y - ga("tile.0.bg").y) < 1 && ga("tile.4.bg").y > ga("tile.0.bg").y, "four tiles per row");
+    assert.deepEqual([...mode.pictureAsks.at(-1)], [entries[23].path], "the missing pictures in view are asked for");
+    const tileOf = path => { for (const [id, e] of scene) { const m = /^rcts\.gallery\.(tile\.\d+)\.name$/.exec(id); if (m && path(e.text)) return m[1]; } };
+    // A park of the playlist is marked and cannot be ticked
+    const usedTile = tileOf(t => t === entries[22].name);
+    assert.ok(ga(usedTile + ".in"), "a park the playlist plays is marked");
+    gaClick(usedTile + ".bg"); tick();
+    assert.match(ga("h.picks").text, /0 PARKS$/, "and cannot be picked");
+    assert.equal(ga("go").fill, "#2a2e2c80", "nothing to add yet");
+    // Ticks number the parks in the order picked
+    gaClick("tile.1.bg"); gaClick("tile.0.bg"); tick();
+    assert.equal(ga("tile.1.num").text, "1");
+    assert.equal(ga("tile.0.num").text, "2");
+    assert.match(ga("h.picks").text, /2 PARKS$/);
+    assert.equal(ga("pick.0.name").text, "Park B");
+    assert.equal(ga("go.text").text, "Add 2 parks and build");
+    gaClick("pickx.0.icon"); tick();
+    assert.equal(ga("tile.0.num").text, "1", "a pick taken out renumbers the rest");
+    gaClick("tile.1.bg"); tick();
+    // The slider: 1 to 7 per row, remembered
+    const sl = ga("slider");
+    mouse("move", sl.x + sl.width - 2, sl.y + 2); mouse("down", sl.x + sl.width - 2, sl.y + 2); mouse("up", sl.x + sl.width - 2, sl.y + 2); tick();
+    assert.equal(ga("cols.n").text, "7");
+    assert.ok(Math.abs(ga("tile.6.bg").y - ga("tile.0.bg").y) < 1 && ga("tile.7.bg").y > ga("tile.0.bg").y, "seven tiles per row");
+    assert.equal(saved["RCTScreensaver.settings"].galleryColumns, 7, "the choice is kept");
+    mouse("down", sl.x + 2, sl.y + 2); mouse("up", sl.x + 2, sl.y + 2); tick();
+    assert.equal(ga("cols.n").text, "1");
+    assert.ok(ga("tile.0.bg").width > 800, "one large tile per row");
+    // The wheel scrolls by rows; the row at the grid's lower edge is cut
+    const grid = ga("grid");
+    mouse("move", grid.x + 50, grid.y + 50); mouse("wheel", 0, 0, 0, -1); tick();
+    assert.ok(!ga("tile.0.bg") && ga("tile.1.bg"), "a wheel step scrolls a row");
+    mouse("wheel", 0, 0, 0, 1); tick();
+    const mid = sl.x + sl.width / 2;
+    mouse("down", mid, sl.y + 2); mouse("up", mid, sl.y + 2); tick();
+    assert.equal(ga("cols.n").text, "4");
+    assert.ok(ga("tile.12.bg").height < ga("tile.0.bg").height && Math.abs(ga("tile.12.bg").y + ga("tile.12.bg").height - grid.y - grid.height) < 1,
+        "the row at the grid's lower edge is cut there");
+    assert.ok(ga("tile.12.pic").cropHeight < 200, "its picture cropped");
+    // Filters: folders, size, what the generator found
+    gaClick("size.3"); tick();
+    assert.ok(tileOf(() => true) && !tileOf(t => t === "Park Z"), "L leaves out the small maps");
+    gaClick("size.0"); tick();
+    gaClick("has.scripts"); tick();
+    assert.equal(ga("tile.0.name").text, "Zeta World", "Scripts: the parks whose download ships scripts, by the generator's name");
+    assert.ok(!ga("tile.1.bg"));
+    assert.match(ga("tile.0.by").text, /^ann, bob \+1 · 2015 · 60×60$/, "builders, year and map size under the name");
+    assert.deepEqual([ga("tile.0.m0t").text, ga("tile.0.m1t").text].sort(), ["events", "scripts"], "and what its scripts bring on the picture");
+    mouse("move", ...at(ga("tile.0.bg"))); tick();
+    assert.equal(ga("d.v0").text, "ann, bob, cy", "the park under the mouse in the details");
+    gaClick("has.scripts"); tick();
+    gaClick("show.1"); tick();
+    assert.ok(!tileOf(t => t === entries[22].name), "Not in playlist hides the playlist's parks");
+    gaClick("show.0"); tick();
+    gaClick("sort.1"); tick();
+    assert.equal(ga("tile.0.name").text, "Park U", "Date: newest first, by the release date where known");
+    gaClick("sort.0"); tick();
+    gaClick("addFolder"); tick();
+    assert.equal(ga("folder.2.t").text, "more", "Add folder lists the new folder");
+    mouse("move", ...at(ga("folder.2.t"))); tick();
+    gaClick("folderx.2.icon"); tick();
+    assert.ok(!ga("folder.2.t"), "and its cross takes it out");
+    dump("gallery-add");
+    // Add: the engine gets the picks in order, the pane closes, the park plays on
+    gaClick("go"); tick(2);
+    assert.deepEqual(JSON.parse(JSON.stringify(mode.added)), [[playlist.sequence, [entries[25].path, entries[24].path]]], "the picks go to the engine in their order");
+    assert.ok(!ga("title"), "the pane closes");
+    assert.equal(mode.isPaused, false, "and the park plays on");
+    assert.equal(ed("build.state").text, "adding the park", "the build pane follows the task");
+    mode.files.set("task-add.json", JSON.stringify({ taskVersion: 1, task: "add", started: now, ok: false, finished: now, sequence: playlist.sequence,
+        error: "x", messages: [{ level: "error", text: "Adding the park failed: x" }] }));
+    mode.buildStatus = { ...mode.buildStatus, state: "failed", finished: now };
+    tick(6);
+    // New playlist: the picks capped at six rows over the generation options; the Save dialog names it
+    edClick("plNew"); tick(2);
+    assert.match(ga("sub").text, /new playlist/);
+    assert.ok(ga("gseg.motion.0"), "the generation options are in the pane");
+    assert.ok(!ga("show.0"), "no playlist to compare with");
+    for (let i = 0; i < 8; i++) gaClick(`tile.${i}.bg`);
+    tick();
+    assert.match(ga("h.picks").text, /8 PARKS$/);
+    assert.ok(ga("pick.7.name") && !ga("pick.1.name"), "six rows of picks, scrolled to the newest");
+    assert.ok(ga("picks.thumb"), "with a scroll bar");
+    assert.ok(ga("gseg.motion.0").y > ga("picks").y + ga("picks").height, "the options stay below the list");
+    gaClick("gseg.motion.1"); tick();
+    dump("gallery-new");
+    mode.dialogClosed = true;
+    gaClick("go"); tick();
+    assert.ok(ga("title"), "the Save dialog closed: the pane stays with its picks");
+    mode.dialogClosed = false;
+    gaClick("go"); tick(2);
+    assert.equal(mode.made.at(-1).paths.length, 8);
+    assert.ok(!ga("title"));
+    mode.files.set("task-new.json", JSON.stringify({ taskVersion: 1, task: "new", started: now, ok: true, finished: now,
+        sequence: "Evening", playlist: "C:/x/Evening.toml", parks: [{ key: "park0.park", name: "A" }], messages: [] }));
+    mode.buildStatus = { ...mode.buildStatus, state: "done", finished: now };
+    tick(8);
+    assert.equal(JSON.parse(mode.files.get("Evening.json")).props.generation.motion, "static", "the options go into the new playlist's live file");
+    // Keys are the pane's while it is open
+    edClick("parkAdd"); tick(2);
+    if (ga("title")) {
+        const before = logs.length;
+        shortcuts["rctscreensaver.edit"]();
+        tick(2);
+        assert.ok(ga("title"), "E does not close the editor under the pane");
+        gaClick("cancel"); tick();
+        assert.ok(!ga("title") && mode.isPaused === false, "Cancel closes it");
+        void before;
+    }
+    for (const k of ["gallery", "added", "made", "scans", "pictureAsks", "isPaused", "addPark", "newPlaylist", "copyPlaylist", "paused"]) delete mode[k];
+    mode.files.delete("gallery-details.json");
+    delete saved["RCTScreensaver.settings"];
+    mode.buildStatus = { ...mode.buildStatus, state: "idle", task: "" };
+    if (ed("title") || ed("field")) shortcuts["rctscreensaver.edit"]();
+    mode.set(false);
+    tick();
+}
+console.log("ok: the park gallery: tiles, picks, filters, the slider, Add and New playlist");
+
 // A fresh install (only the game's own title sequences): no playlist installed. The mode shows how to get
 // one; without a generator the buttons are gray with the engine's reason; New playlist makes one, builds it
 // and the player starts on it.

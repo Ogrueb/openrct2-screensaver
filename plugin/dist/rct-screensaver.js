@@ -112,7 +112,8 @@
     multiThreading: null,
     editorPinned: true,
     bench: false,
-    profilerExport: ""
+    profilerExport: "",
+    galleryColumns: 4
   };
   function loadSettings() {
     const stored = context.sharedStorage.get(NAMESPACE + ".settings", {});
@@ -442,6 +443,24 @@
       if (this.parksAvailable) {
         this.startBundle("new", () => this.api.newPlaylist());
       }
+    }
+    /** The gallery's picks added to the playlist (no dialog), then the playlist built. True when it started. */
+    addParks(sequence, paths) {
+      if (!this.parksAvailable || this.running || !paths.length) {
+        return false;
+      }
+      this.startEdits = JSON.parse(JSON.stringify(loadEdits()));
+      this.last = this.last ?? readBuildResult(sequence);
+      this.startBundle("add", () => this.api.addPark(sequence, paths), sequence);
+      return this.running;
+    }
+    /** A new playlist of the gallery's picks: the system's Save dialog names it. True when it started. */
+    newPlaylistOf(paths) {
+      if (!this.parksAvailable || this.running || !paths.length) {
+        return false;
+      }
+      this.startBundle("new", () => this.api.newPlaylist({ paths }));
+      return this.running;
     }
     /** Duplicate: the system's Save dialog names the copy, which is made, built and played. */
     copyPlaylist(sequence) {
@@ -6113,6 +6132,947 @@
     return scale <= 1 ? 1 : scale <= 2 ? 2 : 3;
   }
 
+  // src/ui/generation.ts
+  var GEN_CHOICES = {
+    motion: [["Pans", "pans", "Glide from view to view"], ["Static", "static", "Hold each view, then cut"]],
+    route: [["Circuit", "circuit", "Loop around the park"], ["Random", "random", "The generator's pick order, varying angle and zoom"]],
+    reverse: [["Off", false, "Orders as found"], ["On", true, "Each order reversed too"]],
+    ridePans: [
+      ["Include", "include", "Adds a pan along a ride's track"],
+      ["Exclude", "exclude", "No ride pans"],
+      ["Only", "only", "Overview and ride pans only"]
+    ],
+    parkScripts: [["Off", false, "The parks' own scripts stay off"], ["On", true, "Run the parks' own scripts (companion plugins)"]],
+    parkViews: [["Off", false, "No views on scripted events"], ["On", true, "Views on the parks' scripted animations and shows"]]
+  };
+  var GEN_STEPS = {
+    variants: { step: 1, min: 1, max: 10, text: (v) => `${v}` },
+    parkMin: { step: 5, min: 0, max: 300, text: (v) => v ? `${v} s` : "none" },
+    parkCap: { step: 5, min: 10, max: 300, text: (v) => `${v} s` },
+    timeScale: { step: 0.25, min: 0.5, max: 3, text: (v) => `\xD7 ${v.toFixed(2)}` }
+  };
+  function generationClick(g, id, prefix) {
+    if (id.startsWith(`${prefix}seg.`)) {
+      const [, key, i] = id.slice(prefix.length).split(".");
+      const choice = GEN_CHOICES[key]?.[Number(i)];
+      return choice ? { ...g, [key]: choice[1] } : g;
+    }
+    if (id.startsWith(`${prefix}step.`)) {
+      const [, key, sign] = id.slice(prefix.length).split(".");
+      const k = key;
+      const st = GEN_STEPS[k];
+      if (!st) {
+        return g;
+      }
+      let v = Math.round((g[k] + (sign === "more" ? st.step : -st.step)) * 100) / 100;
+      v = Math.max(st.min, Math.min(st.max, v));
+      v = k === "parkMin" ? Math.min(v, g.parkCap - 5) : k === "parkCap" ? Math.max(v, g.parkMin + 5) : v;
+      return { ...g, [k]: v };
+    }
+    return void 0;
+  }
+  function generationRows(scene, overlay, g, prefix, x, y, width, place, state, rowH = 26) {
+    const rowLabel = (id, text) => label(scene, id, text, { x, y, width: 0, height: rowH }, 13, overlay);
+    const segments = (key, text) => {
+      rowLabel(`${prefix}seg.${key}.label`, text);
+      const choices = GEN_CHOICES[key];
+      const widths = choices.map(([t]) => Math.ceil(measure(overlay, t, 12, true).width) + 16);
+      let sx = x + width - widths.reduce((a, w) => a + w, 0) - 4 * (choices.length - 1);
+      const sy = y + Math.round((rowH - 22) / 2);
+      choices.forEach(([t, value, tip], i) => {
+        const id = `${prefix}seg.${key}.${i}`;
+        const r = place(id, { x: sx, y: sy, width: widths[i], height: 22 }, tip);
+        button(scene, id, r, state(id, g[key] === value), { text: t, textSize: 12 }, overlay);
+        sx += widths[i] + 4;
+      });
+      y += rowH;
+    };
+    const stepper = (key, text, tip) => {
+      rowLabel(`${prefix}step.${key}.label`, text);
+      const st = GEN_STEPS[key];
+      const w = 22;
+      const sy = y + Math.round((rowH - w) / 2);
+      const more = place(`${prefix}step.${key}.more`, { x: x + width - w, y: sy, width: w, height: w }, tip, g[key] >= st.max);
+      const box = { x: more.x - 4 - 52, y: sy, width: 52, height: w };
+      const less = place(`${prefix}step.${key}.less`, { x: box.x - 4 - w, y: sy, width: w, height: w }, tip, g[key] <= st.min);
+      button(scene, `${prefix}step.${key}.less`, less, state(`${prefix}step.${key}.less`, false), { icon: "less", iconSize: 16 }, overlay);
+      button(scene, `${prefix}step.${key}.more`, more, state(`${prefix}step.${key}.more`, false), { icon: "add", iconSize: 16 }, overlay);
+      scene.set(`${prefix}stepv.${key}`, { type: "rect", ...box, fill: THEME.editorList, z: 1 });
+      const vid = `${prefix}stept.${key}`;
+      label(scene, vid, st.text(g[key]), { x: box.x + box.width / 2, y: sy, width: 0, height: w }, 13, overlay);
+      scene.set(vid, { ...scene.get(vid), align: "center" });
+      y += rowH;
+    };
+    segments("motion", "Motion");
+    segments("route", "View order");
+    if (g.route === "circuit") {
+      stepper("variants", "Variants", "Circuit orders per park, a different one on each visit (small parks may have fewer)");
+      segments("reverse", "Include reverse");
+    }
+    if (g.motion === "pans") {
+      segments("ridePans", "Ride pans");
+    }
+    stepper("parkMin", "Shortest park", "Shortest time per park");
+    stepper("parkCap", "Longest park", "Longest time per park: the lowest-scoring views drop to fit");
+    stepper("timeScale", "Time scale", "Multiplies every generated hold and pan: above 1 is slower");
+    return y;
+  }
+
+  // src/ui/gallery.ts
+  function galleryApi() {
+    const api = typeof screensaver === "undefined" ? void 0 : screensaver.gallery;
+    return api && typeof api.requestPictures === "function" ? api : void 0;
+  }
+  var GALLERY_COLUMNS = { min: 1, max: 7, default: 4 };
+  var PREVIEW = { width: 250, height: 200 };
+  var DETAILS_FILE = "gallery-details.json";
+  var DETAILS_MS = 2e3;
+  var REDRAW_MS = 1e3;
+  var LIFT = 300;
+  var PICK_ROW = 34;
+  var NEW_PICK_ROWS = 6;
+  var ORANGE = THEME.dragLine;
+  function sizeClass(entry) {
+    const side = Math.max(entry.mapSize?.x ?? 0, entry.mapSize?.y ?? 0);
+    return side <= 0 ? "any" : side < 100 ? "s" : side < 200 ? "m" : "l";
+  }
+  function filterEntries(entries, f, details, used, nameOf) {
+    const shown = entries.filter((e) => (!f.folder || e.folder === f.folder) && (!f.hideUsed || !used(e)) && (f.size === "any" || sizeClass(e) === f.size) && (!f.scripts || (details[e.path]?.scripts?.length ?? 0) > 0) && (!f.events || (details[e.path]?.events ?? 0) > 0));
+    const when = (e) => {
+      const released = details[e.path]?.released;
+      return released ? Date.parse(released) / 1e3 : e.modified;
+    };
+    const area = (e) => (e.mapSize?.x ?? 0) * (e.mapSize?.y ?? 0);
+    const byName = (a, b) => nameOf(a).localeCompare(nameOf(b), void 0, { sensitivity: "base" });
+    return shown.sort(f.sort === "date" ? (a, b) => when(b) - when(a) || byName(a, b) : f.sort === "size" ? (a, b) => area(b) - area(a) || byName(a, b) : byName);
+  }
+  function gridLayout(width, columns) {
+    const gap = columns > 5 ? 6 : 12;
+    const tile = Math.max(40, Math.floor((width - (columns - 1) * gap) / columns));
+    const picture = Math.round((tile - 2) * PREVIEW.height / PREVIEW.width);
+    const caption = tile < 170 ? 24 : 44;
+    return { gap, tile, picture, caption, row: picture + 2 + caption + gap };
+  }
+  var Gallery = class {
+    constructor(mode2) {
+      this.mode = mode2;
+      this.hits = [];
+      this.mouse = { x: 0, y: 0 };
+      this.filter = { folder: "", hideUsed: false, size: "any", scripts: false, events: false, sort: "name" };
+      this.columns = GALLERY_COLUMNS.default;
+      this.picks = [];
+      this.scroll = 0;
+      // the grid's first row
+      this.pickScroll = 0;
+      this.details = {};
+      this.detailsDone = false;
+      this.detailsRead = 0;
+      this.scanned = -1;
+      // the entry count the details scan was started for
+      this.shownEntries = [];
+      this.listKey = "";
+      this.asked = "";
+      this.drawn = "";
+      this.dirty = true;
+      this.drawnVersion = -1;
+      this.drawnAt = 0;
+      this.gridRect = { x: 0, y: 0, width: 0, height: 0 };
+      this.picksRect = { x: 0, y: 0, width: 0, height: 0 };
+      this.fullRows = 1;
+      this.totalRows = 0;
+      this.note = "";
+      // the last thing that did not work, in the header
+      this.fits = /* @__PURE__ */ new Map();
+      this.layer = new Layer(mode2.overlay, "rcts.gallery.");
+    }
+    get isOpen() {
+      return this.job !== void 0;
+    }
+    open(job, host) {
+      if (!galleryApi()) {
+        return;
+      }
+      this.job = job;
+      this.host = host;
+      this.picks = [];
+      this.scroll = 0;
+      this.pickScroll = 0;
+      this.note = "";
+      this.generation = job.kind === "new" ? { ...job.generation } : void 0;
+      this.filter = { ...this.filter, folder: "", hideUsed: false };
+      const stored = loadSettings().galleryColumns;
+      this.columns = Math.max(GALLERY_COLUMNS.min, Math.min(GALLERY_COLUMNS.max, Math.round(stored ?? GALLERY_COLUMNS.default)));
+      this.listKey = "";
+      this.asked = "";
+      this.scanned = -1;
+      this.detailsRead = 0;
+      this.setPaused(true);
+      this.mode.cursorVisible = true;
+      this.layer.show(true, 0);
+      this.dirty = true;
+      this.update();
+    }
+    close() {
+      if (!this.job) {
+        return;
+      }
+      this.job = void 0;
+      this.host = void 0;
+      this.down = void 0;
+      this.setPaused(false);
+      this.layer.clear();
+      this.drawn = "";
+    }
+    /** The park behind holds still while the pane is open (owner, 2026-11-16: headroom for the renders). */
+    setPaused(on) {
+      if (typeof screensaver !== "undefined" && "paused" in screensaver) {
+        try {
+          screensaver.paused = on;
+        } catch {
+        }
+      }
+    }
+    update() {
+      const api = galleryApi();
+      if (!this.job || !api) {
+        return;
+      }
+      this.readDetails(api);
+      const version = api.version;
+      if (!this.dirty && version === this.drawnVersion && Date.now() - this.drawnAt < REDRAW_MS) {
+        return;
+      }
+      this.drawnVersion = version;
+      this.drawnAt = Date.now();
+      const scene = this.draw(api);
+      const signature = JSON.stringify([...scene.entries()]);
+      if (signature !== this.drawn) {
+        this.drawn = signature;
+        this.layer.render(scene);
+      }
+      this.dirty = false;
+    }
+    /** The generator's details, read again every couple of seconds while its scan runs; the scan is started
+     *  when the pane opens and when parks appear. */
+    readDetails(api) {
+      const count = api.entries.length;
+      if (count !== this.scanned && typeof api.scanDetails === "function" && count > 0) {
+        try {
+          if (api.scanDetails() !== false) {
+            this.scanned = count;
+            this.detailsDone = false;
+          }
+        } catch {
+          this.scanned = count;
+        }
+      }
+      if (Date.now() - this.detailsRead < DETAILS_MS || this.detailsDone && this.scanned === count && this.detailsRead > 0) {
+        return;
+      }
+      this.detailsRead = Date.now();
+      const text = filesApi()?.readFile(DETAILS_FILE);
+      if (!text) {
+        return;
+      }
+      try {
+        const file = JSON.parse(text);
+        if (file.detailsVersion === 1 && file.parks) {
+          this.dirty = true;
+          this.details = file.parks;
+          this.detailsDone = file.done === true;
+          this.listKey = "";
+        }
+      } catch {
+      }
+    }
+    get hasDetails() {
+      return Object.keys(this.details).length > 0;
+    }
+    used(e) {
+      return this.job?.kind === "add" && this.job.has.has(e.file.toLowerCase());
+    }
+    nameOf(e) {
+      return this.details[e.path]?.name || e.name || e.file.replace(/\.[^.]+$/, "");
+    }
+    entries(api) {
+      const key = `${api.version}|${JSON.stringify(this.filter)}`;
+      if (key !== this.listKey) {
+        this.listKey = key;
+        this.shownEntries = filterEntries(api.entries.slice(), this.filter, this.details, (e) => this.used(e), (e) => this.nameOf(e));
+        const known = new Set(api.entries.map((e) => e.path));
+        this.picks = this.picks.filter((p) => known.has(p));
+      }
+      return this.shownEntries;
+    }
+    /** Every mouse event is the pane's while it is open. */
+    onMouse(e) {
+      if (!this.job) {
+        return false;
+      }
+      if (e.type !== "wheel") {
+        this.mouse = { x: e.x, y: e.y };
+      }
+      const hit = this.hitAt(this.mouse.x, this.mouse.y);
+      if (e.type === "wheel") {
+        const step = e.delta > 0 ? -1 : 1;
+        if (contains(this.picksRect, this.mouse.x, this.mouse.y)) {
+          this.pickScroll += step;
+        } else if (contains(this.gridRect, this.mouse.x, this.mouse.y)) {
+          this.scroll += step;
+        }
+      } else if (e.type === "down" && e.button === 0) {
+        this.down = hit && !hit.off ? hit.id : void 0;
+        if (this.down === "slider" || this.down === "sb") {
+          this.dragTo(hit);
+        }
+      } else if (e.type === "move" && this.down) {
+        const held = this.hits.find((h) => h.id === this.down);
+        if (held && (this.down === "slider" || this.down === "sb")) {
+          this.dragTo(held);
+        } else if (this.down.startsWith("pick.") && hit?.id.startsWith("pick.") && hit.id !== this.down) {
+          const from = Number(this.down.slice(5));
+          const to = Number(hit.id.slice(5));
+          const [moved] = this.picks.splice(from, 1);
+          this.picks.splice(to, 0, moved);
+          this.down = `pick.${to}`;
+        }
+      } else if (e.type === "up" && e.button === 0) {
+        if (hit && !hit.off && this.down === hit.id) {
+          this.click(hit.id);
+        }
+        this.down = void 0;
+      }
+      this.dirty = true;
+      if (this.job) {
+        this.update();
+      }
+      return true;
+    }
+    hitAt(x, y) {
+      for (let i = this.hits.length - 1; i >= 0; i--) {
+        if (contains(this.hits[i].rect, x, y)) {
+          return this.hits[i];
+        }
+      }
+      return void 0;
+    }
+    dragTo(hit) {
+      if (hit.id === "slider") {
+        const span = GALLERY_COLUMNS.max - GALLERY_COLUMNS.min;
+        const columns = GALLERY_COLUMNS.min + Math.round(sliderValue(hit.rect, this.mouse.x) * span);
+        if (columns !== this.columns) {
+          const first = this.scroll * this.columns;
+          this.columns = columns;
+          this.scroll = Math.floor(first / columns);
+          saveSettings({ ...loadSettings(), galleryColumns: columns });
+        }
+      } else {
+        const share = Math.max(0, Math.min(1, (this.mouse.y - hit.rect.y) / Math.max(1, hit.rect.height)));
+        this.scroll = Math.round(share * Math.max(0, this.totalRows - this.fullRows));
+      }
+    }
+    click(id) {
+      const api = galleryApi();
+      const host = this.host;
+      const job = this.job;
+      if (!api || !host || !job) {
+        return;
+      }
+      this.note = "";
+      const [kind, arg] = id.split(/\.(.*)/s);
+      const n = Number(arg);
+      if (id === "close" || id === "cancel") {
+        this.close();
+      } else if (id === "go") {
+        const started = job.kind === "add" ? host.add(this.picks.slice()) : host.create(this.picks.slice(), this.generation);
+        if (started) {
+          this.close();
+        }
+      } else if (id === "browse") {
+        if (host.browse(this.generation)) {
+          this.close();
+        }
+      } else if (id === "emptyImport") {
+        if (host.importBundle?.()) {
+          this.close();
+        }
+      } else if (id === "addFolder" || id === "emptyAdd") {
+        try {
+          if (api.addFolder()) {
+            this.filter.folder = "";
+            this.listKey = "";
+          }
+        } catch (e) {
+          this.note = `The folder was not added: ${e instanceof Error ? e.message : String(e)}`;
+        }
+      } else if (kind === "folder") {
+        this.filter.folder = n < 0 ? "" : api.folders[n]?.path ?? "";
+        this.scroll = 0;
+      } else if (kind === "folderx") {
+        const folder = api.folders[n];
+        if (folder && !folder.own) {
+          api.removeFolder(folder.path);
+          if (this.filter.folder === folder.path) {
+            this.filter.folder = "";
+          }
+          this.listKey = "";
+        }
+      } else if (kind === "show") {
+        this.filter.hideUsed = n === 1;
+        this.scroll = 0;
+      } else if (kind === "size") {
+        this.filter.size = ["any", "s", "m", "l"][n];
+        this.scroll = 0;
+      } else if (id === "has.scripts") {
+        this.filter.scripts = !this.filter.scripts;
+        this.scroll = 0;
+      } else if (id === "has.events") {
+        this.filter.events = !this.filter.events;
+        this.scroll = 0;
+      } else if (kind === "sort") {
+        this.filter.sort = ["name", "date", "size"][n];
+        this.scroll = 0;
+      } else if (kind === "tile") {
+        const entry = this.shownEntries[n];
+        if (entry && !this.used(entry)) {
+          const at = this.picks.indexOf(entry.path);
+          if (at >= 0) {
+            this.picks.splice(at, 1);
+          } else {
+            this.picks.push(entry.path);
+            this.pickScroll = this.picks.length;
+          }
+        }
+      } else if (kind === "pickx") {
+        this.picks.splice(n, 1);
+      } else if (id === "clear") {
+        this.picks = [];
+      } else if (this.generation && id.startsWith("g")) {
+        this.generation = generationClick(this.generation, id, "g") ?? this.generation;
+      }
+    }
+    fit(text, size, width, bold = false) {
+      const key = `${size}|${bold ? 1 : 0}|${Math.round(width)}|${text}`;
+      let out = this.fits.get(key);
+      if (out === void 0) {
+        const overlay = this.mode.overlay;
+        out = text;
+        if (overlay.measureText(text, { size, bold }).width > width) {
+          let t = text.slice(0, Math.max(1, Math.floor(text.length * width / overlay.measureText(text, { size, bold }).width) + 1));
+          while (t.length > 1 && overlay.measureText(t + "\u2026", { size, bold }).width > width) {
+            t = t.slice(0, -1);
+          }
+          out = t.trimEnd() + "\u2026";
+        }
+        if (this.fits.size > 3e3) {
+          this.fits.clear();
+        }
+        this.fits.set(key, out);
+      }
+      return out;
+    }
+    draw(api) {
+      const scene = /* @__PURE__ */ new Map();
+      const overlay = this.mode.overlay;
+      const job = this.job;
+      const host = this.host;
+      const W = ui.width;
+      const H = ui.height;
+      const narrow = W < 1300;
+      const hover = this.hitAt(this.mouse.x, this.mouse.y)?.id;
+      this.hits = [];
+      const rect = (id, r, fill, z = Z.face) => scene.set(id, { type: "rect", ...r, fill, z });
+      const text = (id, t, x, y2, size, more = {}) => scene.set(id, { type: "text", text: t, x, y: y2, size, colour: THEME.text, shadow: THEME.textShadow, z: Z.icon, ...more });
+      const place = (id, r, tip = "", off = false) => {
+        this.hits.push({ id, rect: r, tip, off });
+        return r;
+      };
+      const state = (id, on = false, off = false) => ({ hover: hover === id && !off, down: this.down === id && hover === id, on, disabled: off });
+      const heading = (id, t, x, y2) => text(id, t.toUpperCase(), x, y2, 11, { colour: THEME.textDim, shadow: void 0 });
+      rect("dim", { x: 0, y: 0, width: W, height: H }, "#000000a0", Z.cover);
+      const mx = Math.max(8, Math.min(112, Math.round(W * 0.058)));
+      const my = Math.max(8, Math.min(56, Math.round(H * 0.052)));
+      const pane = { x: mx, y: my, width: W - 2 * mx, height: H - 2 * my };
+      backing(scene, "pane", pane, "#0a140ef0");
+      const pad = 12;
+      const entries = this.entries(api);
+      const all = api.entries;
+      const empty = all.length === 0;
+      const hy = pane.y + pad;
+      text("title", "Park gallery", pane.x + pad, hy + 4, 20, { bold: true });
+      const tw = measure(overlay, "Park gallery", 20, true).width;
+      const sub = job.kind === "new" ? empty ? "add parks to make a playlist" : "pick the parks of a new playlist" : `add parks to the playlist ${job.playlist}`;
+      text("sub", this.fit(sub, 14, pane.width * 0.3), pane.x + pad + tw + 14, hy + 9, 14, { colour: THEME.textDim });
+      const close = place("close", { x: pane.x + pane.width - pad - 30, y: hy, width: 30, height: 30 }, "Close the gallery");
+      button(scene, "close", close, state("close"), { icon: "close", iconSize: 16 }, overlay);
+      const paused = typeof screensaver !== "undefined" && screensaver.paused === true;
+      const rendering = all.filter((e) => e.pictureState === "pending").length;
+      const facts = empty ? "" : `${all.length} park${all.length === 1 ? "" : "s"} in ${api.folders.length} folder${api.folders.length === 1 ? "" : "s"}` + (rendering ? ` \xB7 ${rendering} picture${rendering === 1 ? "" : "s"} still rendering` : "");
+      let hx = close.x - 14;
+      if (this.note) {
+        const t = this.fit(this.note, 13, pane.width * 0.45);
+        hx -= measure(overlay, t, 13).width;
+        text("note", t, hx, hy + 9, 13, { colour: THEME.warning });
+      } else {
+        if (facts) {
+          hx -= measure(overlay, facts, 13).width;
+          text("facts", facts, hx, hy + 9, 13, { colour: THEME.textDim });
+          hx -= 18;
+        }
+        if (paused && !narrow) {
+          const t = "Park paused while the gallery is open";
+          hx -= measure(overlay, t, 13).width;
+          text("paused", t, hx, hy + 9, 13, { colour: THEME.pending });
+        }
+      }
+      const top = hy + 34 + pad;
+      const bottom = pane.y + pane.height - pad;
+      const sideW = narrow ? 170 : 216;
+      const rightW = narrow ? 230 : 316;
+      const sx = pane.x + pad;
+      const rx = pane.x + pane.width - pad - rightW;
+      const grid = { x: sx + sideW + pad, y: top, width: rx - pad - (sx + sideW + pad), height: bottom - top };
+      this.gridRect = grid;
+      let y = top;
+      heading("h.folders", "Folders", sx + 1, y);
+      y += 17;
+      const folderRow = (id, name, count, on, removable, tip) => {
+        const r = place(id, { x: sx, y, width: sideW, height: 26 }, tip);
+        if (on || hover === id || hover === `${id.replace("folder", "folderx")}`) {
+          rect(`${id}.bg`, r, on ? THEME.faceOn : THEME.face);
+        }
+        const showX = removable && (hover === id || hover === id.replace("folder", "folderx"));
+        const countText = `${count}`;
+        const cw = measure(overlay, countText, 13).width;
+        text(`${id}.t`, this.fit(name, 14, sideW - 20 - cw - (showX ? 26 : 0)), sx + 8, y + 5, 14);
+        text(`${id}.n`, countText, sx + sideW - 8 - cw - (showX ? 24 : 0), y + 6, 13, { colour: THEME.textDim, shadow: void 0 });
+        if (showX) {
+          const xid = id.replace("folder", "folderx");
+          const xr = place(xid, { x: sx + sideW - 24, y: y + 2, width: 22, height: 22 }, "Take this folder out of the gallery (its files stay)");
+          button(scene, xid, xr, state(xid), { icon: "close", iconSize: 12 }, overlay);
+        }
+        y += 26;
+      };
+      folderRow("folder.-1", "All parks", all.length, this.filter.folder === "", false, "Parks from every gallery folder");
+      const folderRoom = Math.max(1, Math.floor((bottom - top - (job.kind === "add" ? 420 : 370)) / 26));
+      api.folders.slice(0, folderRoom).forEach((f, i) => folderRow(`folder.${i}`, f.name, f.count, this.filter.folder === f.path, !f.own, f.path));
+      y += 6;
+      const addFolder = place(
+        "addFolder",
+        { x: sx, y, width: sideW, height: 28 },
+        "Add a folder of parks to the gallery, with its subfolders; nothing is copied or moved"
+      );
+      button(scene, "addFolder", addFolder, state("addFolder"), { icon: "add", iconSize: 16, text: "Add folder\u2026", textSize: 14, left: true }, overlay);
+      y += 28 + 14;
+      const group = (title, ids, labels, on, tips, off = []) => {
+        heading(`h.${ids[0]}`, title, sx + 1, y);
+        y += 17;
+        const w = (sideW - 3 * (ids.length - 1)) / ids.length;
+        ids.forEach((id, i) => {
+          const r = place(id, { x: Math.round(sx + i * (w + 3)), y, width: Math.round(w), height: 26 }, tips[i], off[i] === true);
+          button(scene, id, r, state(id, on[i], off[i] === true), { text: labels[i], textSize: 13 }, overlay);
+        });
+        y += 26 + 14;
+      };
+      if (job.kind === "add") {
+        group(
+          "Show",
+          ["show.0", "show.1"],
+          ["All", narrow ? "Not in" : "Not in playlist"],
+          [!this.filter.hideUsed, this.filter.hideUsed],
+          ["Every park of the gallery", "Leave out the parks the playlist already plays"]
+        );
+      }
+      const sizes = ["any", "s", "m", "l"];
+      group(
+        "Map size",
+        sizes.map((_, i) => `size.${i}`),
+        ["Any", "S", "M", "L"],
+        sizes.map((s) => this.filter.size === s),
+        ["Every map size", "Maps under 100 tiles on the longer side", "Maps of 100 to 199 tiles", "Maps of 200 tiles and more"]
+      );
+      const noDetails = !this.hasDetails;
+      const waitTip = typeof api.scanDetails === "function" ? "The parks are still being read" : "Needs the generator's park details, which this game build does not read";
+      group(
+        "Has",
+        ["has.scripts", "has.events"],
+        ["Scripts", narrow ? "Events" : "Event views"],
+        [this.filter.scripts, this.filter.events],
+        [noDetails ? waitTip : "Only parks that ship scripts of their own", noDetails ? waitTip : "Only parks whose scripts offer animation or show views"],
+        [noDetails, noDetails]
+      );
+      group(
+        "Sort by",
+        ["sort.0", "sort.1", "sort.2"],
+        ["Name", "Date", "Size"],
+        ["name", "date", "size"].map((s) => this.filter.sort === s),
+        ["By name", "Newest first: the release date where the park is in the NE catalog, else the file's", "Largest map first"]
+      );
+      heading("h.cols", "Tiles per row", sx + 1, y);
+      text("cols.n", `${this.columns}`, sx + sideW - 1 - measure(overlay, `${this.columns}`, 11).width, y, 11, { shadow: void 0 });
+      y += 17;
+      const span = GALLERY_COLUMNS.max - GALLERY_COLUMNS.min;
+      const sl = place("slider", { x: sx + 2, y, width: sideW - 4, height: 22 }, "How many parks a row shows, 1 to 7");
+      slider(scene, "slider", sl, (this.columns - GALLERY_COLUMNS.min) / span, hover === "slider" || this.down === "slider");
+      y += 26;
+      text("cols.min", `${GALLERY_COLUMNS.min}`, sx + 5, y, 11, { colour: THEME.textDim, shadow: void 0 });
+      text("cols.max", `${GALLERY_COLUMNS.max}`, sx + sideW - 12, y, 11, { colour: THEME.textDim, shadow: void 0 });
+      const busy = host.busy();
+      const browse = place(
+        "browse",
+        { x: sx, y: bottom - 28 - 20, width: sideW, height: 28 },
+        busy || (job.kind === "add" ? "Pick one park file or download in the system's dialog instead" : "Make the playlist of every park in one folder instead"),
+        busy !== ""
+      );
+      button(
+        scene,
+        "browse",
+        browse,
+        state("browse", false, busy !== ""),
+        { icon: "import", iconSize: 16, text: job.kind === "add" ? "Browse for a file\u2026" : "From a folder\u2026", textSize: 14, left: true },
+        overlay
+      );
+      text("browse.sub", job.kind === "add" ? "The system dialog" : "Every park in one folder", sx + 1, bottom - 15, 12, { colour: THEME.textDim, shadow: void 0 });
+      rect("grid", grid, THEME.editorList);
+      if (empty) {
+        this.emptyGrid(scene, grid, host, place, state, text);
+        this.totalRows = 0;
+      } else if (!entries.length) {
+        text("none", "No park matches these filters", grid.x + grid.width / 2, grid.y + grid.height / 2 - 10, 16, { align: "center", colour: THEME.textDim });
+        this.totalRows = 0;
+      } else {
+        this.tiles(scene, api, entries, grid, hover, place, rect, text);
+      }
+      const hovered = hover?.startsWith("tile.") ? entries[Number(hover.slice(5))] : void 0;
+      y = top;
+      if (hovered) {
+        this.detailRows(scene, hovered, rx, y, rightW, text, heading);
+      }
+      y += narrow ? 132 : 150;
+      const n = this.picks.length;
+      heading("h.picks", `${job.kind === "new" ? "New playlist" : `Adding to ${this.fit(job.playlist, 11, rightW * 0.4)}`} \xB7 ${n} park${n === 1 ? "" : "s"}`, rx + 1, y);
+      if (n) {
+        const cw = measure(overlay, "CLEAR", 11).width;
+        const clear = place("clear", { x: rx + rightW - cw - 6, y: y - 3, width: cw + 6, height: 17 }, "Untick every picked park");
+        text("clear", "CLEAR", clear.x + 3, y, 11, { colour: hover === "clear" ? THEME.text : THEME.textDim, shadow: void 0 });
+      }
+      y += 17;
+      const actionH = 40 + 6 + 40;
+      let genH = 0;
+      if (job.kind === "new" && this.generation) {
+        const g = this.generation;
+        genH = 14 + 17 + (5 + (g.route === "circuit" ? 2 : 0) + (g.motion === "pans" ? 1 : 0)) * 26 + 8;
+      }
+      const room = bottom - actionH - 12 - genH - y - (job.kind === "add" ? 62 : 0);
+      const rows = Math.max(2, Math.min(job.kind === "new" ? NEW_PICK_ROWS : 99, Math.floor(room / PICK_ROW)));
+      const list = { x: rx, y, width: rightW, height: rows * PICK_ROW };
+      this.picksRect = list;
+      this.pickRows(scene, api, list, rows, hover, place, rect, text, state);
+      y += list.height;
+      if (job.kind === "new" && this.generation) {
+        y += 14;
+        heading("h.gen", "Generation \xB7 how its views are made", rx + 1, y);
+        y += 17;
+        generationRows(
+          scene,
+          overlay,
+          this.generation,
+          "g",
+          rx,
+          y,
+          rightW,
+          (id, r, tip, off) => place(id, r, tip, !!off),
+          (id, on) => state(id, on, !!this.hits.find((h) => h.id === id)?.off)
+        );
+      } else if (job.kind === "add") {
+        const lines = this.wrap(`Added after the playlist's ${job.count} park${job.count === 1 ? "" : "s"}, in this order. The playlist is built again with them; parks it has already built are not redone.`, 12, rightW);
+        lines.slice(0, 3).forEach((t, i) => text(`addnote.${i}`, t, rx, y + 8 + i * 17, 12, { colour: THEME.textDim, shadow: void 0 }));
+      }
+      const goOff = n === 0 || busy !== "";
+      const go = place(
+        "go",
+        { x: rx, y: bottom - actionH, width: rightW, height: 40 },
+        busy || (n === 0 ? "Tick parks first" : job.kind === "add" ? "Add the picked parks to the playlist and build it" : "Name the playlist in the system's dialog; it is made of the picked parks"),
+        goOff
+      );
+      button(
+        scene,
+        "go",
+        go,
+        { ...state("go", false, goOff), ...goOff ? {} : { face: hover === "go" ? THEME.faceHover : THEME.buildFace } },
+        {
+          icon: job.kind === "add" ? "build" : "add",
+          iconSize: 18,
+          textSize: 16,
+          text: job.kind === "add" ? `Add ${n} park${n === 1 ? "" : "s"} and build` : `Create playlist with ${n} park${n === 1 ? "" : "s"}\u2026`
+        },
+        overlay
+      );
+      const cancel = place("cancel", { x: rx, y: bottom - 40, width: rightW, height: 40 }, "Close the gallery; nothing is added");
+      button(scene, "cancel", cancel, state("cancel"), { icon: "close", iconSize: 16, text: "Cancel", textSize: 16 }, overlay);
+      const now = this.hitAt(this.mouse.x, this.mouse.y);
+      if (now?.tip && this.down === void 0) {
+        const below = now.rect.y < 80;
+        tooltip(scene, "tip", now.tip, this.mouse.x, below ? now.rect.y + now.rect.height + 36 : Math.min(now.rect.y, this.mouse.y) - 4, overlay, W);
+      }
+      for (const element of scene.values()) {
+        element.z = (element.z ?? 0) + LIFT;
+      }
+      return scene;
+    }
+    wrap(t, size, width) {
+      const lines = [];
+      let line = "";
+      for (const word of t.split(" ")) {
+        const next = line ? `${line} ${word}` : word;
+        if (line && measure(this.mode.overlay, next, size).width > width) {
+          lines.push(line);
+          line = word;
+        } else {
+          line = next;
+        }
+      }
+      if (line) {
+        lines.push(line);
+      }
+      return lines;
+    }
+    emptyGrid(scene, grid, host, place, state, text) {
+      const overlay = this.mode.overlay;
+      const cx = grid.x + grid.width / 2;
+      const lines = this.wrap("The gallery shows the parks in the folders you add, with their subfolders. Nothing is copied or moved. Parks you put into the gallery folder of your OpenRCT2 folder show up as well.", 14, Math.min(560, grid.width - 40));
+      const buttons = host.importBundle ? 2 : 1;
+      let y = grid.y + Math.round((grid.height - (30 + 12 + lines.length * 20 + 16 + buttons * 46)) / 2);
+      text("empty.title", "No parks in the gallery yet", cx, y, 20, { bold: true, align: "center" });
+      y += 30 + 12;
+      lines.forEach((t, i) => text(`empty.${i}`, t, cx, y + i * 20, 14, { align: "center", colour: THEME.textDim }));
+      y += lines.length * 20 + 16;
+      const w = Math.min(300, grid.width - 40);
+      const add = place("emptyAdd", { x: Math.round(cx - w / 2), y, width: w, height: 40 }, "Pick a folder of parks: .park files, RCT saves and park downloads");
+      button(
+        scene,
+        "emptyAdd",
+        add,
+        { ...state("emptyAdd"), face: this.hitAt(this.mouse.x, this.mouse.y)?.id === "emptyAdd" ? THEME.faceHover : THEME.buildFace },
+        { icon: "add", iconSize: 18, text: "Add a folder of parks\u2026", textSize: 16 },
+        overlay
+      );
+      if (host.importBundle) {
+        const busy = host.busy();
+        const imp = place(
+          "emptyImport",
+          { x: add.x, y: y + 46, width: w, height: 40 },
+          busy || "Pick a playlist bundle (.zip) someone exported: it is imported, built and played",
+          busy !== ""
+        );
+        button(scene, "emptyImport", imp, state("emptyImport", false, busy !== ""), { icon: "import", iconSize: 18, text: "Import a playlist bundle\u2026", textSize: 16 }, overlay);
+      }
+    }
+    /** The grid's tiles from the scroll row on; the last row shown may be cut by the grid's lower edge. */
+    tiles(scene, api, entries, grid, hover, place, rect, text) {
+      const overlay = this.mode.overlay;
+      const sb = 14;
+      const inset = 10;
+      const m = gridLayout(grid.width - sb - 2 * inset, this.columns);
+      const columns = this.columns;
+      const room = grid.height - inset;
+      this.totalRows = Math.ceil(entries.length / columns);
+      this.fullRows = Math.max(1, Math.floor((room + m.gap) / m.row));
+      this.scroll = Math.max(0, Math.min(this.totalRows - this.fullRows, this.scroll));
+      const lower = grid.y + grid.height;
+      const visible = [];
+      const twoLines = m.caption > 30;
+      for (let i = this.scroll * columns; i < entries.length; i++) {
+        const row = Math.floor(i / columns) - this.scroll;
+        const ty = grid.y + inset + row * m.row;
+        if (ty >= lower - 8) {
+          break;
+        }
+        const e = entries[i];
+        const id = `tile.${i}`;
+        const tx = grid.x + inset + i % columns * (m.tile + m.gap);
+        const full = { x: tx, y: ty, width: m.tile, height: m.picture + 2 + m.caption };
+        const shown = { ...full, height: Math.min(full.height, lower - ty) };
+        const pick = this.picks.indexOf(e.path);
+        const used = this.used(e);
+        const over2 = hover === id;
+        const d = this.details[e.path];
+        place(id, shown, used ? `${this.nameOf(e)} is in the playlist already` : pick >= 0 ? `${this.nameOf(e)}: click to take it out again` : `${this.nameOf(e)}: click to pick it`, used);
+        rect(`${id}.bg`, shown, over2 && !used ? "#24402e" : "#16241b", Z.face);
+        const ph = Math.min(m.picture, lower - (ty + 1));
+        const px = { x: tx + 1, y: ty + 1, width: m.tile - 2, height: ph };
+        if (ph > 0) {
+          if (e.pictureState === "ready" && e.picture) {
+            scene.set(`${id}.pic`, {
+              type: "image",
+              src: e.picture,
+              ...px,
+              z: Z.bevel,
+              ...used ? { opacity: 0.35 } : {},
+              ...ph < m.picture ? { cropX: 0, cropY: 0, cropWidth: PREVIEW.width, cropHeight: Math.max(1, Math.round(PREVIEW.height * ph / m.picture)) } : {}
+            });
+          } else {
+            rect(`${id}.pic`, px, "#1a2620", Z.bevel);
+            if (ph >= m.picture) {
+              text(
+                `${id}.wait`,
+                e.pictureState === "none" ? e.kind === "zip" ? "download" : "no picture" : m.tile < 130 ? "\u2026" : "rendering picture\u2026",
+                tx + m.tile / 2,
+                ty + m.picture / 2 - 8,
+                13,
+                { align: "center", colour: "#ffffff70", shadow: void 0 }
+              );
+            }
+          }
+          if (e.pictureState !== "ready" && e.pictureState !== "none") {
+            visible.push(e.path);
+          }
+        }
+        const edge = pick >= 0 ? ORANGE : over2 && !used ? "#ffffff90" : "#ffffff14";
+        const lw = pick >= 0 ? 3 : 1;
+        rect(`${id}.et`, { x: tx, y: ty, width: m.tile, height: lw }, edge, Z.icon);
+        rect(`${id}.el`, { x: tx, y: ty, width: lw, height: shown.height }, edge, Z.icon);
+        rect(`${id}.er`, { x: tx + m.tile - lw, y: ty, width: lw, height: shown.height }, edge, Z.icon);
+        if (shown.height === full.height) {
+          rect(`${id}.eb`, { x: tx, y: ty + full.height - lw, width: m.tile, height: lw }, edge, Z.icon);
+        }
+        if (lower - ty < 30) {
+          continue;
+        }
+        if (used) {
+          const t = m.tile < 150 ? "in" : "in playlist";
+          const w = Math.ceil(measure(overlay, t, 11).width) + 12;
+          rect(`${id}.in`, { x: tx + 6, y: ty + 6, width: w, height: 18 }, "#0a140ee0", Z.icon);
+          text(`${id}.int`, t, tx + 12, ty + 8, 11, { colour: "#d8e8dc", shadow: void 0, z: Z.icon + 1 });
+        } else {
+          const box = { x: tx + 6, y: ty + 6, width: 22, height: 22 };
+          rect(`${id}.tick`, box, pick >= 0 ? ORANGE : "#0a140ee0", Z.icon);
+          bevel(scene, `${id}.tick`, box, pick >= 0 ? "#000000" : "#ffffff70", pick >= 0 ? "#000000" : "#ffffff70", 1, Z.icon + 1);
+          if (pick >= 0) {
+            text(`${id}.num`, `${pick + 1}`, box.x + 11, box.y + 3, 13, { bold: true, align: "center", colour: "#000000", shadow: void 0, z: Z.icon + 2 });
+          }
+        }
+        if (twoLines && ph >= m.picture) {
+          const marks = [];
+          if (e.kind !== "park" && e.kind !== "zip") {
+            marks.push(["RCT save \xB7 converts", "#9fd0ff"]);
+          }
+          if (d?.scripts?.length) {
+            marks.push(["scripts", "#ffd54f"]);
+          }
+          if (d?.events) {
+            marks.push(["events", "#ffd54f"]);
+          }
+          let bx = tx + m.tile - 6;
+          marks.reverse().forEach(([t, colour], k) => {
+            const w = Math.ceil(measure(overlay, t, 11).width) + 10;
+            bx -= w;
+            rect(`${id}.m${k}`, { x: bx, y: ty + m.picture - 22, width: w, height: 17 }, "#0a140ee0", Z.icon);
+            text(`${id}.m${k}t`, t, bx + 5, ty + m.picture - 20, 11, { colour, shadow: void 0, z: Z.icon + 1 });
+            bx -= 3;
+          });
+        }
+        const ny = ty + m.picture + 2 + 5;
+        const dim = used ? { opacity: 0.55 } : {};
+        if (ny + 16 <= lower) {
+          text(`${id}.name`, this.fit(this.nameOf(e), 13, m.tile - 14, true), tx + 7, ny, 13, { bold: true, ...dim });
+        }
+        if (twoLines && ny + 34 <= lower) {
+          const by = [
+            d?.builders?.length ? d.builders.slice(0, 2).join(", ") + (d.builders.length > 2 ? ` +${d.builders.length - 2}` : "") : "",
+            d?.released ? d.released.slice(0, 4) : "",
+            e.mapSize && e.mapSize.x > 0 ? `${e.mapSize.x}\xD7${e.mapSize.y}` : e.kind !== "park" ? e.kind.toUpperCase() : ""
+          ].filter(Boolean).join(" \xB7 ");
+          text(`${id}.by`, this.fit(by, 12, m.tile - 14), tx + 7, ny + 17, 12, { colour: THEME.textDim, shadow: void 0, ...dim });
+        }
+      }
+      const want = visible.join("\n");
+      if (want !== this.asked) {
+        this.asked = want;
+        if (visible.length) {
+          try {
+            api.requestPictures(visible);
+          } catch {
+          }
+        }
+      }
+      const track = place("sb", { x: grid.x + grid.width - sb, y: grid.y, width: sb, height: grid.height });
+      rect("sb", track, "#00000060");
+      const over = this.totalRows - this.fullRows;
+      if (over > 0) {
+        const th = Math.max(24, Math.round(track.height * this.fullRows / this.totalRows));
+        const tyy = track.y + Math.round((track.height - th) * this.scroll / over);
+        rect("sb.thumb", { x: track.x + 2, y: tyy + 2, width: sb - 4, height: th - 4 }, hover === "sb" || this.down === "sb" ? "#6fae82" : "#4a8a5c", Z.bevel);
+      }
+    }
+    detailRows(scene, e, x, y, width, text, heading) {
+      const overlay = this.mode.overlay;
+      const d = this.details[e.path];
+      heading("d.name", this.fit(this.nameOf(e), 11, width - 10), x + 1, y);
+      const folder = e.folder.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? "";
+      const rows = [
+        ["Builders", d?.builders?.length ? d.builders.join(", ") : d ? "unknown" : "\u2026"],
+        ["Released", d?.released ? d.released.slice(0, 4) : d ? "unknown" : "\u2026"],
+        ["Map", e.mapSize && e.mapSize.x > 0 ? `${e.mapSize.x}\xD7${e.mapSize.y}` : e.kind === "park" ? "\u2026" : `${e.kind.toUpperCase()} (read once added)`],
+        ["Scripts", d ? d.scripts?.length ? d.scripts.join(", ") : "none" : "\u2026"],
+        ["Event views", d ? d.events ? `${d.events}` : "none" : "\u2026"],
+        ["Folder", folder]
+      ];
+      rows.forEach(([k, v], i) => {
+        const ry = y + 19 + i * 21;
+        text(`d.k${i}`, k, x, ry, 13, { colour: THEME.textDim, shadow: void 0 });
+        const kw = measure(overlay, k, 13).width;
+        const value = this.fit(v, 13, width - kw - 14);
+        text(`d.v${i}`, value, x + width - measure(overlay, value, 13).width, ry, 13, { shadow: void 0 });
+      });
+    }
+    /** The picked parks in their order: drag to reorder, the cross takes one out; a scroll bar past `rows`. */
+    pickRows(scene, api, list, rows, hover, place, rect, text, state) {
+      const overlay = this.mode.overlay;
+      rect("picks", list, THEME.editorList);
+      const n = this.picks.length;
+      if (!n) {
+        this.wrap("Tick parks to pick them. They play in the order picked; drag them here to reorder.", 13, list.width - 20).forEach((t, i) => text(`picks.hint${i}`, t, list.x + 10, list.y + 10 + i * 18, 13, { colour: THEME.textDim, shadow: void 0 }));
+        return;
+      }
+      this.pickScroll = Math.max(0, Math.min(n - rows, this.pickScroll));
+      const scrolls = n > rows;
+      const width = list.width - (scrolls ? 14 : 0);
+      const byPath = new Map(api.entries.map((e) => [e.path, e]));
+      for (let k = this.pickScroll; k < Math.min(n, this.pickScroll + rows); k++) {
+        const e = byPath.get(this.picks[k]);
+        const id = `pick.${k}`;
+        const r = place(id, { x: list.x, y: list.y + (k - this.pickScroll) * PICK_ROW, width, height: PICK_ROW }, "Drag to change its place in the order");
+        if (this.down === id) {
+          rect(`${id}.bg`, r, THEME.dragGhost);
+        } else if (k % 2 === 0 || hover === id) {
+          rect(`${id}.bg`, r, hover === id ? THEME.face : "#2c5a3a40");
+        }
+        text(`${id}.grip`, "\u22EE\u22EE", r.x + 6, r.y + 9, 12, { colour: "#ffffff70", shadow: void 0 });
+        text(`${id}.n`, `${k + 1}`, r.x + 28, r.y + 9, 13, { colour: THEME.textDim, shadow: void 0 });
+        if (e?.pictureState === "ready" && e.picture) {
+          scene.set(`${id}.pic`, { type: "image", src: e.picture, x: r.x + 52, y: r.y + 1, width: 40, height: 32, z: Z.bevel });
+        } else {
+          rect(`${id}.pic`, { x: r.x + 52, y: r.y + 1, width: 40, height: 32 }, "#1a2620", Z.bevel);
+        }
+        text(`${id}.name`, this.fit(e ? this.nameOf(e) : this.picks[k], 13, width - 100 - 30), r.x + 100, r.y + 9, 13);
+        const xid = `pickx.${k}`;
+        const xr = place(xid, { x: r.x + width - 28, y: r.y + 6, width: 22, height: 22 }, "Take it out of the picks");
+        if (hover === xid) {
+          button(scene, xid, xr, state(xid), { icon: "close", iconSize: 12 }, overlay);
+        } else {
+          scene.set(`${xid}.icon`, { type: "text", text: "\xD7", x: xr.x + 7, y: xr.y + 1, size: 15, colour: "#ffffff90", z: Z.icon });
+        }
+      }
+      if (scrolls) {
+        const track = { x: list.x + list.width - 14, y: list.y, width: 14, height: list.height };
+        rect("picks.sb", track, "#00000060");
+        const th = Math.max(20, Math.round(track.height * rows / n));
+        rect("picks.thumb", { x: track.x + 2, y: track.y + 2 + Math.round((track.height - th) * this.pickScroll / (n - rows)), width: 10, height: th - 4 }, "#4a8a5c", Z.bevel);
+      }
+    }
+  };
+
   // src/ui/view-map.ts
   var TILE4 = 32;
   var MIN_ZOOM4 = -2;
@@ -6452,92 +7412,6 @@
       }
     }
     return t0 <= t1 ? [x0 + t0 * dx, y0 + t0 * dy, x0 + t1 * dx, y0 + t1 * dy] : void 0;
-  }
-
-  // src/ui/generation.ts
-  var GEN_CHOICES = {
-    motion: [["Pans", "pans", "Glide from view to view"], ["Static", "static", "Hold each view, then cut"]],
-    route: [["Circuit", "circuit", "Loop around the park"], ["Random", "random", "The generator's pick order, varying angle and zoom"]],
-    reverse: [["Off", false, "Orders as found"], ["On", true, "Each order reversed too"]],
-    ridePans: [
-      ["Include", "include", "Adds a pan along a ride's track"],
-      ["Exclude", "exclude", "No ride pans"],
-      ["Only", "only", "Overview and ride pans only"]
-    ],
-    parkScripts: [["Off", false, "The parks' own scripts stay off"], ["On", true, "Run the parks' own scripts (companion plugins)"]],
-    parkViews: [["Off", false, "No views on scripted events"], ["On", true, "Views on the parks' scripted animations and shows"]]
-  };
-  var GEN_STEPS = {
-    variants: { step: 1, min: 1, max: 10, text: (v) => `${v}` },
-    parkMin: { step: 5, min: 0, max: 300, text: (v) => v ? `${v} s` : "none" },
-    parkCap: { step: 5, min: 10, max: 300, text: (v) => `${v} s` },
-    timeScale: { step: 0.25, min: 0.5, max: 3, text: (v) => `\xD7 ${v.toFixed(2)}` }
-  };
-  function generationClick(g, id, prefix) {
-    if (id.startsWith(`${prefix}seg.`)) {
-      const [, key, i] = id.slice(prefix.length).split(".");
-      const choice = GEN_CHOICES[key]?.[Number(i)];
-      return choice ? { ...g, [key]: choice[1] } : g;
-    }
-    if (id.startsWith(`${prefix}step.`)) {
-      const [, key, sign] = id.slice(prefix.length).split(".");
-      const k = key;
-      const st = GEN_STEPS[k];
-      if (!st) {
-        return g;
-      }
-      let v = Math.round((g[k] + (sign === "more" ? st.step : -st.step)) * 100) / 100;
-      v = Math.max(st.min, Math.min(st.max, v));
-      v = k === "parkMin" ? Math.min(v, g.parkCap - 5) : k === "parkCap" ? Math.max(v, g.parkMin + 5) : v;
-      return { ...g, [k]: v };
-    }
-    return void 0;
-  }
-  function generationRows(scene, overlay, g, prefix, x, y, width, place, state, rowH = 26) {
-    const rowLabel = (id, text) => label(scene, id, text, { x, y, width: 0, height: rowH }, 13, overlay);
-    const segments = (key, text) => {
-      rowLabel(`${prefix}seg.${key}.label`, text);
-      const choices = GEN_CHOICES[key];
-      const widths = choices.map(([t]) => Math.ceil(measure(overlay, t, 12, true).width) + 16);
-      let sx = x + width - widths.reduce((a, w) => a + w, 0) - 4 * (choices.length - 1);
-      const sy = y + Math.round((rowH - 22) / 2);
-      choices.forEach(([t, value, tip], i) => {
-        const id = `${prefix}seg.${key}.${i}`;
-        const r = place(id, { x: sx, y: sy, width: widths[i], height: 22 }, tip);
-        button(scene, id, r, state(id, g[key] === value), { text: t, textSize: 12 }, overlay);
-        sx += widths[i] + 4;
-      });
-      y += rowH;
-    };
-    const stepper = (key, text, tip) => {
-      rowLabel(`${prefix}step.${key}.label`, text);
-      const st = GEN_STEPS[key];
-      const w = 22;
-      const sy = y + Math.round((rowH - w) / 2);
-      const more = place(`${prefix}step.${key}.more`, { x: x + width - w, y: sy, width: w, height: w }, tip, g[key] >= st.max);
-      const box = { x: more.x - 4 - 52, y: sy, width: 52, height: w };
-      const less = place(`${prefix}step.${key}.less`, { x: box.x - 4 - w, y: sy, width: w, height: w }, tip, g[key] <= st.min);
-      button(scene, `${prefix}step.${key}.less`, less, state(`${prefix}step.${key}.less`, false), { icon: "less", iconSize: 16 }, overlay);
-      button(scene, `${prefix}step.${key}.more`, more, state(`${prefix}step.${key}.more`, false), { icon: "add", iconSize: 16 }, overlay);
-      scene.set(`${prefix}stepv.${key}`, { type: "rect", ...box, fill: THEME.editorList, z: 1 });
-      const vid = `${prefix}stept.${key}`;
-      label(scene, vid, st.text(g[key]), { x: box.x + box.width / 2, y: sy, width: 0, height: w }, 13, overlay);
-      scene.set(vid, { ...scene.get(vid), align: "center" });
-      y += rowH;
-    };
-    segments("motion", "Motion");
-    segments("route", "View order");
-    if (g.route === "circuit") {
-      stepper("variants", "Variants", "Circuit orders per park, a different one on each visit (small parks may have fewer)");
-      segments("reverse", "Include reverse");
-    }
-    if (g.motion === "pans") {
-      segments("ridePans", "Ride pans");
-    }
-    stepper("parkMin", "Shortest park", "Shortest time per park");
-    stepper("parkCap", "Longest park", "Longest time per park: the lowest-scoring views drop to fit");
-    stepper("timeScale", "Time scale", "Multiplies every generated hold and pan: above 1 is slower");
-    return y;
   }
 
   // src/ui/editor-panel.ts
@@ -7182,7 +8056,11 @@
           this.setOpen = true;
           break;
         case "plNew":
-          this.newGen = this.newGen ? void 0 : { ...e.playback.generation };
+          if (this.newGen) {
+            this.newGen = void 0;
+          } else if (!this.openGallery(e, "new")) {
+            this.newGen = { ...e.playback.generation };
+          }
           break;
         case "plCopy":
           this.messages.first = 0;
@@ -7191,7 +8069,9 @@
         case "parkAdd":
           this.dropdown = void 0;
           this.messages.first = 0;
-          builder.addPark(e.playback.sequenceName);
+          if (!this.openGallery(e, "add")) {
+            builder.addPark(e.playback.sequenceName);
+          }
           break;
         case "newCancel":
           this.newGen = void 0;
@@ -7343,7 +8223,7 @@
       this.place(
         "plNew",
         { x: x0 + inner - 2 * plBtn - s.gap, y, width: plBtn, height: s.playlistHeight },
-        why ? `New playlist: ${why}` : this.newGen ? "Close the New playlist pane" : "New playlist: pick how its views are made, then a folder of parks",
+        why ? `New playlist: ${why}` : this.newGen ? "Close the New playlist pane" : galleryApi() ? "New playlist: pick its parks in the gallery and how its views are made" : "New playlist: pick how its views are made, then a folder of parks",
         !!why
       );
       this.place(
@@ -7686,6 +8566,39 @@
       const frame = { x, y: s.y, width, height: y + s.pad - s.y };
       this.frames.push(frame);
       backing(scene, "new.frame", frame, THEME.editorBacking);
+    }
+    /** The park gallery (gallery.ts), where the engine has one: Add park opens it to add its ticked parks to
+     *  the playlist, New playlist to pick the parks of a new one with the generation options beside them.
+     *  Its fallbacks are the system's dialogs as before. False: no gallery (an older engine). */
+    openGallery(e, kind) {
+      const gallery2 = this.gallery;
+      if (!gallery2 || !galleryApi()) {
+        return false;
+      }
+      const sequence = e.playback.sequenceName;
+      const busy = () => !builder.parksAvailable ? builder.unavailableReason : builder.running ? `Wait for the ${builder.noun} to finish` : "";
+      const host = {
+        add: (paths) => builder.addParks(sequence, paths),
+        create: (paths, generation) => {
+          const started = builder.newPlaylistOf(paths);
+          if (started) {
+            this.madeGen = generation;
+          }
+          return started;
+        },
+        browse: (generation) => {
+          if (kind === "add") {
+            builder.addPark(sequence);
+            return builder.running;
+          }
+          this.newGen = generation ?? { ...e.playback.generation };
+          return true;
+        },
+        busy
+      };
+      const rows = e.playback.orderRows;
+      gallery2.open(kind === "add" ? { kind, sequence, playlist: sequence, count: rows.length, has: new Set(rows.map((r) => r.key.split("|")[0].toLowerCase())) } : { kind, generation: { ...e.playback.generation } }, host);
+      return gallery2.isOpen;
     }
     /** New playlist's Choose folder: the folder dialog, then the playlist made with the pane's choices
      *  (saved with its draft for the first build's bake). */
@@ -8797,9 +9710,10 @@
   var Welcome = class {
     // the options of the playlist New is making
     /** `problem`: why the installed playlist cannot play (empty: none is installed). */
-    constructor(api, problem = "") {
+    constructor(api, problem = "", gallery2) {
       this.api = api;
       this.problem = problem;
+      this.gallery = gallery2;
       this.hits = [];
       this.mouse = { x: 0, y: 0 };
       this.playlists = [];
@@ -8856,7 +9770,30 @@
       return hit !== void 0;
     }
     click(id) {
-      if (id === "new") {
+      if (id === "new" && this.gallery && galleryApi()) {
+        this.gallery.open({ kind: "new", generation: { ...GENERATION_DEFAULTS } }, {
+          add: () => false,
+          create: (paths, generation) => {
+            this.newSince = Date.now();
+            this.madeGen = generation;
+            const started = builder.newPlaylistOf(paths);
+            if (!started) {
+              this.newSince = 0;
+              this.madeGen = void 0;
+            }
+            return started;
+          },
+          browse: (generation) => {
+            this.gen = generation ?? { ...GENERATION_DEFAULTS };
+            return true;
+          },
+          importBundle: () => {
+            builder.importPlaylist();
+            return builder.running;
+          },
+          busy: () => !builder.parksAvailable ? builder.unavailableReason : builder.running ? `Wait for the ${builder.noun} to finish` : ""
+        });
+      } else if (id === "new") {
         this.gen = { ...GENERATION_DEFAULTS };
       } else if (id === "back") {
         this.gen = void 0;
@@ -8971,11 +9908,12 @@
         );
       };
       const parksOff = !builder.parksAvailable || busy;
+      const hasGallery = this.gallery !== void 0 && galleryApi() !== void 0;
       action(
         "new",
         "add",
-        "New playlist from a folder of parks\u2026",
-        "Pick how its views are made, then a folder of parks (.park files, RCT saves or park downloads): a playlist of them is made, built and played",
+        hasGallery ? "New playlist\u2026" : "New playlist from a folder of parks\u2026",
+        hasGallery ? "Pick parks in the park gallery and how their views are made: a playlist of them is made, built and played" : "Pick how its views are made, then a folder of parks (.park files, RCT saves or park downloads): a playlist of them is made, built and played",
         { x: x0, y, width: inner, height: ROW },
         parksOff
       );
@@ -9042,6 +9980,7 @@
   var captions;
   var editorPanel;
   var welcome;
+  var gallery;
   var onTitleScreen = false;
   var lastDebug = 0;
   var mode = screensaverApi();
@@ -9073,6 +10012,10 @@
     startProfiler(settings.profilerExport);
     const inMode = mode?.active && mode.overlay;
     editorPanel = inMode ? new EditorPanel(mode) : void 0;
+    if (editorPanel) {
+      gallery = gallery ?? new Gallery(mode);
+      editorPanel.gallery = gallery;
+    }
     editor = new Editor(player, editorPanel);
     player.start();
     if (inMode) {
@@ -9087,11 +10030,13 @@
   }
   function showWelcome(problem) {
     if (mode?.active && mode.overlay) {
-      welcome = new Welcome(mode, problem);
+      gallery = gallery ?? new Gallery(mode);
+      welcome = new Welcome(mode, problem, gallery);
       welcome.open();
     }
   }
   function stopPlayer(release = false) {
+    gallery?.close();
     welcome?.close();
     welcome = void 0;
     bar?.close();
@@ -9207,6 +10152,7 @@
       startPlayer();
     }
     welcome?.update();
+    gallery?.update();
     if (!player?.isRunning) {
       return;
     }
@@ -9221,7 +10167,7 @@
   }
   function onTitle(action) {
     return () => {
-      if (context.mode === "title" && player?.isRunning && (!mode || mode.active)) {
+      if (context.mode === "title" && player?.isRunning && (!mode || mode.active) && !gallery?.isOpen) {
         action(player);
       }
     };
@@ -9374,6 +10320,10 @@
             lastInputMark = Date.now();
             perfMark(`input ${e.type}`);
           }
+          return;
+        }
+        if (gallery?.isOpen) {
+          gallery.onMouse(e);
           return;
         }
         if (welcome) {

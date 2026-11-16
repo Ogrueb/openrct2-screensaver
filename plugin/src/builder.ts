@@ -66,8 +66,9 @@ export interface BuildApi {
     exportPlaylist?(sequence: string): boolean;
     importPlaylist?(): boolean;
     // The system's Open, folder or Save dialog, then the generator; as above (absent: an engine without them).
-    addPark?(sequence: string): boolean;
-    newPlaylist?(): boolean;
+    // With `paths` (parks of the engine's gallery): no Open or folder dialog; a new playlist is named in a Save dialog.
+    addPark?(sequence: string, paths?: string[]): boolean;
+    newPlaylist?(options?: { paths: string[] }): boolean;
     copyPlaylist?(sequence: string): boolean;
     // Whether a generator can run (the registered one, else the one shipped with the game) and why not
     // (absent: an engine that only tells when a build fails to start).
@@ -374,6 +375,26 @@ export class Builder {
         if (this.parksAvailable) {
             this.startBundle("new", () => this.api!.newPlaylist!());
         }
+    }
+
+    /** The gallery's picks added to the playlist (no dialog), then the playlist built. True when it started. */
+    addParks(sequence: string, paths: string[]): boolean {
+        if (!this.parksAvailable || this.running || !paths.length) {
+            return false;
+        }
+        this.startEdits = JSON.parse(JSON.stringify(loadEdits())) as Edits;
+        this.last = this.last ?? readBuildResult(sequence);
+        this.startBundle("add", () => this.api!.addPark!(sequence, paths), sequence);
+        return this.running;
+    }
+
+    /** A new playlist of the gallery's picks: the system's Save dialog names it. True when it started. */
+    newPlaylistOf(paths: string[]): boolean {
+        if (!this.parksAvailable || this.running || !paths.length) {
+            return false;
+        }
+        this.startBundle("new", () => this.api!.newPlaylist!({ paths }));
+        return this.running;
     }
 
     /** Duplicate: the system's Save dialog names the copy, which is made, built and played. */
