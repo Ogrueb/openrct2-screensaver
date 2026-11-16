@@ -3103,6 +3103,38 @@ def changed_parks(playlist_path, cache_dir, use_edits=True, use_profiles=True, d
     return {"parks": out, "updated": updated} if detail else out + updated
 
 
+def gallery_folders(user_dir):
+    """The game's park gallery folders: the user directory's `gallery`, then the folders added to it
+    (config.ini `file_browser_gallery_folders`, separated by `|`)."""
+    folders = [os.path.join(user_dir, "gallery")]
+    try:
+        with open(os.path.join(user_dir, "config.ini"), encoding="utf-8-sig", errors="replace") as f:
+            for line in f:
+                key, _, value = line.partition("=")
+                if key.strip() == "file_browser_gallery_folders":
+                    value = value.strip()
+                    if len(value) >= 2 and value[0] == value[-1] == '"':
+                        value = value[1:-1].replace("\\\\", "\\")
+                    folders += [part.strip() for part in value.split("|") if part.strip()]
+    except OSError:
+        pass
+    return [folder for folder in folders if os.path.isdir(folder)]
+
+
+def gallery_copy(file, folders):
+    """Another copy of a park file that is gone, in the gallery's folders (subfolders included): the first
+    file of the same name, the folders in their order. The file itself is gone, so its name is all there is
+    to go by. None: no copy."""
+    want = os.path.basename(file).lower()
+    for folder in folders:
+        for root, dirs, files in os.walk(folder):
+            dirs.sort()
+            for name in sorted(files):
+                if name.lower() == want:
+                    return os.path.join(root, name)
+    return None
+
+
 def build(playlist_path, out_dir, seed=None, layout=None, use_edits=True, overrides=None,
           use_profiles=True, cache_dir=None, use_live=True, user_dir=None, progress=None, skip_missing=False):
     """Build the title sequence. `progress(i, n, park)`, when given, hears of each of the n parks in play
@@ -3117,6 +3149,22 @@ def build(playlist_path, out_dir, seed=None, layout=None, use_edits=True, overri
         random.Random(seed).shuffle(entries)
     elif order != "playlist":
         raise ValueError("order must be 'playlist' or 'shuffle'")
+    # A park whose file is gone plays from another copy in the game's gallery (the same download kept in two
+    # gallery folders, one of them removed since; owner, 2026-11-16). The playlist keeps its entry as it is.
+    copies = {}
+    folders = None
+    for e in entries:
+        if not os.path.exists(os.path.join(base_dir, e["file"])):
+            if folders is None:
+                try:
+                    folders = gallery_folders(user_dir or default_user_dir())
+                except Exception:
+                    folders = []
+            copy = gallery_copy(e["file"], folders)
+            if copy:
+                copies[id(e)] = "its file %s is gone; playing the copy in %s" % (e["file"], os.path.dirname(copy))
+                print("%s: not found, using the gallery's copy %s" % (e["file"], copy), file=sys.stderr, flush=True)
+                e["file"] = copy
     missing = [e["file"] for e in entries if not os.path.exists(os.path.join(base_dir, e["file"]))]
     if missing and not skip_missing:
         raise ValueError("park file%s not found: %s (relative to %s). Park files are not part of the repository; "
@@ -3169,7 +3217,11 @@ def build(playlist_path, out_dir, seed=None, layout=None, use_edits=True, overri
                 raise
             if cache:
                 cache.put(e, base_dir, ctx["context"], park_profiles, park)
+            if id(e) in copies:
+                park["warnings"] = [copies[id(e)]] + list(park["warnings"])
             report(i, e, "built", park)
+        if id(e) in copies and copies[id(e)] not in park["warnings"]:
+            park["warnings"] = [copies[id(e)]] + list(park["warnings"])
         parks.append(park)
     if cache:
         print("rebuilt %d of %d park(s); %d unchanged" % (len(parks) - reused, len(parks), reused), file=sys.stderr, flush=True)

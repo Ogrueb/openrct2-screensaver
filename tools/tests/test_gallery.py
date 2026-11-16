@@ -41,6 +41,25 @@ class Gallery(unittest.TestCase):
         with open(path or self.playlist, "rb") as f:
             return [p["file"] for p in tomllib.load(f)["park"]]
 
+    def test_a_gone_park_file_is_found_in_the_gallery_folders(self):
+        own = os.path.join(self.user, "gallery")
+        added = os.path.join(self.tmp.name, "added folder")
+        os.makedirs(os.path.join(added, "sub"))
+        os.makedirs(own)
+        with open(os.path.join(added, "sub", "Gone.PARK"), "wb") as f:
+            f.write(b"x")
+        with open(os.path.join(self.user, "config.ini"), "w", encoding="utf-8") as f:
+            f.write('[general]\nfile_browser_gallery_folders = "%s|%s"\n'
+                    % (added.replace("\\", "\\\\"), os.path.join(self.tmp.name, "no such")))
+        folders = mksequence.gallery_folders(self.user)
+        self.assertEqual(folders, [own, added])  # the user's own first; folders that are gone left out
+        self.assertEqual(mksequence.gallery_copy(os.path.join("old place", "gone.park"), folders),
+                         os.path.join(added, "sub", "Gone.PARK"))
+        self.assertIsNone(mksequence.gallery_copy("other.park", folders))
+        with open(os.path.join(own, "gone.park"), "wb") as f:
+            f.write(b"x")
+        self.assertEqual(mksequence.gallery_copy("gone.park", folders), os.path.join(own, "gone.park"))
+
     def test_park_list_file(self):
         path = os.path.join(self.tmp.name, "task-parks.txt")
         with open(path, "w", encoding="utf-8-sig") as f:

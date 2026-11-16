@@ -6240,6 +6240,28 @@
     const side = Math.max(size.x, size.y);
     return side <= 0 ? "any" : side < 64 ? "s" : side < 128 ? "m" : "l";
   }
+  function copyKey(entry) {
+    return `${entry.file.toLowerCase()}|${entry.size}`;
+  }
+  function mergeCopies(entries, folders) {
+    const norm = (path) => path.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+    const order = folders.map((f, i) => ({ path: norm(f.path), rank: f.own ? -1 : i }));
+    const rank = (e) => {
+      const folder = norm(e.folder);
+      const at = order.filter((f) => folder === f.path || folder.startsWith(f.path + "/")).map((f) => f.rank);
+      return at.length ? Math.min(...at) : folders.length;
+    };
+    const best = /* @__PURE__ */ new Map();
+    for (const e of entries) {
+      const key = copyKey(e);
+      const r = rank(e);
+      const has = best.get(key);
+      if (!has || r < has.rank) {
+        best.set(key, { entry: e, rank: r });
+      }
+    }
+    return entries.filter((e) => best.get(copyKey(e)).entry === e);
+  }
   function filterEntries(entries, f, details, used, nameOf) {
     const shown = entries.filter((e) => (!f.folder || e.folder === f.folder) && (!f.hideUsed || !used(e)) && (f.size === "any" || sizeClass(e, details[e.path]) === f.size) && (!f.scripts || (details[e.path]?.scripts?.length ?? 0) > 0) && (!f.events || (details[e.path]?.events ?? 0) > 0));
     const when = (e) => {
@@ -6402,6 +6424,17 @@
     used(e) {
       return this.job?.kind === "add" && this.job.has.has(e.file.toLowerCase());
     }
+    /** Where a park is in the picks, whichever of its copies was picked (-1: not picked). */
+    pickOf(e) {
+      const at = this.picks.indexOf(e.path);
+      if (at >= 0 || !this.picks.length) {
+        return at;
+      }
+      const key = copyKey(e);
+      const all = galleryApi()?.entries ?? [];
+      const same = new Set(all.filter((o) => copyKey(o) === key).map((o) => o.path));
+      return this.picks.findIndex((p) => same.has(p));
+    }
     nameOf(e) {
       return this.details[e.path]?.name || e.name || e.file.replace(/\.[^.]+$/, "");
     }
@@ -6409,7 +6442,8 @@
       const key = `${api.version}|${JSON.stringify(this.filter)}`;
       if (key !== this.listKey) {
         this.listKey = key;
-        const shown = filterEntries(api.entries.slice(), this.filter, this.details, (e) => this.used(e), (e) => this.nameOf(e));
+        const listed = this.filter.folder ? api.entries.slice() : mergeCopies(api.entries, api.folders);
+        const shown = filterEntries(listed, this.filter, this.details, (e) => this.used(e), (e) => this.nameOf(e));
         const settled = this.detailsDone && api.entries.every((e) => e.read !== false);
         const rankKey = `${JSON.stringify(this.filter)}|${settled}|${api.entries.length}`;
         if (rankKey !== this.rankKey || !this.rank.size) {
@@ -6556,7 +6590,7 @@
       } else if (kind === "tile") {
         const entry = this.shownEntries[n];
         if (entry && !this.used(entry)) {
-          const at = this.picks.indexOf(entry.path);
+          const at = this.pickOf(entry);
           if (at >= 0) {
             this.picks.splice(at, 1);
           } else {
@@ -6914,7 +6948,7 @@
         const tx = grid.x + inset + i % columns * (m.tile + m.gap);
         const full = { x: tx, y: ty, width: m.tile, height: m.picture + 2 + m.caption };
         const shown = { ...full, height: Math.min(full.height, lower - ty) };
-        const pick = this.picks.indexOf(e.path);
+        const pick = this.pickOf(e);
         const used = this.used(e);
         const over2 = hover === id;
         const d = this.details[e.path];
@@ -7030,7 +7064,10 @@
       const overlay = this.mode.overlay;
       const d = this.details[e.path];
       heading("d.name", this.fit(this.nameOf(e), 11, width - 10), x + 1, y);
-      const folder = e.folder.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? "";
+      const last = (path) => path.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? "";
+      const key = copyKey(e);
+      const copies = [...new Set((galleryApi()?.entries ?? []).filter((o) => copyKey(o) === key).map((o) => last(o.folder)))];
+      const folder = copies.length > 1 ? [last(e.folder), ...copies.filter((c) => c !== last(e.folder))].join(", ") : last(e.folder);
       const rows = [
         ["Builders", d?.builders?.length ? d.builders.join(", ") : d ? "unknown" : "\u2026"],
         ["Released", d?.released ? d.released.slice(0, 4) : d ? "unknown" : "\u2026"],
@@ -7038,7 +7075,7 @@
         ["Map", e.mapSize && e.mapSize.x > 0 ? `${e.mapSize.x}\xD7${e.mapSize.y}` : e.kind === "park" ? "\u2026" : `${e.kind.toUpperCase()} (read once added)`],
         ["Scripts", d ? d.scripts?.length ? d.scripts.join(", ") : "none" : "\u2026"],
         ["Event views", d ? d.events ? `${d.events}` : "none" : "\u2026"],
-        ["Folder", folder]
+        [copies.length > 1 ? "Folders" : "Folder", folder]
       ];
       rows.forEach(([k, v], i) => {
         const ry = y + 19 + i * 21;
