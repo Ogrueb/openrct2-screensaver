@@ -365,6 +365,7 @@ export interface Settings {
     multiThreading: boolean | null; // multithreaded rendering in the mode; null: the game's own (Options)
     // Performance tests (tools/perfrun.py writes these into a sandbox's plugin.store.json):
     editorPinned: boolean; // the view editor's panes stay shown; off, they hide with the cursor like the bar
+    galleryColumns?: number; // the park gallery's tiles per row, 1 to 7
     bench: boolean; // same camera path every run: first order of every park (visit counter left alone), no shuffle,
                     // mouse input ignored (marked in the perf log instead of showing the controls bar)
     profilerExport: string; // when set: start OpenRCT2's function profiler and export it to this file every minute
@@ -375,7 +376,7 @@ const DEFAULT_SETTINGS: Settings = {
     panTolerance: 500, panToleranceStep: 100, panChanges: "end", inertia: false, changeHold: 2, arriveHold: 1, returnHold: 2, cameraLog: false, scaleToWindow: true,
     window: "borderless", titleMusic: "keep", titles: "overview", captionPlace: "topLeft", captionFrame: "gold", captionBand: "green", lightEffects: false, weatherGloom: false, weather: false, timeOfDay: "day",
     masterVolume: null, soundVolume: null, musicVolume: null, drawingEngine: null, multiThreading: null,
-    editorPinned: true, bench: false, profilerExport: "",
+    editorPinned: true, bench: false, profilerExport: "", galleryColumns: 4,
 };
 
 export function loadSettings(): Settings {

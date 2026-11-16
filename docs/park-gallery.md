@@ -96,4 +96,10 @@ implementation options").
    - `screensaver.paused`: the title screen holds still (no park updates or title sequence steps; input,
      drawing, plugin intervals and background work go on); mode only, cleared when the mode exits.
    - Overlay images whose file is not there yet are looked for again on the next draw.
-   The pane itself and the generator's new arguments are the gallery design thread's work.
+
+## The screensaver editor's pane (2026-11-16)
+
+The pane that uses stage 4's API is the plugin's `ui/gallery.ts`, described in `docs/screensaver-ui.md` "The
+park gallery pane": tiles with the preview renders, filters, picks in order, then Add or New playlist with the
+picked paths. The generator's part is `--park-list`, `--live-new-parks` and `--gallery-details` in
+`tools/mksequence.py` (tests in `tools/tests/test_gallery.py`).
