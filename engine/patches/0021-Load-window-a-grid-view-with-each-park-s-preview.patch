@@ -20,7 +20,7 @@ when it closes. Track designs and heightmaps keep the list.
  3 files changed, 327 insertions(+), 27 deletions(-)
 
 diff --git a/src/openrct2-ui/windows/LoadSave.cpp b/src/openrct2-ui/windows/LoadSave.cpp
-index ab6782b..7a11a92 100644
+index ab6782be..7a11a92e 100644
 --- a/src/openrct2-ui/windows/LoadSave.cpp
 +++ b/src/openrct2-ui/windows/LoadSave.cpp
 @@ -34,6 +34,8 @@
@@ -482,7 +482,7 @@ index ab6782b..7a11a92 100644
              const auto sizeColumnLeft = widgets[WIDX_SORT_SIZE].left;
              const auto dateColumnLeft = widgets[WIDX_SORT_DATE].left;
 diff --git a/src/openrct2/config/Config.cpp b/src/openrct2/config/Config.cpp
-index 800a54b..bc34412 100644
+index 800a54bd..bc344122 100644
 --- a/src/openrct2/config/Config.cpp
 +++ b/src/openrct2/config/Config.cpp
 @@ -285,6 +285,7 @@ namespace OpenRCT2::Config
@@ -502,7 +502,7 @@ index 800a54b..bc34412 100644
      }
  
 diff --git a/src/openrct2/config/Config.h b/src/openrct2/config/Config.h
-index a785453..f0549f7 100644
+index a785453a..f0549f72 100644
 --- a/src/openrct2/config/Config.h
 +++ b/src/openrct2/config/Config.h
 @@ -127,6 +127,7 @@ namespace OpenRCT2::Config

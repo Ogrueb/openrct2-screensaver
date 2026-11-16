@@ -15,7 +15,7 @@ file_browser_gallery_folders.
  3 files changed, 308 insertions(+), 52 deletions(-)
 
 diff --git a/src/openrct2-ui/windows/LoadSave.cpp b/src/openrct2-ui/windows/LoadSave.cpp
-index 8e27ea5..2e4e3df 100644
+index 8e27ea53..2e4e3df8 100644
 --- a/src/openrct2-ui/windows/LoadSave.cpp
 +++ b/src/openrct2-ui/windows/LoadSave.cpp
 @@ -72,6 +72,7 @@
@@ -518,7 +518,7 @@ index 8e27ea5..2e4e3df 100644
              {
                  bool grid = selectedIndex == 9;
 diff --git a/src/openrct2/config/Config.cpp b/src/openrct2/config/Config.cpp
-index bc34412..7beddfe 100644
+index bc344122..7beddfe1 100644
 --- a/src/openrct2/config/Config.cpp
 +++ b/src/openrct2/config/Config.cpp
 @@ -286,6 +286,7 @@ namespace OpenRCT2::Config
@@ -538,7 +538,7 @@ index bc34412..7beddfe 100644
      }
  
 diff --git a/src/openrct2/config/Config.h b/src/openrct2/config/Config.h
-index f0549f7..de002f1 100644
+index f0549f72..de002f1a 100644
 --- a/src/openrct2/config/Config.h
 +++ b/src/openrct2/config/Config.h
 @@ -128,6 +128,7 @@ namespace OpenRCT2::Config

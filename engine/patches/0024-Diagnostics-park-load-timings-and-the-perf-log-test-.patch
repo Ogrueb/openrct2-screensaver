@@ -46,7 +46,7 @@ Read by tools/perfreport.py; runs driven by tools/perfrun.py.
  create mode 100644 src/openrct2/PerfLog.h
 
 diff --git a/src/openrct2-ui/scripting/ScScreensaver.hpp b/src/openrct2-ui/scripting/ScScreensaver.hpp
-index afc620b..4f64ac9 100644
+index afc620b9..4f64ac92 100644
 --- a/src/openrct2-ui/scripting/ScScreensaver.hpp
 +++ b/src/openrct2-ui/scripting/ScScreensaver.hpp
 @@ -20,6 +20,7 @@
@@ -87,7 +87,7 @@ index afc620b..4f64ac9 100644
          {
              return JS_NewBool(ctx, Ui::Screensaver::LaunchedByFlag());
 diff --git a/src/openrct2-ui/scripting/ScTitleSequence.hpp b/src/openrct2-ui/scripting/ScTitleSequence.hpp
-index b67e2c8..7a49181 100644
+index b67e2c85..7a49181e 100644
 --- a/src/openrct2-ui/scripting/ScTitleSequence.hpp
 +++ b/src/openrct2-ui/scripting/ScTitleSequence.hpp
 @@ -569,7 +569,7 @@ namespace OpenRCT2::Scripting
@@ -100,7 +100,7 @@ index b67e2c8..7a49181 100644
  
          /** True once the park being loaded in the background is ready to switch to. */
 diff --git a/src/openrct2-ui/title/TitleSequencePlayer.cpp b/src/openrct2-ui/title/TitleSequencePlayer.cpp
-index 712febc..fb5b102 100644
+index 712febc2..fb5b102d 100644
 --- a/src/openrct2-ui/title/TitleSequencePlayer.cpp
 +++ b/src/openrct2-ui/title/TitleSequencePlayer.cpp
 @@ -10,6 +10,8 @@
@@ -406,7 +406,7 @@ index 712febc..fb5b102 100644
  
          void DiscardBackgroundLoad()
 diff --git a/src/openrct2/Context.cpp b/src/openrct2/Context.cpp
-index 75c5a7d..0bf044f 100644
+index 75c5a7d0..0bf044fa 100644
 --- a/src/openrct2/Context.cpp
 +++ b/src/openrct2/Context.cpp
 @@ -17,6 +17,7 @@
@@ -497,7 +497,7 @@ index 75c5a7d..0bf044f 100644
              // TODO: This variable has been never "variable" in time, some code expects
              // this to be 40Hz (25 ms). Refactor this once the UI is decoupled.
 diff --git a/src/openrct2/OpenRCT2.cpp b/src/openrct2/OpenRCT2.cpp
-index d657257..9f42b46 100644
+index d657257f..9f42b468 100644
 --- a/src/openrct2/OpenRCT2.cpp
 +++ b/src/openrct2/OpenRCT2.cpp
 @@ -22,6 +22,7 @@ u8string gSilentRecordingName = {};
@@ -509,7 +509,7 @@ index d657257..9f42b46 100644
  
  bool gOpenRCT2ShowChangelog;
 diff --git a/src/openrct2/OpenRCT2.h b/src/openrct2/OpenRCT2.h
-index 784bb62..095842f 100644
+index 784bb62a..095842fc 100644
 --- a/src/openrct2/OpenRCT2.h
 +++ b/src/openrct2/OpenRCT2.h
 @@ -45,6 +45,8 @@ extern u8string gCustomPassword;
@@ -523,7 +523,7 @@ index 784bb62..095842f 100644
  extern bool gOpenRCT2SilentBreakpad;
 diff --git a/src/openrct2/PerfLog.cpp b/src/openrct2/PerfLog.cpp
 new file mode 100644
-index 0000000..837297b
+index 00000000..837297b1
 --- /dev/null
 +++ b/src/openrct2/PerfLog.cpp
 @@ -0,0 +1,302 @@
@@ -831,7 +831,7 @@ index 0000000..837297b
 +} // namespace OpenRCT2::PerfLog
 diff --git a/src/openrct2/PerfLog.h b/src/openrct2/PerfLog.h
 new file mode 100644
-index 0000000..5634efc
+index 00000000..5634efc0
 --- /dev/null
 +++ b/src/openrct2/PerfLog.h
 @@ -0,0 +1,74 @@
@@ -910,7 +910,7 @@ index 0000000..5634efc
 +    };
 +} // namespace OpenRCT2::PerfLog
 diff --git a/src/openrct2/command_line/RootCommands.cpp b/src/openrct2/command_line/RootCommands.cpp
-index bc80e0c..7bd752c 100644
+index bc80e0c8..7bd752cb 100644
 --- a/src/openrct2/command_line/RootCommands.cpp
 +++ b/src/openrct2/command_line/RootCommands.cpp
 @@ -10,6 +10,7 @@
@@ -952,7 +952,7 @@ index bc80e0c..7bd752c 100644
          if (!_userDataPath.empty())
          {
 diff --git a/src/openrct2/drawing/Image.cpp b/src/openrct2/drawing/Image.cpp
-index 065edf1..5bf9aa3 100644
+index 065edf1d..5bf9aa33 100644
 --- a/src/openrct2/drawing/Image.cpp
 +++ b/src/openrct2/drawing/Image.cpp
 @@ -11,6 +11,7 @@
@@ -987,7 +987,7 @@ index 065edf1..5bf9aa3 100644
 +    return stats;
 +}
 diff --git a/src/openrct2/libopenrct2.vcxproj b/src/openrct2/libopenrct2.vcxproj
-index d3140f3..fb25761 100644
+index d3140f3a..fb25761f 100644
 --- a/src/openrct2/libopenrct2.vcxproj
 +++ b/src/openrct2/libopenrct2.vcxproj
 @@ -399,6 +399,7 @@
@@ -1007,7 +1007,7 @@ index d3140f3..fb25761 100644
        <PrecompiledHeader>Create</PrecompiledHeader>
      </ClCompile>
 diff --git a/src/openrct2/object/ObjectManager.cpp b/src/openrct2/object/ObjectManager.cpp
-index 9b234c4..0c2ebba 100644
+index 9b234c47..0c2ebba1 100644
 --- a/src/openrct2/object/ObjectManager.cpp
 +++ b/src/openrct2/object/ObjectManager.cpp
 @@ -56,6 +56,23 @@ namespace OpenRCT2
@@ -1129,7 +1129,7 @@ index 9b234c4..0c2ebba 100644
          }
  
 diff --git a/src/openrct2/object/ObjectManager.h b/src/openrct2/object/ObjectManager.h
-index dedf3dd..4087f38 100644
+index dedf3dd3..4087f382 100644
 --- a/src/openrct2/object/ObjectManager.h
 +++ b/src/openrct2/object/ObjectManager.h
 @@ -27,11 +27,23 @@ namespace OpenRCT2
@@ -1157,7 +1157,7 @@ index dedf3dd..4087f38 100644
          virtual Object* GetLoadedObject(ObjectType objectType, size_t index) = 0;
          template<typename TClass>
 diff --git a/src/openrct2/scripting/ScriptEngine.cpp b/src/openrct2/scripting/ScriptEngine.cpp
-index 9d6af5b..5137296 100644
+index 9d6af5b9..5137296e 100644
 --- a/src/openrct2/scripting/ScriptEngine.cpp
 +++ b/src/openrct2/scripting/ScriptEngine.cpp
 @@ -12,6 +12,7 @@

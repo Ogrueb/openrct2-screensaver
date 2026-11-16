@@ -27,7 +27,7 @@ has none.
  2 files changed, 606 insertions(+), 30 deletions(-)
 
 diff --git a/src/openrct2-ui/windows/LoadSave.cpp b/src/openrct2-ui/windows/LoadSave.cpp
-index 7a11a92..8e27ea5 100644
+index 7a11a92e..8e27ea53 100644
 --- a/src/openrct2-ui/windows/LoadSave.cpp
 +++ b/src/openrct2-ui/windows/LoadSave.cpp
 @@ -8,6 +8,27 @@
@@ -452,7 +452,7 @@ index 7a11a92..8e27ea5 100644
  
              auto* windowMgr = GetWindowManager();
 diff --git a/src/openrct2/interface/Screenshot.cpp b/src/openrct2/interface/Screenshot.cpp
-index 19ecb0c..d72306f 100644
+index 19ecb0cc..d72306f5 100644
 --- a/src/openrct2/interface/Screenshot.cpp
 +++ b/src/openrct2/interface/Screenshot.cpp
 @@ -34,13 +34,36 @@
