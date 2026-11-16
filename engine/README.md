@@ -15,8 +15,8 @@ and plan: `docs/engine-patches.md`.
   `openrct2` binary, `libopenrct2.so` and `data/`): untar it and run `./openrct2` from the folder.
   Untested on a desktop yet (`docs/enhancements.md`, Linux item).
 
-A release build leaves out 0021 (diagnostics): run the workflow by hand with "Release build" ticked,
-which applies 0001-0020 only.
+A release build leaves out 0024 (diagnostics; the workflow matches its name): run the workflow by hand with "Release build" ticked,
+which applies 0001-0023 only.
 With "publish_tag" set too (e.g. `v0.2.0`), it then makes a draft GitHub release from the build: the
 Windows zip and the AppImage (named `-beta`), the notes from `docs/releases/<tag>.md` (first line the
 title). Check the draft on the releases page and publish it there.
@@ -53,7 +53,10 @@ on top of the ones before it. Comments in the patches name no project and use US
 | 0018 | Screensaver mode | Playlist bundles through the system's file dialog: `screensaver.exportPlaylist(sequence)` and `importPlaylist()` show the Save or Open dialog and run the registered generator on the picked file (`--live-export`, `--live-import`); `buildStatus.task`; `applyBuild` also installs and plays a sequence that is not playing (an imported playlist) |
 | 0019 | Screensaver mode | Parks and new playlists through the system's dialogs: `screensaver.addPark(sequence)` (Open dialog, `--live-add`), `newPlaylist()` (folder dialog, `--live-new`), `copyPlaylist(sequence)` (Save dialog in the user's playlists folder, `--live-copy`); `buildStatus.task` names them `add`, `new`, `copy` |
 | 0020 | Screensaver mode | A generator and plugins shipped in the data folder: `<data>/plugin/*.js` load unless the user plugin folder has a file of the same name (overlay images fall back there too); with no usable `screensaver/generator.json`, builds run `<data>/screensaver/tools/mksequence.py` with the Python shipped beside it (Windows) or the PATH's; `screensaver.generator` (`available`, `shipped`, `python`, `script`, `reason`) |
-| 0021 | Diagnostics | Park load timings and the perf log (`--perf-log`); test builds only, dropped for release |
+| 0021 | Load window | A grid view in the file browser: each park a tile with its embedded preview (customize menu, List view / Grid view; `file_browser_grid_view`). Stands alone on stock v0.5.7 (0021-0023 apply without the rest); first of the park gallery patches (`docs/park-gallery.md`) |
+| 0022 | Load window | Preview renders: `openrct2 screenshot <file> <image> preview <w> <h>` frames a park on its built area at its saved angle; the Load window renders files without one in the background (its own executable, hidden) into the cache folder's `previews`, and tiles and the preview pane show them (`docs/park-gallery.md`) |
+| 0023 | Load window | Park gallery: a Gallery button lists the parks in the user directory's `gallery` folder and the folders added to it (with subfolders) as a grid; the customize menu adds and removes folders (`file_browser_gallery_folders`) (`docs/park-gallery.md`) |
+| 0024 | Diagnostics | Park load timings and the perf log (`--perf-log`); test builds only, dropped for release |
 
 The final patched tree is the same as before the regrouping apart from comments.
 
@@ -65,4 +68,4 @@ Older notes, commits and PRs use the numbers by date. Old to new: 0001 → 0016 
 On 2026-11-10 the files and clipboard patch came in as 0016 and diagnostics moved to 0017; on 2026-11-11
 builds from the game came in as 0017 and diagnostics moved to 0018; on 2026-11-12 playlist bundles came in as
 0018 and diagnostics moved to 0019; later that day parks and new playlists came in as 0019 and diagnostics moved
-to 0020; on 2026-11-13 the shipped generator and plugin came in as 0020 and diagnostics moved to 0021.
+to 0020; on 2026-11-13 the shipped generator and plugin came in as 0020 and diagnostics moved to 0021; on 2026-11-15 the Load window's grid view came in as 0021 and its preview renders as 0022, and diagnostics moved to 0023; on 2026-11-16 gallery folders came in as 0023 and diagnostics moved to 0024.

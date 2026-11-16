@@ -19,7 +19,7 @@ on:
   workflow_dispatch:
     inputs:
       release:
-        description: "Release build: leave out the diagnostics patch (0021)"
+        description: "Release build: leave out the diagnostics patch (0024)"
         type: boolean
         default: false
       publish_tag:
@@ -92,7 +92,7 @@ jobs:
         working-directory: openrct2
         run: |
           for p in ../engine/patches/*.patch; do
-            if [ "${{ inputs.release }}" = "true" ] && [[ "$(basename "$p")" == 0021-* ]]; then
+            if [ "${{ inputs.release }}" = "true" ] && [[ "$(basename "$p")" == *-Diagnostics-* ]]; then
               echo "== $p (left out of the release build)"
               continue
             fi
@@ -154,7 +154,7 @@ jobs:
           # The container runs as root over a workspace owned by the runner's user
           git config --global --add safe.directory '*'
           for p in ../engine/patches/*.patch; do
-            if [ "${{ inputs.release }}" = "true" ] && [[ "$(basename "$p")" == 0021-* ]]; then
+            if [ "${{ inputs.release }}" = "true" ] && [[ "$(basename "$p")" == *-Diagnostics-* ]]; then
               echo "== $p (left out of the release build)"
               continue
             fi
@@ -234,7 +234,7 @@ jobs:
         run: |
           git config --global --add safe.directory '*'
           for p in ../engine/patches/*.patch; do
-            if [ "${{ inputs.release }}" = "true" ] && [[ "$(basename "$p")" == 0021-* ]]; then
+            if [ "${{ inputs.release }}" = "true" ] && [[ "$(basename "$p")" == *-Diagnostics-* ]]; then
               echo "== $p (left out of the release build)"
               continue
             fi

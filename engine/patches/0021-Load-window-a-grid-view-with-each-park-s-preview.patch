@@ -1,0 +1,515 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: RCT Screensaver <noreply@example.invalid>
+Date: Sun, 15 Nov 2026 03:00:00 +0000
+Subject: [PATCH] Load window: a grid view with each park's preview
+
+The file browser's customize menu gets List view and Grid view (config
+value file_browser_grid_view). In grid view each file is a tile with a
+reduced copy of its embedded preview, the kind the preview setting asks for
+(screenshot or minimap), and its name below; folders show their icon.
+Hovering a tile fills the preview pane as hovering a row does.
+
+Previews of the visible tiles are read one at a time on the background
+worker and kept for the session (up to 512, keyed by path and modification
+time); their image slots are allocated while the window shows them and freed
+when it closes. Track designs and heightmaps keep the list.
+---
+ src/openrct2-ui/windows/LoadSave.cpp | 351 ++++++++++++++++++++++++---
+ src/openrct2/config/Config.cpp       |   2 +
+ src/openrct2/config/Config.h         |   1 +
+ 3 files changed, 327 insertions(+), 27 deletions(-)
+
+diff --git a/src/openrct2-ui/windows/LoadSave.cpp b/src/openrct2-ui/windows/LoadSave.cpp
+index ab6782be..7a11a92e 100644
+--- a/src/openrct2-ui/windows/LoadSave.cpp
++++ b/src/openrct2-ui/windows/LoadSave.cpp
+@@ -34,6 +34,8 @@
+ #include <openrct2/drawing/ColourMap.h>
+ #include <openrct2/drawing/Drawing.String.h>
+ #include <openrct2/drawing/Drawing.h>
++#include <openrct2/drawing/G1Element.h>
++#include <openrct2/drawing/Image.h>
+ #include <openrct2/drawing/Rectangle.h>
+ #include <openrct2/drawing/RenderTarget.h>
+ #include <openrct2/drawing/Text.h>
+@@ -46,6 +48,7 @@
+ #include <openrct2/ui/UiContext.h>
+ #include <openrct2/ui/WindowManager.h>
+ #include <string>
++#include <unordered_map>
+ #include <vector>
+ 
+ namespace OpenRCT2::Ui::Windows
+@@ -69,6 +72,123 @@ namespace OpenRCT2::Ui::Windows
+ 
+     static constexpr uint16_t kDateTimeGap = 2;
+ 
++    // Grid view: each file is a tile with a reduced copy of its preview image and its name below.
++    static constexpr int32_t kThumbnailWidth = kPreviewWidthScreenshot / 2;
++    static constexpr int32_t kThumbnailHeight = kThumbnailWidth / 5 * 4;
++    static constexpr int32_t kTileGap = 6;
++    static constexpr int32_t kTileWidth = kThumbnailWidth + 2 + kTileGap;
++    static constexpr int32_t kTileHeight = kThumbnailHeight + 2 + kListRowHeight + kTileGap;
++    static constexpr size_t kMaxThumbnails = 512;
++
++    struct Thumbnail
++    {
++        bool hasImage{};
++        uint8_t width{};
++        uint8_t height{};
++        std::vector<PaletteIndex> pixels;
++        ImageIndex imageId{ kImageIndexUndefined };
++        uint32_t lastUsed{};
++    };
++
++    // Thumbnails stay for the session, keyed by path and modification time; their image slots
++    // are allocated while a window shows them and freed when it closes.
++    static std::unordered_map<u8string, Thumbnail> _thumbnails;
++    static uint32_t _thumbnailClock;
++
++    static u8string ThumbnailKey(const LoadSaveListItem& item)
++    {
++        return item.path + "|" + std::to_string(static_cast<int64_t>(item.dateModified));
++    }
++
++    static ParkPreview ReadParkPreview(const u8string& path)
++    {
++        try
++        {
++            auto fs = FileStream(path, FileMode::open);
++
++            ClassifiedFileInfo info;
++            if (!TryClassifyFile(&fs, &info) || info.Type != ::FileType::park)
++                return ParkPreview{};
++
++            auto& objectRepository = GetContext()->GetObjectRepository();
++            auto parkImporter = ParkImporter::CreateParkFile(objectRepository);
++            parkImporter->LoadFromStream(&fs, false, true, path.c_str());
++            return parkImporter->GetParkPreview();
++        }
++        catch (const std::exception& e)
++        {
++            LOG_ERROR("Could not get preview:", e.what());
++            return ParkPreview{};
++        }
++    }
++
++    // The preview image of the kind the preview setting asks for (else the other kind), reduced by
++    // whole steps to fit a tile: palette images can only be sampled, not blended.
++    static Thumbnail MakeThumbnail(const ParkPreview& preview)
++    {
++        const auto wanted = Config::Get().general.fileBrowserPreviewType == ParkPreviewPref::miniMap
++            ? PreviewImageType::miniMap
++            : PreviewImageType::screenshot;
++        const PreviewImage* image = nullptr;
++        for (const auto& candidate : preview.images)
++        {
++            if (candidate.type == wanted || (image == nullptr && candidate.type != PreviewImageType::logo))
++                image = &candidate;
++        }
++
++        Thumbnail thumbnail;
++        if (image == nullptr || image->width == 0 || image->height == 0)
++            return thumbnail;
++
++        const int32_t stepX = (image->width + kThumbnailWidth - 1) / kThumbnailWidth;
++        const int32_t stepY = (image->height + kThumbnailHeight - 1) / kThumbnailHeight;
++        const int32_t step = std::max({ 1, stepX, stepY });
++        thumbnail.width = static_cast<uint8_t>(image->width / step);
++        thumbnail.height = static_cast<uint8_t>(image->height / step);
++        thumbnail.pixels.resize(thumbnail.width * thumbnail.height);
++        for (int32_t y = 0; y < thumbnail.height; y++)
++        {
++            for (int32_t x = 0; x < thumbnail.width; x++)
++            {
++                thumbnail.pixels[y * thumbnail.width + x] = image->pixels[(y * step) * image->width + x * step];
++            }
++        }
++        thumbnail.hasImage = true;
++        return thumbnail;
++    }
++
++    static void FreeThumbnailImages()
++    {
++        for (auto& [key, thumbnail] : _thumbnails)
++        {
++            if (thumbnail.imageId != kImageIndexUndefined)
++            {
++                GfxObjectFreeImages(thumbnail.imageId, 1);
++                thumbnail.imageId = kImageIndexUndefined;
++            }
++        }
++    }
++
++    // Drops the least recently drawn thumbnails once there are too many.
++    static void TrimThumbnails()
++    {
++        if (_thumbnails.size() < kMaxThumbnails)
++            return;
++
++        std::vector<std::pair<uint32_t, u8string>> byAge;
++        byAge.reserve(_thumbnails.size());
++        for (const auto& [key, thumbnail] : _thumbnails)
++            byAge.emplace_back(thumbnail.lastUsed, key);
++        std::sort(byAge.begin(), byAge.end());
++        for (size_t i = 0; i < byAge.size() / 4; i++)
++        {
++            auto it = _thumbnails.find(byAge[i].second);
++            if (it->second.imageId != kImageIndexUndefined)
++                GfxObjectFreeImages(it->second.imageId, 1);
++            _thumbnails.erase(it);
++        }
++    }
++
+     static std::vector<LoadSaveListItem> _listItems;
+     static char _directory[MAX_PATH];
+     static char _parentDirectory[MAX_PATH];
+@@ -132,6 +252,8 @@ namespace OpenRCT2::Ui::Windows
+         LoadSaveType type;
+         ParkPreview _preview;
+         BackgroundWorker::Job _previewLoadJob;
++        BackgroundWorker::Job _thumbnailLoadJob;
++        std::vector<std::pair<u8string, u8string>> _thumbnailsWanted; // key, path
+ 
+         bool ShowPreviews()
+         {
+@@ -358,26 +480,7 @@ namespace OpenRCT2::Ui::Windows
+             }
+ 
+             _previewLoadJob = bgWorker.addJob(
+-                [path]() {
+-                    try
+-                    {
+-                        auto fs = FileStream(path, FileMode::open);
+-
+-                        ClassifiedFileInfo info;
+-                        if (!TryClassifyFile(&fs, &info) || info.Type != ::FileType::park)
+-                            return ParkPreview{};
+-
+-                        auto& objectRepository = GetContext()->GetObjectRepository();
+-                        auto parkImporter = ParkImporter::CreateParkFile(objectRepository);
+-                        parkImporter->LoadFromStream(&fs, false, true, path.c_str());
+-                        return parkImporter->GetParkPreview();
+-                    }
+-                    catch (const std::exception& e)
+-                    {
+-                        LOG_ERROR("Could not get preview:", e.what());
+-                        return ParkPreview{};
+-                    }
+-                },
++                [path]() { return ReadParkPreview(path); },
+                 [](const ParkPreview preview) {
+                     auto* windowMgr = GetContext()->GetUiContext().GetWindowManager();
+                     auto* wnd = windowMgr->FindByClass(WindowClass::loadsave);
+@@ -525,6 +628,160 @@ namespace OpenRCT2::Ui::Windows
+             }
+         }
+ 
++        bool CanShowGrid() const
++        {
++            return type != LoadSaveType::track && type != LoadSaveType::heightmap;
++        }
++
++        bool IsGridView() const
++        {
++            return Config::Get().general.fileBrowserGridView && CanShowGrid();
++        }
++
++        int32_t GetGridColumns() const
++        {
++            return std::max(1, (widgets[WIDX_SCROLL].width() - 1 - kScrollBarWidth) / kTileWidth);
++        }
++
++        // The list item under a point in the scroll area, or -1.
++        int32_t GetItemAt(const ScreenCoordsXY& screenCoords) const
++        {
++            if (!IsGridView())
++            {
++                int32_t item = screenCoords.y / kScrollableRowHeight;
++                return item < numListItems ? item : -1;
++            }
++
++            const int32_t columns = GetGridColumns();
++            const int32_t column = screenCoords.x / kTileWidth;
++            if (screenCoords.x < 0 || screenCoords.y < 0 || column >= columns)
++                return -1;
++            int32_t item = (screenCoords.y / kTileHeight) * columns + column;
++            return item < numListItems ? item : -1;
++        }
++
++        // The thumbnail of a file, or nullptr while it is not read yet (it is then asked for).
++        Thumbnail* GetThumbnail(const LoadSaveListItem& item)
++        {
++            auto key = ThumbnailKey(item);
++            auto it = _thumbnails.find(key);
++            if (it == _thumbnails.end())
++            {
++                if (_thumbnailsWanted.size() < 64)
++                    _thumbnailsWanted.emplace_back(key, item.path);
++                return nullptr;
++            }
++
++            auto& thumbnail = it->second;
++            thumbnail.lastUsed = _thumbnailClock;
++            if (thumbnail.hasImage && thumbnail.imageId == kImageIndexUndefined)
++            {
++                G1Element g1{};
++                g1.offset = reinterpret_cast<uint8_t*>(thumbnail.pixels.data());
++                g1.width = thumbnail.width;
++                g1.height = thumbnail.height;
++                thumbnail.imageId = GfxObjectAllocateImages(&g1, 1);
++            }
++            return &thumbnail;
++        }
++
++        // Reads one wanted thumbnail at a time in the background, the first tile drawn first.
++        void LoadNextThumbnail()
++        {
++            if (_thumbnailLoadJob.isValid() || _thumbnailsWanted.empty())
++                return;
++
++            auto [key, path] = _thumbnailsWanted.front();
++            _thumbnailsWanted.clear();
++            if (_thumbnails.contains(key))
++            {
++                invalidate();
++                return;
++            }
++
++            auto& bgWorker = GetContext()->GetBackgroundWorker();
++            _thumbnailLoadJob = bgWorker.addJob(
++                [path]() { return MakeThumbnail(ReadParkPreview(path)); },
++                [key](Thumbnail thumbnail) {
++                    TrimThumbnails();
++                    thumbnail.lastUsed = _thumbnailClock;
++                    _thumbnails[key] = std::move(thumbnail);
++
++                    auto* windowMgr = GetContext()->GetUiContext().GetWindowManager();
++                    if (auto* wnd = windowMgr->FindByClass(WindowClass::loadsave); wnd != nullptr)
++                        wnd->invalidate();
++                });
++        }
++
++        void DrawGrid(RenderTarget& rt)
++        {
++            _thumbnailClock++;
++            _thumbnailsWanted.clear();
++
++            const int32_t columns = GetGridColumns();
++            for (int32_t i = 0; i < numListItems; i++)
++            {
++                const ScreenCoordsXY tilePos{ (i % columns) * kTileWidth, (i / columns) * kTileHeight };
++                if (tilePos.y > rt.y + rt.height)
++                    break;
++                if (tilePos.y + kTileHeight < rt.y)
++                    continue;
++
++                const auto& item = _listItems[i];
++                const ScreenCoordsXY frameStart = tilePos + ScreenCoordsXY{ kTileGap / 2, kTileGap / 2 };
++                const ScreenCoordsXY frameEnd = frameStart + ScreenCoordsXY{ kThumbnailWidth + 1, kThumbnailHeight + 1 };
++
++                if (i == selectedListItem)
++                {
++                    Rectangle::filter(
++                        rt, { tilePos, tilePos + ScreenCoordsXY{ kTileWidth - 1, kTileHeight - 1 } },
++                        FilterPaletteID::paletteDarken1);
++                }
++
++                Rectangle::fillInset(
++                    rt, { frameStart, frameEnd }, colours[1], Rectangle::BorderStyle::inset, Rectangle::FillBrightness::dark,
++                    Rectangle::FillMode::dontLightenWhenInset);
++
++                const ScreenCoordsXY imageArea = frameStart + ScreenCoordsXY{ 1, 1 };
++                if (item.type == FileType::directory)
++                {
++                    GfxDrawSprite(
++                        rt, ImageId(SPR_G2_FOLDER), imageArea + ScreenCoordsXY{ kThumbnailWidth / 2 - 6, kThumbnailHeight / 2 - 6 });
++                }
++                else if (const auto* thumbnail = GetThumbnail(item); thumbnail != nullptr && thumbnail->hasImage)
++                {
++                    if (thumbnail->imageId != kImageIndexUndefined)
++                    {
++                        const ScreenCoordsXY offset{ (kThumbnailWidth - thumbnail->width) / 2,
++                                                     (kThumbnailHeight - thumbnail->height) / 2 };
++                        GfxDrawSprite(rt, ImageId(thumbnail->imageId), imageArea + offset);
++                    }
++                }
++                else
++                {
++                    auto text = thumbnail == nullptr ? LanguageGetString(STR_LOADING_GENERIC)
++                                                     : LanguageGetString(STR_NO_PREVIEW_AVAILABLE);
++                    auto ft = Formatter();
++                    ft.Add<const char*>(text);
++                    drawTextEllipsised(
++                        rt, imageArea + ScreenCoordsXY{ kThumbnailWidth / 2, kThumbnailHeight / 2 - 6 }, kThumbnailWidth - 4,
++                        STR_STRING, ft,
++                        { ColourWithFlags{ Drawing::Colour::white }.withFlag(ColourFlag::withOutline, true),
++                          TextAlignment::centre });
++                }
++
++                // A marker before the name of the file that is loaded now
++                StringId stringId = i == selectedListItem ? STR_WINDOW_COLOUR_2_STRINGID : STR_BLACK_STRING;
++                auto name = item.loaded ? "» " + item.name : item.name;
++                auto ft = Formatter();
++                ft.Add<StringId>(STR_STRING);
++                ft.Add<const char*>(name.c_str());
++                drawTextEllipsised(
++                    rt, { frameStart.x + (kThumbnailWidth + 2) / 2, frameEnd.y + 2 }, kThumbnailWidth + 2, stringId, ft,
++                    { TextAlignment::centre });
++            }
++        }
++
+         void SortList()
+         {
+             std::sort(_listItems.begin(), _listItems.end(), ListItemSort);
+@@ -580,6 +837,10 @@ namespace OpenRCT2::Ui::Windows
+         {
+             _listItems.clear();
+ 
++            if (_thumbnailLoadJob.isValid())
++                _thumbnailLoadJob.cancel();
++            FreeThumbnailImages();
++
+             auto* windowMgr = GetWindowManager();
+             windowMgr->CloseByClass(WindowClass::loadsaveOverwritePrompt);
+ 
+@@ -606,6 +867,9 @@ namespace OpenRCT2::Ui::Windows
+ 
+         void onUpdate() override
+         {
++            if (IsGridView())
++                LoadNextThumbnail();
++
+             if (GetCurrentTextBox().window.classification == classification && GetCurrentTextBox().window.number == number)
+             {
+                 WindowUpdateTextboxCaret();
+@@ -901,10 +1165,15 @@ namespace OpenRCT2::Ui::Windows
+             gDropdown.items[5] = Dropdown::MenuLabel(STR_FILEBROWSER_PREVIEW_MINIMAP);
+             gDropdown.items[6] = Dropdown::MenuLabel(STR_FILEBROWSER_PREVIEW_SCREENSHOT);
+ 
++            // TODO: localised strings when offered upstream
++            gDropdown.items[7] = Dropdown::Separator();
++            gDropdown.items[8] = Dropdown::MenuLabel("List view");
++            gDropdown.items[9] = Dropdown::MenuLabel("Grid view");
++
+             Widget* widget = &widgets[WIDX_SORT_CUSTOMISE];
+ 
+             WindowDropdownShowTextCustomWidth(
+-                { windowPos.x + widget->left - 70, windowPos.y + widget->top }, widget->height(), colours[1], 0, {}, 7, 90);
++                { windowPos.x + widget->left - 70, windowPos.y + widget->top }, widget->height(), colours[1], 0, {}, 10, 90);
+ 
+             auto& config = Config::Get().general;
+ 
+@@ -914,6 +1183,10 @@ namespace OpenRCT2::Ui::Windows
+             gDropdown.items[4].setChecked(config.fileBrowserPreviewType == ParkPreviewPref::disabled);
+             gDropdown.items[5].setChecked(config.fileBrowserPreviewType == ParkPreviewPref::miniMap);
+             gDropdown.items[6].setChecked(config.fileBrowserPreviewType == ParkPreviewPref::screenshot);
++            gDropdown.items[8].setChecked(!IsGridView());
++            gDropdown.items[9].setChecked(IsGridView());
++            gDropdown.items[8].setDisabled(!CanShowGrid());
++            gDropdown.items[9].setDisabled(!CanShowGrid());
+         }
+ 
+         void onDropdown(WidgetIndex widgetIndex, int32_t selectedIndex) override
+@@ -944,7 +1217,22 @@ namespace OpenRCT2::Ui::Windows
+                     config.fileBrowserPreviewType = newPref;
+                     width += GetPreviewSize().width;
+ 
++                    // Tiles show the kind of image the setting asks for
++                    FreeThumbnailImages();
++                    _thumbnails.clear();
++
++                    changed = true;
++                }
++            }
++            else if (selectedIndex == 8 || selectedIndex == 9)
++            {
++                bool grid = selectedIndex == 9;
++                if (config.fileBrowserGridView != grid)
++                {
++                    config.fileBrowserGridView = grid;
++                    // The previews in tiles follow the preview setting
+                     changed = true;
++                    initScrollWidgets();
+                 }
+             }
+ 
+@@ -1004,13 +1292,18 @@ namespace OpenRCT2::Ui::Windows
+ 
+         ScreenSize onScrollGetSize(int32_t scrollIndex) override
+         {
++            if (IsGridView())
++            {
++                const int32_t columns = GetGridColumns();
++                return { 0, ((numListItems + columns - 1) / columns) * kTileHeight };
++            }
+             return { 0, numListItems * kScrollableRowHeight };
+         }
+ 
+         void onScrollMouseOver(int32_t scrollIndex, const ScreenCoordsXY& screenCoords) override
+         {
+-            int32_t selectedItem = screenCoords.y / kScrollableRowHeight;
+-            if (selectedItem >= numListItems)
++            int32_t selectedItem = GetItemAt(screenCoords);
++            if (selectedItem < 0)
+                 return;
+ 
+             if (selectedListItem != selectedItem)
+@@ -1023,10 +1316,8 @@ namespace OpenRCT2::Ui::Windows
+ 
+         void onScrollMouseDown(int32_t scrollIndex, const ScreenCoordsXY& screenCoords) override
+         {
+-            int32_t selectedItem;
+-
+-            selectedItem = screenCoords.y / kScrollableRowHeight;
+-            if (selectedItem >= numListItems)
++            int32_t selectedItem = GetItemAt(screenCoords);
++            if (selectedItem < 0)
+                 return;
+ 
+             if (_listItems[selectedItem].type == FileType::directory)
+@@ -1067,6 +1358,12 @@ namespace OpenRCT2::Ui::Windows
+                 rt, { { rt.x, rt.y }, { rt.x + rt.width - 1, rt.y + rt.height - 1 } },
+                 getColourMap(colours[1].colour).midLight);
+ 
++            if (IsGridView())
++            {
++                DrawGrid(rt);
++                return;
++            }
++
+             const int32_t listWidth = widgets[WIDX_SCROLL].width() - 1;
+             const auto sizeColumnLeft = widgets[WIDX_SORT_SIZE].left;
+             const auto dateColumnLeft = widgets[WIDX_SORT_DATE].left;
+diff --git a/src/openrct2/config/Config.cpp b/src/openrct2/config/Config.cpp
+index 800a54bd..bc344122 100644
+--- a/src/openrct2/config/Config.cpp
++++ b/src/openrct2/config/Config.cpp
+@@ -285,6 +285,7 @@ namespace OpenRCT2::Config
+             model->fileBrowserHeight = reader->GetInt32("file_browser_height", 0);
+             model->fileBrowserShowSizeColumn = reader->GetBoolean("file_browser_show_size_column", true);
+             model->fileBrowserShowDateColumn = reader->GetBoolean("file_browser_show_date_column", true);
++            model->fileBrowserGridView = reader->GetBoolean("file_browser_grid_view", false);
+             model->fileBrowserPreviewType = reader->GetEnum<ParkPreviewPref>(
+                 "file_browser_preview_type", ParkPreviewPref::screenshot, Enum_ParkPreviewPref);
+         }
+@@ -380,6 +381,7 @@ namespace OpenRCT2::Config
+         writer->WriteInt32("file_browser_height", model->fileBrowserHeight);
+         writer->WriteBoolean("file_browser_show_size_column", model->fileBrowserShowSizeColumn);
+         writer->WriteBoolean("file_browser_show_date_column", model->fileBrowserShowDateColumn);
++        writer->WriteBoolean("file_browser_grid_view", model->fileBrowserGridView);
+         writer->WriteEnum<ParkPreviewPref>("file_browser_preview_type", model->fileBrowserPreviewType, Enum_ParkPreviewPref);
+     }
+ 
+diff --git a/src/openrct2/config/Config.h b/src/openrct2/config/Config.h
+index a785453a..f0549f72 100644
+--- a/src/openrct2/config/Config.h
++++ b/src/openrct2/config/Config.h
+@@ -127,6 +127,7 @@ namespace OpenRCT2::Config
+         int16_t fileBrowserHeight;
+         bool fileBrowserShowSizeColumn;
+         bool fileBrowserShowDateColumn;
++        bool fileBrowserGridView;
+         ParkPreviewPref fileBrowserPreviewType;
+     };
+ 
